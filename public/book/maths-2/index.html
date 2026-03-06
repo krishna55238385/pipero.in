@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>mera tutor.ai - Human-Led. AI-Powered. Online Tutoring.</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header Section -->
+        <header class="header">
+            <div class="header-nav">
+                <div class="brand">
+                    <img src="logo.png" alt="mera tutor.ai Logo" class="logo-img">
+                </div>
+            </div>
+
+            <div class="promo-badge">
+                <span class="badge">AP SCIENCE</span>
+                <div class="stars">
+                    <i data-lucide="star" class="star-filled"></i>
+                    <i data-lucide="star" class="star-filled"></i>
+                    <i data-lucide="star" class="star-filled"></i>
+                    <i data-lucide="star" class="star-filled"></i>
+                    <i data-lucide="star" class="star-filled"></i>
+                </div>
+            </div>
+
+            <h1 class="main-title hero-heading">
+                Crush Your<br>AP Science
+            </h1>
+
+            <div class="hero-pill">
+                <span class="hero-pill-emoji">👩‍🏫</span>
+                <span class="hero-pill-text"><strong>Human</strong> + <strong>AI</strong> = <strong>Success</strong> 🏆</span>
+            </div>
+
+            <div class="subject-tags">
+                <span class="subject-tag">AP Physics</span>
+                <span class="subject-tag">AP Chemistry</span>
+                <span class="subject-tag">AP Biology</span>
+            </div>
+
+            <!-- Compact stats at top -->
+            <section class="stats-and-method stats-top">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value">12K+</div>
+                        <div class="stat-label">Students</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">4.9<span class="stat-icon">★</span></div>
+                        <div class="stat-label">Rating</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">94%</div>
+                        <div class="stat-label">Pass rate</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value accent">+24 pts</div>
+                        <div class="stat-label">Avg boost</div>
+                    </div>
+                </div>
+
+                <div class="method-strip">
+                    <span class="method-strip-title">The Meratutor Method</span>
+                    <span class="method-strip-steps">Concepts • Experiments • Numericals • Practice • Exam Strategy</span>
+                </div>
+            </section>
+            <div class="math-bg-elements">
+                <span class="math-symbol symbol-1">⚛</span>
+                <span class="math-symbol symbol-2">🧪</span>
+                <span class="math-symbol symbol-3">🧬</span>
+                <span class="math-symbol symbol-4">🔬</span>
+                <span class="math-symbol symbol-5">⚗</span>
+            </div>
+        </header>
+
+        <!-- Form Section -->
+        <main class="content">
+            <div class="form-group row compact">
+                <div class="input-wrapper">
+                    <label>STUDENT NAME</label>
+                    <input type="text" placeholder="Alex" value="Alex">
+                </div>
+                <div class="input-wrapper">
+                    <label>PARENT PHONE</label>
+                    <div class="phone-field">
+                        <select class="country-code" aria-label="Country code">
+                            <option value="+1">🇺🇸 +1</option>
+                            <option value="+44">🇬🇧 +44</option>
+                            <option value="+61">🇦🇺 +61</option>
+                            <option value="+65">🇸🇬 +65</option>
+                            <option value="+91" selected>🇮🇳 +91</option>
+                        </select>
+                        <input type="tel" class="phone-input" placeholder="98765 43210">
+                    </div>
+                    <p class="helper-text">We’ll WhatsApp you the demo details.</p>
+                </div>
+            </div>
+
+            <div class="form-group compact">
+                <label>GRADE LEVEL</label>
+                <div class="grade-selector">
+                    <button class="grade-btn active">1</button>
+                    <button class="grade-btn">2</button>
+                    <button class="grade-btn">3</button>
+                    <button class="grade-btn">4</button>
+                    <button class="grade-btn">5</button>
+                    <button class="grade-btn">6</button>
+                </div>
+            </div>
+
+            <!-- Date Picker -->
+            <div class="form-group compact">
+                <label>SELECT DATE</label>
+                <div class="date-picker-widget">
+                    <button class="cal-nav date-nav" id="prev-week"><i data-lucide="chevron-left"
+                            size="16"></i></button>
+                    <div class="date-scroll" id="date-scroll">
+                        <!-- Dates injected by JS -->
+                    </div>
+                    <button class="cal-nav date-nav" id="next-week"><i data-lucide="chevron-right"
+                            size="16"></i></button>
+                </div>
+            </div>
+
+            <!-- Time Slot Picker -->
+            <div class="form-group compact">
+                <label>SELECT TIME SLOT</label>
+                <div class="time-slots-grid" id="time-slots-grid">
+                    <!-- Time slots injected by JS -->
+                </div>
+            </div>
+
+        </main>
+
+        <!-- Footer Section -->
+        <footer class="footer compact">
+            <button class="enroll-btn interactive-btn">
+                <div class="btn-text-group">
+                    <span class="btn-text">Book your free demo</span>
+                    <span class="btn-subtext">No payment required</span>
+                </div>
+                <div class="arrow-circle">
+                    <i data-lucide="arrow-right"></i>
+                </div>
+            </button>
+            <div class="security-note">
+                <i data-lucide="lock" size="14"></i>
+                <span>Secure SSL Encryption</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="main.js"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+
+</html>
