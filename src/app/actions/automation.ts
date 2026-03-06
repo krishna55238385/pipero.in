@@ -57,7 +57,7 @@ export async function executeAutomationFlows(triggerType: string, entityType: 'l
 
         try {
             // 4. Execute Actions
-            const actionResults = []
+            const actionResults: any[] = []
             for (const action of flow.actions) {
                 const result = await performAction(supabase, orgId, action, entityType, entityId, data)
                 actionResults.push(result)
