@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Demo booked – mera tutor.ai</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container success-page">
+        <canvas id="confetti-canvas"></canvas>
+
+        <header class="header">
+            <div class="header-nav">
+                <div class="brand">
+                    <img src="logo.png" alt="mera tutor.ai Logo" class="logo-img">
+                </div>
+            </div>
+        </header>
+
+        <main class="content success-content-main">
+            <div class="success-hero">
+                <div class="success-icon-circle">✓</div>
+                <h1 class="success-title">🎉 You're All Set!</h1>
+                <p class="success-lead">
+                    Welcome to the family. Your child's journey to math mastery starts now.
+                </p>
+            </div>
+
+            <div class="success-card">
+                <h2 class="success-card-title">The Meratutor Roadmap</h2>
+                <ul class="success-list">
+                    <li>
+                        <span class="success-step-label">Teach</span>
+                        <span class="success-step-desc">Deep concept mastery &amp; foundations</span>
+                    </li>
+                    <li>
+                        <span class="success-step-label">Practice</span>
+                        <span class="success-step-desc">Interactive application of theory</span>
+                    </li>
+                    <li>
+                        <span class="success-step-label">Assessment</span>
+                        <span class="success-step-desc">Real-time performance evaluation</span>
+                    </li>
+                    <li>
+                        <span class="success-step-label">Improve</span>
+                        <span class="success-step-desc">Personalised feedback loops</span>
+                    </li>
+                    <li>
+                        <span class="success-step-label">Report</span>
+                        <span class="success-step-desc">Comprehensive parent oversight</span>
+                    </li>
+                </ul>
+            </div>
+        </main>
+
+        <footer class="footer compact">
+            <button class="enroll-btn interactive-btn" id="explore-site-btn">
+                <span class="btn-text">Explore Website →</span>
+                <div class="arrow-circle">
+                    →
+                </div>
+            </button>
+            <div class="security-note">
+                <span>We’ve also sent the demo details to your contact.</span>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        // Simple confetti animation
+        const canvas = document.getElementById('confetti-canvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+
+        function resizeCanvas() {
+            width = canvas.width = canvas.offsetWidth = canvas.parentElement.clientWidth;
+            height = canvas.height = canvas.offsetHeight = canvas.parentElement.clientHeight;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        const colors = ['#f97316', '#fb923c', '#22c55e', '#38bdf8', '#eab308', '#facc15'];
+        const confettiPieces = Array.from({ length: 120 }).map(() => ({
+            x: Math.random() * width,
+            y: Math.random() * -height,
+            r: 4 + Math.random() * 5,
+            d: 2 + Math.random() * 3,
+            tilt: Math.random() * 10 - 10,
+            tiltAngleIncrement: 0.04 + Math.random() * 0.08,
+            tiltAngle: Math.random() * Math.PI,
+            color: colors[Math.floor(Math.random() * colors.length)]
+        }));
+
+        function drawConfetti() {
+            ctx.clearRect(0, 0, width, height);
+            confettiPieces.forEach(p => {
+                ctx.beginPath();
+                ctx.lineWidth = p.r;
+                ctx.strokeStyle = p.color;
+                const x = p.x + p.tilt;
+                ctx.moveTo(x + p.r / 2, p.y);
+                ctx.lineTo(x, p.y + p.tilt + p.r / 2);
+                ctx.stroke();
+            });
+            updateConfetti();
+            requestAnimationFrame(drawConfetti);
+        }
+
+        function updateConfetti() {
+            confettiPieces.forEach(p => {
+                p.tiltAngle += p.tiltAngleIncrement;
+                p.y += (Math.cos(p.d) + 2 + p.r / 2) * 0.8;
+                p.x += Math.sin(0.5) * 1.2;
+                p.tilt = Math.sin(p.tiltAngle) * 12;
+
+                if (p.y > height) {
+                    p.y = -10;
+                    p.x = Math.random() * width;
+                }
+            });
+        }
+
+        drawConfetti();
+
+        // Explore website button
+        document.getElementById('explore-site-btn').addEventListener('click', () => {
+            window.location.href = 'https://us.meratutor.ai/';
+        });
+    </script>
+</body>
+
+</html>
+
