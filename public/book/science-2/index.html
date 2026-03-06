@@ -1128,15 +1128,19 @@
                 full_url: window.location.href,
             };
 
+            // Send lead to CRM (Pipero) so it appears in leads
+            const countryPrefix = (c === '1' || c === '1-ca') ? '+1' : ('+' + (c || '91'));
+            const crmPayload = {
+                company: 'Mera Tutor - AP Science-2',
+                name: n,
+                phone: countryPrefix + p,
+                source: 'book.meratutor.ai - science-2',
+                grade_level: g || undefined,
+                utm: params.get('utm_source') || params.get('utm_campaign') ? { utm_source: params.get('utm_source'), utm_campaign: params.get('utm_campaign'), utm_medium: params.get('utm_medium') } : undefined
+            };
             try {
-                await fetch('https://script.google.com/macros/s/AKfycbwB4oF1amUL6iIzPo8wXcaVQroEWRFZpOHwIKw71uhrksHK_El56ydatV3XG106ndgU/exec', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(formData),
-                });
-            } catch (err) {
-                console.error('Error sending lead to Google Sheets', err);
-            }
+                await fetch('/api/public/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(crmPayload) });
+            } catch (e) { console.warn('CRM lead submit:', e); }
 
             window.location.href = 'success.html';
         }

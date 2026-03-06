@@ -1,0 +1,13 @@
+{
+  "rewrites": [
+    { "source": "/maths", "destination": "https://pipero-in.vercel.app/book/maths/" },
+    { "source": "/maths/(.*)", "destination": "https://pipero-in.vercel.app/book/maths/$1" },
+    { "source": "/maths-2", "destination": "https://pipero-in.vercel.app/book/maths-2/" },
+    { "source": "/maths-2/(.*)", "destination": "https://pipero-in.vercel.app/book/maths-2/$1" },
+    { "source": "/science", "destination": "https://pipero-in.vercel.app/book/science/" },
+    { "source": "/science/(.*)", "destination": "https://pipero-in.vercel.app/book/science/$1" },
+    { "source": "/science-2", "destination": "https://pipero-in.vercel.app/book/science-2/" },
+    { "source": "/science-2/(.*)", "destination": "https://pipero-in.vercel.app/book/science-2/$1" },
+    { "source": "/api/public/leads", "destination": "https://pipero-in.vercel.app/api/public/leads" }
+  ]
+}

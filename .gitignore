@@ -36,6 +36,12 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local router helper (deployed via CLI, not part of app)
+/meratutor-router/
+
+# book landing pages (subtrees) — avoid tracking their node_modules
+/public/book/**/node_modules
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

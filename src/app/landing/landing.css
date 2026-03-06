@@ -1100,6 +1100,79 @@
     margin-right: auto;
 }
 
+.lp-lead-cta-sub {
+    font-size: 15px;
+    color: var(--lp-text-muted);
+    margin-top: 32px;
+    margin-bottom: 16px !important;
+}
+
+.lp-lead-form {
+    max-width: 480px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.lp-lead-form-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.lp-lead-form-row .lp-lead-input {
+    flex: 1;
+    min-width: 140px;
+}
+
+.lp-lead-input {
+    padding: 12px 16px;
+    font-size: 15px;
+    border-radius: 10px;
+    border: 1px solid var(--lp-border);
+    background: var(--lp-surface);
+    color: var(--lp-text);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.lp-lead-input::placeholder {
+    color: var(--lp-text-muted);
+}
+
+.lp-lead-input:focus {
+    outline: none;
+    border-color: var(--lp-accent);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.lp-lead-form .lp-btn {
+    margin-top: 8px;
+    align-self: center;
+}
+
+.lp-lead-error {
+    font-size: 14px;
+    color: #dc2626;
+    margin: 0;
+}
+
+.lp-lead-message {
+    font-size: 14px;
+    color: var(--lp-text-secondary);
+    margin: 0;
+}
+
+.lp-lead-success {
+    margin-top: 16px;
+}
+
+.lp-lead-success-text {
+    font-size: 16px;
+    color: var(--lp-text);
+    margin-bottom: 16px;
+}
+
 /* ── Footer ────────────────────────────────────────────────── */
 .lp-footer {
     border-top: 1px solid var(--lp-border);

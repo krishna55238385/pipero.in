@@ -1708,6 +1708,7 @@ export async function saveIntegration(provider: string, config: any, isActive: b
 
 export async function getCurrentUser() {
   const supabase = await createClient()
+  if (!supabase) return null
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
     const cookieStore = await cookies()

@@ -8,6 +8,11 @@ export async function createClient() {
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
     if (!supabaseUrl || !supabaseAnonKey) {
+        // In production (e.g. Vercel) without env vars, avoid throwing so the app can render
+        // (e.g. landing page). Callers should handle null.
+        if (process.env.NODE_ENV === 'production') {
+            return null as any
+        }
         throw new Error('Supabase URL or Anon Key is missing in environment variables.')
     }
 

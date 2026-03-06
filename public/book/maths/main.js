@@ -82,15 +82,56 @@ document.addEventListener('DOMContentLoaded', () => {
 
     renderTimeSlots();
 
-    // ---- Enroll Button -> Success Page ----
+    // ---- Enroll Button -> send lead to CRM then Success Page ----
     const enrollBtn = document.querySelector('.enroll-btn');
 
-    enrollBtn.addEventListener('click', () => {
-        // Button press micro-interaction
+    function getSelectedDateStr() {
+        const activeCard = document.querySelector('.date-card.active');
+        if (!activeCard) return '';
+        const name = (activeCard.querySelector('.d-name') || {}).textContent || '';
+        const num = (activeCard.querySelector('.d-num') || {}).textContent || '';
+        return (name && num) ? name + ' ' + num : '';
+    }
+
+    function getSelectedTimeStr() {
+        const active = document.querySelector('.time-slot-btn.active');
+        return active ? active.textContent.trim() : '';
+    }
+
+    enrollBtn.addEventListener('click', async () => {
         enrollBtn.style.transform = 'scale(0.96)';
         setTimeout(() => { enrollBtn.style.transform = ''; }, 150);
 
-        // Navigate to success page
+        const studentName = (document.querySelector('input[type="text"]') || {}).value || (document.querySelector('.input-wrapper input') || {}).value || '';
+        const countryCode = (document.querySelector('.country-code') || {}).value || '+91';
+        const phoneInput = document.querySelector('.phone-input');
+        const phoneRaw = phoneInput ? phoneInput.value.replace(/\D/g, '') : '';
+        const phone = phoneRaw ? countryCode.replace(/\s/g, '') + phoneRaw : '';
+        const gradeBtn = document.querySelector('.grade-btn.active');
+        const gradeLevel = gradeBtn ? gradeBtn.textContent.trim() : '';
+        const demoDate = getSelectedDateStr();
+        const demoTimeslot = getSelectedTimeStr();
+
+        const payload = {
+            company: 'Mera Tutor - Maths',
+            name: studentName,
+            phone: phone,
+            source: 'book.meratutor.ai - maths',
+            grade_level: gradeLevel || undefined,
+            demo_date: demoDate || undefined,
+            demo_time_slot: demoTimeslot || undefined
+        };
+
+        if (payload.name && payload.phone) {
+            try {
+                await fetch('/api/public/leads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } catch (e) { console.warn('CRM lead submit:', e); }
+        }
+
         window.location.href = 'success.html';
     });
 

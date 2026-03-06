@@ -56,6 +56,12 @@ export async function POST(req: NextRequest) {
     }
 
     const supabase = await createClient()
+    if (!supabase) {
+      return NextResponse.json(
+        { success: false, error: 'Server configuration error. Please try again later.' },
+        { status: 503, headers: corsHeaders }
+      )
+    }
     const { data: org } = await supabase.from('organizations').select('id').limit(1).single()
 
     if (!org?.id) {

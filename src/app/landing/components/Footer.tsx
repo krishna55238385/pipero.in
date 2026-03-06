@@ -1,7 +1,9 @@
+import LeadCaptureForm from './LeadCaptureForm'
+
 export default function Footer() {
     return (
         <>
-            {/* Final CTA */}
+            {/* Final CTA + Lead capture */}
             <section className="lp-final-cta">
                 <div className="lp-container">
                     <h2>
@@ -19,6 +21,8 @@ export default function Footer() {
                             <path d="M5 12h14M12 5l7 7-7 7" />
                         </svg>
                     </a>
+                    <p className="lp-lead-cta-sub">Or leave your details and we&apos;ll reach out:</p>
+                    <LeadCaptureForm />
                 </div>
             </section>
 
