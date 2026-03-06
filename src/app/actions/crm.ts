@@ -650,9 +650,15 @@ export async function getLeadFilterOptions() {
 
   if (error) return { subjects: [], campaigns: [], sources: [] }
 
-  const subjects = [...new Set((data || []).map(r => r.subject).filter(Boolean))].sort() as string[]
-  const campaigns = [...new Set((data || []).map(r => r.campaign).filter(Boolean))].sort() as string[]
-  const sources = [...new Set((data || []).map(r => r.source).filter(Boolean))].sort() as string[]
+  const rows = (data || []) as Array<{
+    subject: string | null
+    campaign: string | null
+    source: string | null
+  }>
+
+  const subjects = [...new Set(rows.map(r => r.subject).filter(Boolean))].sort() as string[]
+  const campaigns = [...new Set(rows.map(r => r.campaign).filter(Boolean))].sort() as string[]
+  const sources = [...new Set(rows.map(r => r.source).filter(Boolean))].sort() as string[]
 
   return { subjects, campaigns, sources }
 }
