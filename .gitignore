@@ -1,30 +1,56 @@
-.DS_Store
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
 
-# Secrets — never commit live keys (Supabase service role, OpenAI, Gmail OAuth…)
+# Environment
 .env
 .env.*
 !.env.example
-**/.env
-**/.env.local
 
-# Node / frontend
+# Node
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+
+# Build output
 dist/
 build/
 .next/
-.turbo/
-.vite/
+out/
 
-# Python
-__pycache__/
-*.pyc
-.pytest_cache/
-.coverage
-*.egg-info/
-.venv/
-venv/
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
 
-# Local editor/agent state
-.cursor/
-.claude/
+# Logs
+*.log
+logs/
 
+# Database
+*.sqlite
+*.db
+
+# Docker
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Backups
+backups/
