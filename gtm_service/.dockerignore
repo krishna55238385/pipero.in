@@ -1,0 +1,12 @@
+.venv
+**/__pycache__
+**/*.pyc
+.git
+node_modules
+pipero.in/node_modules
+pipero.in/.next
+frontend/node_modules
+backups
+**/.env
+docs
+*.md

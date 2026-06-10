@@ -1,0 +1,202 @@
+"""All LLM prompts in one place. Edit here, not inside agent code."""
+
+ICP_DEFINITION_SYSTEM = """You extract a structured Ideal Customer Profile (ICP) from a free-text description.
+Return ONLY a JSON object matching this schema:
+{
+  "name": "short name like 'Mid-market SaaS in India'",
+  "product_line": "Core" or product line if mentioned,
+  "industry": ["array of industry strings"],
+  "geography": ["array of city/state/country strings"],
+  "company_size_min": int or null (employees),
+  "company_size_max": int or null,
+  "revenue_range_min": int or null (USD),
+  "revenue_range_max": int or null,
+  "business_stage": "Seed|Growth|Mature|null",
+  "buyer_titles": ["who signs the cheque, e.g. CEO, Founder"],
+  "user_titles": ["who uses the product, e.g. Head of HR"],
+  "blocker_titles": ["who can stall the deal, e.g. CFO, Procurement"],
+  "pain_points": "one-paragraph string"
+}
+Do not add commentary. Do not wrap in markdown."""
+
+LEAD_NORMALIZATION_SYSTEM = """You extract company records from raw SerpAPI search results.
+Given a list of organic results (title, link, snippet), produce a JSON array of companies.
+
+Inclusion rule: Accept a result if its link appears to be a single company's official website
+(e.g. acme.com, acme.com/about, acme.com/company) — even when the snippet does not confirm
+employee count or geography. Set any unknown fields to null.
+
+Rejection rule: Reject only pure aggregator, directory, or listicle pages — for example
+links on g2.com, capterra.com, crunchbase.com, clutch.co, wikipedia.org, yelp.com, or
+pages whose title matches patterns like "Top 10 ...", "Best X companies in ...", etc.
+
+When in doubt between rejecting and including with nulls, prefer including with nulls.
+
+Return JSON:
+{
+  "companies": [
+    {
+      "company_name": "string",
+      "company_website": "https://... or null",
+      "company_city": "string or null",
+      "company_state": "string or null",
+      "company_country": "string or null",
+      "company_industry": "string or null",
+      "company_size": "string or null (e.g. '50-200 employees')",
+      "source_url": "the search result link"
+    }
+  ]
+}
+Do not invent data. Use null for any field not clearly stated. Do not wrap in markdown."""
+
+COMPANY_ENRICHMENT_SYSTEM = """You extract structured company details from a company's own website text, structured firmographics, and web/LinkedIn search snippets.
+
+Input (JSON):
+  {
+    "company_name": "...",
+    "domain": "...",
+    "hunter_metadata": { ... } | {},   // structured firmographics, may be empty
+    "website_text": "cleaned text scraped from the company's homepage / about / contact pages",
+    "location_snippets": [ {"title","link","snippet"}, ... ],  // web results for "<company> headquarters location" — may be empty
+    "size_snippets": [ {"title","link","snippet"}, ... ]       // LinkedIn / web results about employee count — may be empty
+  }
+
+GOAL: fill EVERY field if at all possible. Empty location and size columns are the main problem we are fixing.
+
+Source priority for each field:
+  1. hunter_metadata (structured, most reliable)
+  2. website_text / location_snippets / size_snippets (read HQ address, phone, headcount, LinkedIn here)
+  3. your own knowledge of this company (only for HQ location, country, industry, and a size band)
+
+LOCATION (company_city / company_state / company_country) — the company's HEADQUARTERS:
+- Always try to give at least company_country, and city when known.
+- Parse a full address or a "City, State, Country" string into the separate fields.
+- If snippets or your knowledge only reveal the country (or a well-known HQ city), still fill those.
+
+SIZE (company_size) — ALWAYS return an employee-count BAND, never raw text and never null unless truly impossible:
+- Allowed values EXACTLY: "1-10", "11-50", "51-200", "201-500", "501-1000", "1000+".
+- Map any stated headcount into the band (e.g. "approx 120 employees" -> "51-200", "5,000 staff" -> "1000+", "we are a team of 8" -> "1-10").
+- If no headcount is stated anywhere, give your BEST ESTIMATE band from the company's description, maturity, funding, office count, and your knowledge. A reasonable estimate is required; only use null if you genuinely cannot estimate.
+
+OTHER fields:
+- company_address: full street/postal HQ address if shown, else null.
+- company_phone: main contact number if shown, else null.
+- company_industry: the company's primary industry/sector.
+- company_linkedin_url: a linkedin.com/company/... URL if present, else null.
+
+Return ONLY this JSON:
+{
+  "company_city": "string or null",
+  "company_state": "string or null",
+  "company_country": "string or null",
+  "company_address": "string or null",
+  "company_phone": "string or null",
+  "company_industry": "string or null",
+  "company_size": "one of the allowed bands, or null",
+  "company_size_is_estimate": true | false,
+  "company_linkedin_url": "string or null"
+}
+Do not wrap in markdown. Return ONLY the JSON object."""
+
+CONTACT_EXTRACTION_SYSTEM = """You extract the best decision-maker contact from LinkedIn search snippets about a company.
+Prefer Owner > CEO > Founder > President > VP > Director > Manager. Match the ICP buyer_titles when possible.
+Return JSON:
+{
+  "contact_name": "full name or null",
+  "contact_title": "exact title or null",
+  "contact_linkedin_url": "url or null"
+}
+Do not invent data. If unsure, return null for that field. Do not wrap in markdown."""
+
+SIGNAL_QUERY_GENERATION_SYSTEM = """You generate Google search queries to discover buying-signal candidates for a specific target company.
+
+Input (JSON):
+  {"company_name", "company_industry", "company_country", "buyer_titles"}
+
+Output (JSON) — return EXACTLY:
+  {"queries": [{"engine": "...", "q": "...", "signal_focus": "...", "num": int}, ...]}
+
+Field rules:
+- engine: "google_news" for press/news; "google" for web pages (careers, G2, reviews, listings)
+- signal_focus: one of [funding, leadership_change, hiring, expansion, competitor_complaint, news]
+- num: integer 3-5 (how many results to pull for this query)
+
+Generate 5-7 queries that COLLECTIVELY cover all signal types. Tailor wording to the industry — e.g. for HR-tech, use "ATS", "recruiter", "talent"; for fintech, "RBI", "regulatory"; for healthcare, "FDA", "clinical".
+
+Use OR operators to broaden a single query when helpful. Avoid duplicate queries.
+
+Example (HR-tech in India, company "Acme HR"):
+{
+  "queries": [
+    {"engine": "google_news", "q": "Acme HR", "signal_focus": "news", "num": 5},
+    {"engine": "google_news", "q": "\\"Acme HR\\" Series A OR seed funding OR raised", "signal_focus": "funding", "num": 4},
+    {"engine": "google_news", "q": "\\"Acme HR\\" new CEO OR appointed OR joined OR hired", "signal_focus": "leadership_change", "num": 3},
+    {"engine": "google", "q": "\\"Acme HR\\" hiring careers jobs", "signal_focus": "hiring", "num": 3},
+    {"engine": "google_news", "q": "\\"Acme HR\\" expansion OR new office OR acquisition", "signal_focus": "expansion", "num": 3},
+    {"engine": "google", "q": "\\"Acme HR\\" G2 OR trustradius reviews", "signal_focus": "competitor_complaint", "num": 3}
+  ]
+}
+
+Do not invent. Do not wrap in markdown. Return ONLY the JSON object."""
+
+SIGNAL_CLASSIFICATION_SYSTEM = """You analyze a batch of signal candidates for a company and classify each as a buying signal.
+
+Input (JSON):
+  {
+    "company_name": "...",
+    "candidates": [
+      {"id": 0, "signal_text": "raw headline/snippet/job post", "source": "url"},
+      ...
+    ]
+  }
+
+Output (JSON) — return EXACTLY this shape (one entry per candidate, same order):
+  {
+    "results": [
+      {"id": 0, "signal_type": "...", "buying_intent": "high" | "low" | "na"},
+      ...
+    ]
+  }
+
+signal_type must be one of:
+  - funding (raised seed/Series A/B/C/etc)
+  - leadership_change (new CEO/CFO/CTO/CMO, exec hired, exec exit)
+  - hiring (active job postings, growing team, "we're hiring")
+  - expansion (new office, market entry, acquisition)
+  - competitor_complaint (public dissatisfaction with a competitor — opens the door)
+  - none (not a buying-relevant event)
+
+buying_intent rubric:
+  - high  : strong, fresh, decision-trigger event (e.g. just-closed funding, new CRO joining,
+            aggressive hiring push, M&A, explicit competitor pain)
+  - low   : weak/old/peripheral signal of the same type
+  - na    : not a buying signal at all (puff piece, generic news, unrelated press)
+
+If signal_type is "none", buying_intent MUST be "na".
+Classify every candidate — never skip any. Do not invent. Do not wrap in markdown. Return ONLY the JSON object."""
+
+ICP_SCORING_SYSTEM = """You are a B2B sales qualification expert. Score a lead out of 100.
+
+Input JSON keys:
+  - "icp": Ideal Customer Profile (industry, geography, size range, buyer_titles, business_stage)
+  - "lead": key company/contact fields only (company_name, country, industry, size, contact_title)
+  - "signals": compact buying-signal summary with keys:
+      "total" (int), "high_intent" (list of signal types), "low_intent" (list of signal types)
+  - "deterministic_score": 0-100 rule-based baseline
+
+Return ONLY this JSON:
+{
+  "llm_icp_score": <int 0-100>,
+  "llm_score_tier": "hot" | "warm" | "cold" | "disqualified",
+  "llm_reasoning": "<2-3 sentence explanation>",
+  "buying_intent_summary": "<1 sentence summary of buying signals>"
+}
+
+Scoring rules:
+- hot >= 80, warm >= 50, cold < 50; disqualified only if completely off-profile
+- Weight: industry fit > geography fit > buyer title match > company size fit
+- Each high_intent signal type (funding, leadership_change, expansion) adds ~8-10 pts; low_intent adds ~3 pts
+- Use deterministic_score as baseline; adjust by ±15 based on ICP fit judgment
+- Sparse lead data (missing country, size, title) caps score at 65
+
+No markdown. Return ONLY the JSON object."""

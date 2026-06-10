@@ -1,0 +1,30 @@
+.DS_Store
+
+# Secrets — never commit live keys (Supabase service role, OpenAI, Gmail OAuth…)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.local
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+.vite/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+*.egg-info/
+.venv/
+venv/
+
+# Local editor/agent state
+.cursor/
+.claude/
+

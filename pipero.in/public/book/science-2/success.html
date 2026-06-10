@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Success — MeraTutor.ai</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800;900&family=Nunito:wght@400;600;700;800&display=swap"
+        rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        :root {
+            --blue: #00ADEF;
+            --navy: #004A99;
+            --orange: #FF8C00;
+            --bg: #EAF4FF;
+            --white: #FFFFFF;
+            --border: #D6EFFF;
+            --text: #012A5E;
+            --muted: #7AAFD4;
+            --green: #28A745;
+        }
+
+        html,
+        body {
+            min-height: 100%;
+            width: 100%;
+            overflow-x: hidden;
+            background: var(--bg);
+            font-family: 'Nunito', sans-serif;
+            color: var(--text);
+            overscroll-behavior: none;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        /* ── SCIENCE BG ── */
+        .bg-dots {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            background-image: radial-gradient(circle, rgba(0, 119, 204, 0.07) 1px, transparent 1px);
+            background-size: 26px 26px;
+        }
+
+        .bg-science {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        /* ── AURORA BLOBS ── */
+        .aurora-wrap {
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            overflow: hidden;
+            pointer-events: none;
+            filter: blur(100px);
+            opacity: 0.5;
+        }
+
+        .blob {
+            position: absolute;
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            mix-blend-mode: multiply;
+            animation: move linear infinite;
+        }
+
+        .blob-1 {
+            background: rgba(0, 173, 239, 0.4);
+            left: -10%;
+            top: -10%;
+            animation-duration: 20s;
+        }
+
+        .blob-2 {
+            background: rgba(255, 140, 0, 0.3);
+            right: -10%;
+            bottom: -10%;
+            animation-duration: 25s;
+        }
+
+        .blob-3 {
+            background: rgba(0, 74, 153, 0.3);
+            left: 30%;
+            top: 40%;
+            animation-duration: 30s;
+        }
+
+        @keyframes move {
+            0% {
+                transform: translate(0, 0) scale(1);
+            }
+
+            33% {
+                transform: translate(10%, 10%) scale(1.1);
+            }
+
+            66% {
+                transform: translate(-5%, 15%) scale(0.9);
+            }
+
+            100% {
+                transform: translate(0, 0) scale(1);
+            }
+        }
+
+        .sym {
+            position: absolute;
+            font-family: 'Poppins', sans-serif;
+            font-weight: 900;
+            color: rgba(0, 74, 153, 0.07);
+            animation: floatUp linear infinite;
+            user-select: none;
+        }
+
+        @keyframes floatUp {
+            0% {
+                transform: translateY(110vh);
+                opacity: 0;
+            }
+
+            8% {
+                opacity: 1;
+            }
+
+            92% {
+                opacity: 0.8;
+            }
+
+            100% {
+                transform: translateY(-15vh);
+                opacity: 0;
+            }
+        }
+
+        /* ── SUCCESS PAGE ── */
+        .page {
+            position: relative;
+            z-index: 1;
+            min-height: 100dvh;
+            max-width: 500px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            justify-content: flex-start;
+            align-items: center;
+            text-align: center;
+        }
+
+        .topbar {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            padding: 20px 0;
+            animation: fadeDown .4s ease both;
+        }
+
+        .logo-img {
+            height: 44px;
+            width: auto;
+            object-fit: contain;
+        }
+
+        @media screen and (min-width: 1024px) {
+            .logo-img {
+                height: 60px;
+            }
+        }
+
+        @keyframes fadeDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .success-card {
+            background: white;
+            border-radius: 28px;
+            width: 100%;
+            padding: 40px 24px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15);
+            animation: popIn .6s cubic-bezier(0.175, .885, .32, 1.275) both;
+            position: relative;
+        }
+
+        @media screen and (min-width: 1024px) {
+            .page {
+                max-width: 700px;
+            }
+
+            .success-card {
+                padding: 80px 60px;
+                background: rgba(255, 255, 255, 0.7);
+                backdrop-filter: blur(20px);
+                -webkit-backdrop-filter: blur(20px);
+                border: 1px solid rgba(255, 255, 255, 1);
+            }
+
+            .success-title {
+                font-size: 42px;
+            }
+
+            .success-body {
+                font-size: 18px;
+                margin-bottom: 40px;
+            }
+        }
+
+        @keyframes popIn {
+            from {
+                opacity: 0;
+                transform: scale(0.9);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .success-icon-wrap {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            background: #E8F8F0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+        }
+
+        .success-check {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: var(--green);
+            color: white;
+            font-size: 20px;
+            font-weight: 900;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .success-title {
+            font-family: 'Poppins', sans-serif;
+            font-size: 26px;
+            font-weight: 900;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+
+        .success-body {
+            font-size: 14px;
+            color: var(--muted);
+            font-weight: 700;
+            line-height: 1.4;
+            margin-bottom: 24px;
+            padding: 0 10px;
+        }
+
+        .roadmap-card {
+            background: #F8FBFE;
+            border-radius: 20px;
+            padding: 20px;
+            text-align: left;
+            margin-bottom: 24px;
+            position: relative;
+        }
+
+        @media screen and (min-width: 1024px) {
+            .roadmap-card {
+                background: rgba(248, 251, 254, 0.6);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.5);
+                padding: 40px;
+            }
+
+            .roadmap-title {
+                font-size: 14px;
+                margin-bottom: 24px;
+                letter-spacing: 4px;
+            }
+
+            .roadmap-icon {
+                width: 48px;
+                height: 48px;
+                font-size: 24px;
+            }
+
+            .roadmap-h {
+                font-size: 18px;
+            }
+
+            .roadmap-p {
+                font-size: 12px;
+            }
+
+            .dash-btn {
+                font-size: 20px;
+                padding: 20px;
+            }
+        }
+
+        .roadmap-title {
+            text-align: center;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--blue);
+            letter-spacing: 1.5px;
+            margin-bottom: 16px;
+        }
+
+        .roadmap-list {
+            position: relative;
+            padding-left: 10px;
+        }
+
+        .roadmap-line {
+            position: absolute;
+            left: 25px;
+            top: 10px;
+            bottom: 10px;
+            width: 2px;
+            background: var(--border);
+        }
+
+        .roadmap-item {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .roadmap-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: white;
+            border: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .roadmap-h {
+            font-size: 13px;
+            font-weight: 800;
+            color: var(--text);
+        }
+
+        .roadmap-p {
+            font-size: 10px;
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        .dash-btn {
+            width: 100%;
+            border: none;
+            border-radius: 50px;
+            padding: 16px;
+            cursor: pointer;
+            background: linear-gradient(135deg, #FBBF24, #F59E0B);
+            font-family: 'Poppins', sans-serif;
+            font-size: 16px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            box-shadow: 0 8px 20px rgba(251, 191, 36, 0.4);
+            transition: transform .2s;
+            color: var(--text);
+        }
+
+        .dash-btn:active {
+            transform: scale(0.97);
+        }
+
+        .confetti-piece {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            top: 50%;
+            left: 50%;
+            border-radius: 20%;
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="aurora-wrap">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+    <div class="bg-dots"></div>
+    <div class="bg-science" id="bgScience"></div>
+
+    <div class="page">
+        <div class="topbar">
+            <a href="/" style="text-decoration: none;">
+                <img src="https://mt-lp-sci.vercel.app/logo.png" alt="MeraTutor.ai" class="logo-img">
+            </a>
+        </div>
+        <div class="success-card" id="successBox" style="margin-top: 20px;">
+            <div class="success-icon-wrap">
+                <div class="success-check">✓</div>
+            </div>
+            <div class="success-title">🎉 You're All Set!</div>
+            <div class="success-body">Welcome to the family. Your child's journey to U.S. AP Biology, Physics, and Chemistry excellence starts now.</div>
+
+            <div class="roadmap-card">
+                <div class="roadmap-title">The MeraTutor AP Science Roadmap</div>
+                <div class="roadmap-list">
+                    <div class="roadmap-line"></div>
+                    <div class="roadmap-item">
+                        <div class="roadmap-icon">🎓</div>
+                        <div>
+                            <div class="roadmap-h">Teach</div>
+                            <div class="roadmap-p">Deep mastery of core AP Science concepts</div>
+                        </div>
+                    </div>
+                    <div class="roadmap-item">
+                        <div class="roadmap-icon">✏️</div>
+                        <div>
+                            <div class="roadmap-h">Practice</div>
+                            <div class="roadmap-p">Labs, problem sets & exam-style questions</div>
+                        </div>
+                    </div>
+                    <div class="roadmap-item">
+                        <div class="roadmap-icon">📋</div>
+                        <div>
+                            <div class="roadmap-h">Assessment</div>
+                            <div class="roadmap-p">Real-time tracking against AP exam standards</div>
+                        </div>
+                    </div>
+                    <div class="roadmap-item">
+                        <div class="roadmap-icon">📈</div>
+                        <div>
+                            <div class="roadmap-h">Improve</div>
+                            <div class="roadmap-p">Personalized plans for Biology, Physics & Chemistry</div>
+                        </div>
+                    </div>
+                    <div class="roadmap-item">
+                        <div class="roadmap-icon">📄</div>
+                        <div>
+                            <div class="roadmap-h">Report</div>
+                            <div class="roadmap-p">Comprehensive parent oversight</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <button class="dash-btn" onclick="window.location.href='http://us.meratutor.ai/'">Explore Website →</button>
+        </div>
+    </div>
+
+    <script>
+        // BG Symbols (Science)
+        const syms = ['🧪', '🔬', '🧬', '🌡️', '⚛️', '🔭', '🛰️', '🧫', '🧲', '💡', '🌎'];
+        const container = document.getElementById('bgScience');
+        const isDesktop = window.innerWidth >= 1024;
+        const count = isDesktop ? 30 : 15;
+
+        for (let i = 0; i < count; i++) {
+            const el = document.createElement('div');
+            el.className = 'sym';
+            el.textContent = syms[i % syms.length];
+            el.style.left = Math.random() * 100 + '%';
+            el.style.fontSize = (isDesktop ? (20 + Math.random() * 40) : (14 + Math.random() * 26)) + 'px';
+            el.style.animationDuration = (isDesktop ? (12 + Math.random() * 15) : (8 + Math.random() * 10)) + 's';
+            el.style.animationDelay = -(Math.random() * 20) + 's';
+            el.style.opacity = isDesktop ? '0.12' : '0.07';
+            container.appendChild(el);
+        }
+
+        // Confetti
+        function createC() {
+            const colors = ['#00ADEF', '#FF8C00', '#28A745', '#004A99', '#FBBF24'];
+            const box = document.getElementById('successBox');
+            for (let i = 0; i < 50; i++) {
+                const p = document.createElement('div');
+                p.className = 'confetti-piece';
+                p.style.background = colors[Math.floor(Math.random() * colors.length)];
+                box.appendChild(p);
+                const angle = Math.random() * Math.PI * 2;
+                const dist = 120 + Math.random() * 250;
+                const tx = Math.cos(angle) * dist;
+                const ty = Math.sin(angle) * dist;
+                p.animate([
+                    { transform: 'translate(-50%,-50%) scale(0)', opacity: 1 },
+                    { transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(1.2)`, opacity: 0 }
+                ], { duration: 1200 + Math.random() * 1200, easing: 'cubic-bezier(0,.9,.57,1)', fill: 'forwards' });
+            }
+        }
+        window.addEventListener('load', createC);
+    </script>
+</body>
+
+</html>

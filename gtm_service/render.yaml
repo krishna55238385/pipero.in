@@ -1,0 +1,47 @@
+# Render Blueprint for the GTM trigger service.
+# Deploy: push the repo, then in Render -> New -> Blueprint, point at this file.
+# (Railway equivalent: create a service from the Dockerfile and set the same env.)
+services:
+  - type: web
+    name: gtm-trigger-service
+    runtime: docker
+    dockerfilePath: ./gtm_service/Dockerfile
+    dockerContext: .
+    plan: starter            # always-on (free tier sleeps; phases need to run)
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # --- Auth: the CRM sends this as `Authorization: Bearer <token>` --------
+      - key: GTM_TRIGGER_TOKEN
+        generateValue: true
+      # --- Shared Supabase (the fresh CRM project) ---------------------------
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY            # phases read/write with this (service role)
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # --- Phase pipeline API keys (read from env by pydantic settings) ------
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SERP_API_KEY
+        sync: false
+      - key: HUNTER_API_KEY
+        sync: false
+      # --- Phase 3 outreach --------------------------------------------------
+      - key: GMAIL_ADDRESS
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: INSTANTLY_API_KEY
+        sync: false
+      - key: TRACKING_BASE_URL       # e.g. https://gtm-trigger-service.onrender.com/track
+        sync: false
+      # --- GA4 ingest (optional) ---------------------------------------------
+      - key: GA4_SA_JSON             # service-account JSON, inline
+        sync: false
+      - key: GA4_COMPANY_DIMENSION   # optional reverse-IP custom dimension name
+        sync: false
+      # --- Default org for single-tenant dev (CRM passes org per request) ----
+      - key: GTM_ORG_ID
+        sync: false

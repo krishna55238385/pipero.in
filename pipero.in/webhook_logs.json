@@ -1,0 +1,179 @@
+{
+  "timestamp": "2026-02-28T14:00:25.424Z",
+  "payload": {
+    "version": "1.0",
+    "timestamp": "2026-02-28T14:00:21.712016",
+    "type": "Webhook Test",
+    "data": {
+      "customer": {},
+      "message": {}
+    }
+  }
+},
+{
+  "timestamp": "2026-02-28T14:01:02.359Z",
+  "payload": {
+    "version": "1.0",
+    "timestamp": "2026-02-28T14:01:01.533454",
+    "type": "message_api_sent",
+    "data": {
+      "customer": {
+        "id": "476c0a5e-3cfe-499a-a503-07af5e6b36ea",
+        "channel_phone_number": "918248322396",
+        "phone_number": "8248322396",
+        "country_code": "+91",
+        "traits": {
+          "name": "Krishna Prasad",
+          "whatsapp_opted_in": true,
+          "source_id": null,
+          "source_url": null,
+          "_internal_lead_source": "Whatsapp",
+          "_internal_closure_date": "2026-03-07T06:18:51.365000",
+          "contact_owner": {},
+          "chat_assignee": {},
+          "lead_status": null
+        }
+      },
+      "message": {
+        "id": "8ee91108-f0fc-4b80-b3e7-db19ba42b206",
+        "chat_message_type": "PublicApiMessage",
+        "channel_failure_reason": null,
+        "message_status": "Sent",
+        "received_at_utc": "2026-02-28T14:01:01.236684",
+        "delivered_at_utc": null,
+        "seen_at_utc": null,
+        "campaign_id": null,
+        "campaign_name": "",
+        "is_template_message": false,
+        "raw_template": null,
+        "channel_error_code": null,
+        "message_content_type": "Text",
+        "media_url": null,
+        "message": "hi",
+        "meta_data": {
+          "source": "PublicInterakt",
+          "source_data": {
+            "callback_data": null,
+            "campaign_name": ""
+          },
+          "msg_source": "PublicInterakt",
+          "mp_actions": {
+            "skip_chat_message_es_ingestion": false
+          }
+        },
+        "source_message_id": null
+      },
+      "channel_type": "Whatsapp",
+      "is_fallback_message": false,
+      "next_fallback_channel": null
+    }
+  }
+},
+{
+  "timestamp": "2026-02-28T14:01:04.428Z",
+  "payload": {
+    "version": "1.0",
+    "timestamp": "2026-02-28T14:01:03.607828",
+    "type": "message_api_delivered",
+    "data": {
+      "customer": {
+        "id": "476c0a5e-3cfe-499a-a503-07af5e6b36ea",
+        "channel_phone_number": "918248322396",
+        "phone_number": "8248322396",
+        "country_code": "+91",
+        "traits": {
+          "name": "Krishna Prasad",
+          "whatsapp_opted_in": true,
+          "source_id": null,
+          "source_url": null,
+          "_internal_lead_source": "Whatsapp",
+          "_internal_closure_date": "2026-03-07T06:18:51.365000",
+          "contact_owner": {},
+          "chat_assignee": {},
+          "lead_status": null
+        }
+      },
+      "message": {
+        "id": "8ee91108-f0fc-4b80-b3e7-db19ba42b206",
+        "chat_message_type": "PublicApiMessage",
+        "channel_failure_reason": null,
+        "message_status": "Delivered",
+        "received_at_utc": "2026-02-28T14:01:01.236000",
+        "delivered_at_utc": "2026-02-28T14:01:03.557000",
+        "seen_at_utc": null,
+        "campaign_id": null,
+        "campaign_name": "",
+        "is_template_message": false,
+        "raw_template": null,
+        "channel_error_code": null,
+        "message_content_type": "Text",
+        "media_url": null,
+        "message": "hi",
+        "meta_data": {
+          "source": "PublicInterakt",
+          "source_data": {
+            "callback_data": null,
+            "campaign_name": ""
+          },
+          "message_cost": {
+            "whatsapp_cost": "0.0",
+            "interakt_markup": "0.0",
+            "actual_message_cost": "0.0"
+          }
+        },
+        "source_message_id": null
+      },
+      "channel_type": "Whatsapp",
+      "is_fallback_message": false,
+      "next_fallback_channel": null
+    }
+  }
+},
+{
+  "timestamp": "2026-02-28T16:43:57.353Z",
+  "payload": {
+    "version": "1.0",
+    "timestamp": "2026-02-28T16:43:56.387981",
+    "type": "Webhook Test",
+    "data": {
+      "customer": {},
+      "message": {}
+    }
+  }
+},
+{
+  "timestamp": "2026-03-02T04:13:01.896Z",
+  "payload": {
+    "version": "1.0",
+    "timestamp": "2026-03-02T04:12:58.742340",
+    "type": "Webhook Test",
+    "data": {
+      "customer": {},
+      "message": {}
+    }
+  }
+},
+{
+  "timestamp": "2026-03-02T06:04:27.276Z",
+  "payload": {
+    "version": "1.0",
+    "timestamp": "2026-03-02T06:04:25.221238",
+    "type": "Webhook Test",
+    "data": {
+      "customer": {},
+      "message": {}
+    }
+  }
+},
+{
+  "timestamp": "2026-03-05T17:02:28.904Z",
+  "payload": {
+    "version": "1.0",
+    "timestamp": "2026-03-05T17:02:29.317988",
+    "type": "Webhook Test",
+    "data": {
+      "customer": {},
+      "message": {}
+    }
+  }
+},

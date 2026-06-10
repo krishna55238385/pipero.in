@@ -1,0 +1,13 @@
+# Union of phase1/2/3 runtime deps + the trigger service + GA4 ingest.
+# (Test-only deps like pytest are intentionally omitted from the prod image.)
+httpx>=0.27.0
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.0
+tenacity>=8.2.0
+openai>=1.30.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+# GA4 ingest (optional at runtime — import-guarded in ga4_ingest.py)
+google-analytics-data>=0.18.0
+google-auth>=2.29.0
