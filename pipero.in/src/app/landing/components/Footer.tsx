@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import LeadCaptureForm from './LeadCaptureForm'
 
 export default function Footer() {
@@ -30,9 +31,9 @@ export default function Footer() {
             <footer className="lp-footer">
                 <div className="lp-container">
                     <div className="lp-footer-inner">
-                        <a href="/" className="lp-logo" style={{ fontSize: 18 }}>
+                        <Link href="/" className="lp-logo" style={{ fontSize: 18 }}>
                             Magnivo <span>AI</span>
-                        </a>
+                        </Link>
 
                         <div className="lp-footer-links">
                             <a href="#features">Features</a>

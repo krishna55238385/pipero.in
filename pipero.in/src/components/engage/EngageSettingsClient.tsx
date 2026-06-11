@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { GtmScheduleConfig, UnsubscribeRow } from '@/types/engage'
 import { resyncMailboxNow, saveGtmSchedule } from '@/app/actions/engage'
+import SmtpConnectDialog from '@/components/engage/SmtpConnectDialog'
 
 const pad2 = (n: number) => String(n).padStart(2, '0')
 
@@ -181,7 +182,7 @@ export default function EngageSettingsClient({
           <CardHeader className="pb-2"><CardTitle>SMTP</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <p className="text-sm text-muted-foreground">UI placeholder for custom SMTP provider setup.</p>
-            <Button type="button" variant="outline" className="w-full" disabled>Configure SMTP</Button>
+            <SmtpConnectDialog />
           </CardContent>
         </Card>
       </div>

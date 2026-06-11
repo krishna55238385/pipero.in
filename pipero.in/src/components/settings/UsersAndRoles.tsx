@@ -62,12 +62,6 @@ export default function UsersAndRoles({ members, invites = [] }: { members: any[
     const [inviteOpen, setInviteOpen] = useState(false)
     const [inviting, setInviting] = useState(false)
 
-    useEffect(() => {
-        if (roles.length === 0) {
-            loadRoles()
-        }
-    }, [])
-
     const loadRoles = async () => {
         const fetchedRoles = await getRoles()
         setRoles(fetchedRoles)
@@ -75,6 +69,13 @@ export default function UsersAndRoles({ members, invites = [] }: { members: any[
             setSelectedRole(fetchedRoles[0])
         }
     }
+
+    useEffect(() => {
+        if (roles.length === 0) {
+            loadRoles()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
 
     const handleDeleteRole = async (roleId: string, roleName: string) => {
         if (!isCoreAdmin) return

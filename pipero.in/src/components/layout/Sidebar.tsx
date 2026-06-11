@@ -21,6 +21,7 @@ const navItems: NavItem[] = [
         icon: Send,
         children: [
             { name: 'Inbox', href: '/engage/inbox' },
+            { name: 'Accounts', href: '/engage/accounts' },
             { name: 'Sequences', href: '/engage/sequences' },
             { name: 'Campaigns', href: '/engage/campaigns' },
             { name: 'Templates', href: '/engage/templates' },

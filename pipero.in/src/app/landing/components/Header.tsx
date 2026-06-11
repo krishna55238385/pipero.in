@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 
 export default function Header() {
     const [scrolled, setScrolled] = useState(false)
@@ -14,9 +15,9 @@ export default function Header() {
     return (
         <header className="lp-header" style={{ opacity: scrolled ? 1 : 0.95 }}>
             <div className="lp-header-inner">
-                <a href="/" className="lp-logo">
+                <Link href="/" className="lp-logo">
                     Magnivo <span>AI</span>
-                </a>
+                </Link>
 
                 <nav className="lp-nav">
                     <a href="#features">Features</a>

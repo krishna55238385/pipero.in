@@ -274,6 +274,52 @@ export type EngageAnalyticsData = {
   accounts: EngageAccountStats[]
 }
 
+export type AccountStatus = 'active' | 'paused' | 'warming' | 'error' | 'disconnected'
+
+export type AccountTag = {
+  id: string
+  name: string
+  color: string
+}
+
+export type EmailAccount = {
+  id: string
+  email: string
+  provider: string
+  status: AccountStatus
+  connectedAt: string | null
+  lastSyncedAt: string | null
+  watchActive: boolean
+  dailySendLimit: number
+  sentToday: number
+  warmupEnabled: boolean
+  warmupStartedAt: string | null
+  warmupDailyLimit: number
+  warmupReplyRate: number
+  warmupOpenRate: number
+  warmupSpamRescuePct: number
+  warmupMarkImportantPct: number
+  warmupEmails7d: number
+  healthScore: number | null
+  combinedScore: number | null
+  sent: number
+  opens: number
+  clicks: number
+  replies: number
+  tags: AccountTag[]
+}
+
+export type AccountSettingsInput = {
+  status?: AccountStatus
+  dailySendLimit?: number
+  warmupEnabled?: boolean
+  warmupDailyLimit?: number
+  warmupReplyRate?: number
+  warmupOpenRate?: number
+  warmupSpamRescuePct?: number
+  warmupMarkImportantPct?: number
+}
+
 export type GtmScheduleConfig = {
   id?: string
   icpId: number | null

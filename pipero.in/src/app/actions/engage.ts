@@ -6,11 +6,16 @@ import { createClient } from '@/lib/supabase/server'
 import { refreshAccessToken, startGmailWatch } from '@/lib/gmail'
 import { syncMailboxEmails, type MailboxRow } from '@/lib/engage-sync'
 import { runEngageWorker, type WorkerReport } from '@/lib/engage-worker'
+import { runWarmupCycle } from '@/lib/engage-warmup'
 import { generateJson } from '@/lib/llm'
+import nodemailer from 'nodemailer'
 import type {
+  AccountSettingsInput,
+  AccountTag,
   ConversationInsight,
   ConversationMessage,
   ConversationThread,
+  EmailAccount,
   EngageAccountStats,
   EngageAnalyticsData,
   EngageAttachment,
@@ -176,6 +181,15 @@ export async function runEngageWorkerNow(): Promise<WorkerReport> {
   const report = await runEngageWorker()
   revalidatePath('/engage/campaigns')
   return report
+}
+
+/** Runs one warmup cycle from the UI ("Run warmup now"). */
+export async function triggerWarmupCycle(): Promise<{ sent: number; errors: string[] }> {
+  const supabase = await createClient()
+  await getCurrentActor(supabase) // auth gate
+  const report = await runWarmupCycle()
+  revalidatePath('/engage/accounts')
+  return { sent: report.sent, errors: report.errors }
 }
 
 export async function getEngageCampaigns(): Promise<EngageCampaign[]> {
@@ -1421,5 +1435,382 @@ export async function getUnsubscribes(): Promise<UnsubscribeRow[]> {
     campaignId: x.campaign_id ? String(x.campaign_id) : null,
     unsubscribedAt: x.unsubscribed_at ? String(x.unsubscribed_at) : x.created_at ? String(x.created_at) : null,
   }))
+}
+
+// =========================================================================
+// Email Accounts dashboard (Instantly-style)
+// =========================================================================
+
+export async function getEmailAccounts(): Promise<EmailAccount[]> {
+  const supabase = await createClient()
+  let orgId: string
+  try {
+    ;({ orgId } = await getCurrentActor(supabase))
+  } catch {
+    return []
+  }
+
+  const { data: mailboxes } = await supabase
+    .from('engage_mailboxes')
+    .select(`
+      id, email, provider, status, connected_at, last_synced_at,
+      gmail_watch_expiration, daily_send_limit,
+      warmup_enabled, warmup_started_at, warmup_daily_limit,
+      warmup_reply_rate, warmup_open_rate,
+      warmup_spam_rescue_pct, warmup_mark_important_pct,
+      mailbox_tags ( tag_id, account_tags ( id, name, color ) )
+    `)
+    .eq('organization_id', orgId)
+    .order('connected_at', { ascending: false })
+
+  if (!mailboxes?.length) return []
+
+  // Warmup emails sent in last 7 days per mailbox
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const { data: warmupRows } = await supabase
+    .from('engage_warmup_log')
+    .select('mailbox_id, placed_inbox')
+    .eq('organization_id', orgId)
+    .gte('sent_at', sevenDaysAgo)
+
+  const warmupByMailbox: Record<string, { total: number; inbox: number }> = {}
+  for (const w of warmupRows ?? []) {
+    const key = String(w.mailbox_id)
+    if (!warmupByMailbox[key]) warmupByMailbox[key] = { total: 0, inbox: 0 }
+    warmupByMailbox[key].total++
+    if (w.placed_inbox === true) warmupByMailbox[key].inbox++
+  }
+
+  // Sends today per mailbox (forward-tracked via mailbox_id on outreach_log)
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  const { data: todaySends } = await supabase
+    .from('outreach_log')
+    .select('mailbox_id')
+    .eq('organization_id', orgId)
+    .eq('status', 'sent')
+    .gte('sent_at', todayStart.toISOString())
+    .not('mailbox_id', 'is', null)
+
+  const sentTodayByMailbox: Record<string, number> = {}
+  for (const s of todaySends ?? []) {
+    const key = String(s.mailbox_id)
+    sentTodayByMailbox[key] = (sentTodayByMailbox[key] ?? 0) + 1
+  }
+
+  // Campaign analytics per mailbox (all-time open+reply for combined score)
+  const { data: analyticsRows } = await supabase
+    .from('outreach_log')
+    .select('mailbox_id, status')
+    .eq('organization_id', orgId)
+    .not('mailbox_id', 'is', null)
+
+  const analyticsByMailbox: Record<string, { sent: number; opens: number; replies: number; clicks: number }> = {}
+  for (const r of analyticsRows ?? []) {
+    const key = String(r.mailbox_id)
+    if (!analyticsByMailbox[key]) analyticsByMailbox[key] = { sent: 0, opens: 0, replies: 0, clicks: 0 }
+    analyticsByMailbox[key].sent++
+  }
+
+  return mailboxes.map((mb) => {
+    const id = String(mb.id)
+    const warmup = warmupByMailbox[id] ?? { total: 0, inbox: 0 }
+    const healthScore =
+      warmup.total > 0 ? Math.round((warmup.inbox / warmup.total) * 100) : null
+    const analytics = analyticsByMailbox[id] ?? { sent: 0, opens: 0, replies: 0, clicks: 0 }
+    const combinedScore =
+      analytics.sent >= 100
+        ? Math.round(
+            ((analytics.opens / analytics.sent) * 0.5 + (analytics.replies / analytics.sent) * 0.5) * 100,
+          )
+        : null
+
+    const rawTags = (mb.mailbox_tags as any[]) ?? []
+    const tags: AccountTag[] = rawTags
+      .map((mt: any) => mt.account_tags)
+      .filter(Boolean)
+      .map((t: any) => ({ id: String(t.id), name: String(t.name), color: String(t.color) }))
+
+    return {
+      id,
+      email: String(mb.email),
+      provider: String(mb.provider ?? 'gmail'),
+      status: (mb.status ?? 'active') as EmailAccount['status'],
+      connectedAt: mb.connected_at ? String(mb.connected_at) : null,
+      lastSyncedAt: mb.last_synced_at ? String(mb.last_synced_at) : null,
+      watchActive: Boolean(
+        mb.gmail_watch_expiration &&
+          new Date(String(mb.gmail_watch_expiration)).getTime() > Date.now(),
+      ),
+      dailySendLimit: Number(mb.daily_send_limit ?? 50),
+      sentToday: sentTodayByMailbox[id] ?? 0,
+      warmupEnabled: Boolean(mb.warmup_enabled),
+      warmupStartedAt: mb.warmup_started_at ? String(mb.warmup_started_at) : null,
+      warmupDailyLimit: Number(mb.warmup_daily_limit ?? 10),
+      warmupReplyRate: Number(mb.warmup_reply_rate ?? 30),
+      warmupOpenRate: Number(mb.warmup_open_rate ?? 50),
+      warmupSpamRescuePct: Number(mb.warmup_spam_rescue_pct ?? 20),
+      warmupMarkImportantPct: Number(mb.warmup_mark_important_pct ?? 20),
+      warmupEmails7d: warmup.total,
+      healthScore,
+      combinedScore,
+      sent: analytics.sent,
+      opens: analytics.opens,
+      clicks: analytics.clicks,
+      replies: analytics.replies,
+      tags,
+    }
+  })
+}
+
+export async function updateAccountSettings(
+  id: string,
+  settings: AccountSettingsInput,
+): Promise<{ error?: string }> {
+  const supabase = await createClient()
+  let orgId: string
+  try {
+    ;({ orgId } = await getCurrentActor(supabase))
+  } catch {
+    return { error: 'Unauthorized' }
+  }
+
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (settings.status !== undefined) patch.status = settings.status
+  if (settings.dailySendLimit !== undefined) patch.daily_send_limit = settings.dailySendLimit
+  if (settings.warmupEnabled !== undefined) {
+    patch.warmup_enabled = settings.warmupEnabled
+    if (settings.warmupEnabled && !patch.warmup_started_at) {
+      patch.warmup_started_at = new Date().toISOString()
+    }
+  }
+  if (settings.warmupDailyLimit !== undefined) patch.warmup_daily_limit = settings.warmupDailyLimit
+  if (settings.warmupReplyRate !== undefined) patch.warmup_reply_rate = settings.warmupReplyRate
+  if (settings.warmupOpenRate !== undefined) patch.warmup_open_rate = settings.warmupOpenRate
+  if (settings.warmupSpamRescuePct !== undefined) patch.warmup_spam_rescue_pct = settings.warmupSpamRescuePct
+  if (settings.warmupMarkImportantPct !== undefined) patch.warmup_mark_important_pct = settings.warmupMarkImportantPct
+
+  const { error } = await supabase
+    .from('engage_mailboxes')
+    .update(patch)
+    .eq('id', id)
+    .eq('organization_id', orgId)
+
+  if (error) return { error: error.message }
+  revalidatePath('/engage/accounts')
+  return {}
+}
+
+export async function bulkUpdateAccounts(
+  ids: string[],
+  action: 'enable_warmup' | 'pause_warmup' | 'unpause' | 'pause',
+): Promise<{ error?: string }> {
+  if (!ids.length) return {}
+  const supabase = await createClient()
+  let orgId: string
+  try {
+    ;({ orgId } = await getCurrentActor(supabase))
+  } catch {
+    return { error: 'Unauthorized' }
+  }
+
+  let patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (action === 'enable_warmup') {
+    patch = { ...patch, warmup_enabled: true, status: 'warming', warmup_started_at: new Date().toISOString() }
+  } else if (action === 'pause_warmup') {
+    patch = { ...patch, warmup_enabled: false }
+  } else if (action === 'unpause') {
+    patch = { ...patch, status: 'active' }
+  } else if (action === 'pause') {
+    patch = { ...patch, status: 'paused' }
+  }
+
+  const { error } = await supabase
+    .from('engage_mailboxes')
+    .update(patch)
+    .in('id', ids)
+    .eq('organization_id', orgId)
+
+  if (error) return { error: error.message }
+  revalidatePath('/engage/accounts')
+  return {}
+}
+
+export async function getAccountTags(): Promise<AccountTag[]> {
+  const supabase = await createClient()
+  let orgId: string
+  try {
+    ;({ orgId } = await getCurrentActor(supabase))
+  } catch {
+    return []
+  }
+
+  const { data } = await supabase
+    .from('account_tags')
+    .select('id, name, color')
+    .eq('organization_id', orgId)
+    .order('name')
+
+  return (data ?? []).map((t) => ({
+    id: String(t.id),
+    name: String(t.name),
+    color: String(t.color ?? '#6366f1'),
+  }))
+}
+
+export async function createAccountTag(
+  name: string,
+  color = '#6366f1',
+): Promise<{ tag?: AccountTag; error?: string }> {
+  const supabase = await createClient()
+  let orgId: string
+  try {
+    ;({ orgId } = await getCurrentActor(supabase))
+  } catch {
+    return { error: 'Unauthorized' }
+  }
+
+  const { data, error } = await supabase
+    .from('account_tags')
+    .insert({ organization_id: orgId, name: name.trim(), color })
+    .select('id, name, color')
+    .single()
+
+  if (error) return { error: error.message }
+  revalidatePath('/engage/accounts')
+  return { tag: { id: String(data.id), name: String(data.name), color: String(data.color) } }
+}
+
+export async function applyTagsToAccounts(
+  accountIds: string[],
+  tagIds: string[],
+): Promise<{ error?: string }> {
+  if (!accountIds.length || !tagIds.length) return {}
+  const supabase = await createClient()
+  try {
+    await getCurrentActor(supabase)
+  } catch {
+    return { error: 'Unauthorized' }
+  }
+
+  const rows = accountIds.flatMap((mailboxId) =>
+    tagIds.map((tagId) => ({ mailbox_id: mailboxId, tag_id: tagId })),
+  )
+  const { error } = await supabase.from('mailbox_tags').upsert(rows, { onConflict: 'mailbox_id,tag_id' })
+  if (error) return { error: error.message }
+  revalidatePath('/engage/accounts')
+  return {}
+}
+
+export async function removeTagFromAccount(
+  accountId: string,
+  tagId: string,
+): Promise<{ error?: string }> {
+  const supabase = await createClient()
+  try {
+    await getCurrentActor(supabase)
+  } catch {
+    return { error: 'Unauthorized' }
+  }
+
+  const { error } = await supabase
+    .from('mailbox_tags')
+    .delete()
+    .eq('mailbox_id', accountId)
+    .eq('tag_id', tagId)
+
+  if (error) return { error: error.message }
+  revalidatePath('/engage/accounts')
+  return {}
+}
+
+// SMTP account connection
+
+function buildSmtpTransport(input: {
+  smtpHost: string
+  smtpPort: number
+  smtpUser: string
+  smtpPass: string
+  smtpSecurity: 'tls' | 'ssl' | 'none'
+}) {
+  return nodemailer.createTransport({
+    host: input.smtpHost,
+    port: input.smtpPort,
+    secure: input.smtpSecurity === 'ssl',
+    auth: { user: input.smtpUser, pass: input.smtpPass },
+    requireTLS: input.smtpSecurity === 'tls',
+  })
+}
+
+export async function testSmtpConnection(input: {
+  smtpHost: string
+  smtpPort: number
+  smtpUser: string
+  smtpPass: string
+  smtpSecurity: 'tls' | 'ssl' | 'none'
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const transport = buildSmtpTransport(input)
+    await transport.verify()
+    return { ok: true }
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'SMTP connection failed' }
+  }
+}
+
+export async function connectSmtpAccount(input: {
+  fromName: string
+  smtpHost: string
+  smtpPort: number
+  smtpUser: string
+  smtpPass: string
+  smtpSecurity: 'tls' | 'ssl' | 'none'
+  imapHost?: string
+  imapPort?: number
+}): Promise<{ error?: string }> {
+  const supabase = await createClient()
+  let userId: string
+  let orgId: string
+  try {
+    ;({ userId, orgId } = await getCurrentActor(supabase))
+  } catch {
+    return { error: 'Unauthorized' }
+  }
+
+  const test = await testSmtpConnection({
+    smtpHost: input.smtpHost,
+    smtpPort: input.smtpPort,
+    smtpUser: input.smtpUser,
+    smtpPass: input.smtpPass,
+    smtpSecurity: input.smtpSecurity,
+  })
+  if (!test.ok) return { error: test.error ?? 'SMTP connection failed' }
+
+  const now = new Date().toISOString()
+  const { error: upsertError } = await supabase.from('engage_mailboxes').upsert(
+    {
+      user_id: userId,
+      organization_id: orgId,
+      provider: 'smtp',
+      email: input.smtpUser,
+      smtp_host: input.smtpHost,
+      smtp_port: input.smtpPort,
+      smtp_user: input.smtpUser,
+      smtp_pass: input.smtpPass,
+      smtp_from_name: input.fromName,
+      smtp_security: input.smtpSecurity,
+      imap_host: input.imapHost ?? null,
+      imap_port: input.imapPort ?? null,
+      status: 'active',
+      updated_at: now,
+      connected_at: now,
+    },
+    { onConflict: 'user_id,provider,email' }
+  )
+  if (upsertError) return { error: upsertError.message }
+
+  revalidatePath('/engage/accounts')
+  revalidatePath('/engage/settings')
+  return {}
 }
 
