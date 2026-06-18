@@ -117,6 +117,18 @@ def sync_property(conn: dict) -> int:
     rows: list[dict] = []
     strong_company_hits: list[tuple[str, int, str]] = []  # (domain, weight, label)
 
+    # Resolve a company domain -> leads_raw id at most once per sync, so the
+    # signal row's matched_lead_id and the buying-signal mirror below share a
+    # single lookup instead of querying the same domain twice.
+    lead_by_domain: dict[str, int | None] = {}
+
+    def _lead_for_domain(domain: str) -> int | None:
+        if not domain:
+            return None
+        if domain not in lead_by_domain:
+            lead_by_domain[domain] = db.find_leads_raw_by_domain(org, domain)
+        return lead_by_domain[domain]
+
     for r in response.rows:
         values = [d.value for d in r.dimension_values]
         metrics = [m.value for m in r.metric_values]
@@ -134,6 +146,7 @@ def sync_property(conn: dict) -> int:
 
         dimension_value = company_val or landing
         company_domain = _domain_of(company_val) if company_val else ""
+        matched_lead_id = _lead_for_domain(company_domain)
 
         rows.append(
             {
@@ -141,6 +154,7 @@ def sync_property(conn: dict) -> int:
                 "source": "ga4",
                 "company_name": company_val or None,
                 "company_domain": company_domain or None,
+                "matched_lead_id": matched_lead_id,
                 "dimension": COMPANY_DIMENSION if company_val else "landingPage",
                 "dimension_value": dimension_value,
                 "region": None,
@@ -167,9 +181,10 @@ def sync_property(conn: dict) -> int:
 
     written = db.upsert_visitor_signals(rows)
 
-    # Mirror strong, company-identified visits into buying_signals.
+    # Mirror strong, company-identified visits into buying_signals (reusing the
+    # domain -> lead lookups already resolved while building the signal rows).
     for domain, weight, label in strong_company_hits:
-        lead_id = db.find_leads_raw_by_domain(org, domain)
+        lead_id = _lead_for_domain(domain)
         if lead_id:
             try:
                 db.insert_website_buying_signal(

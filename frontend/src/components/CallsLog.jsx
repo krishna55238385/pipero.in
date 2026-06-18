@@ -6,11 +6,29 @@ const PAGE_SIZE = 20
 
 const AGENT_OPTIONS = [
   { value: '', label: 'All Agents' },
-  { value: 'agent_01_icp', label: 'Agent 01 — ICP' },
-  { value: 'agent_02_leads', label: 'Agent 02 — Leads' },
+  // Phase 1 — FIND
+  { value: 'agent_01_icp', label: 'Agent 01 — ICP Definition' },
+  { value: 'agent_02_leads', label: 'Agent 02 — Lead Generation' },
   { value: 'agent_03_enrichment', label: 'Agent 03 — Enrichment' },
-  { value: 'agent_04_signals', label: 'Agent 04 — Signals' },
-  { value: 'agent_05_scoring', label: 'Agent 05 — Scoring' },
+  { value: 'agent_04_signals', label: 'Agent 04 — Buying Signals' },
+  { value: 'agent_05_scoring', label: 'Agent 05 — ICP Scoring' },
+  // Phase 2 — UNDERSTAND
+  { value: 'agent_06_account_intel', label: 'Agent 06 — Account Intelligence' },
+  { value: 'agent_07_stakeholders', label: 'Agent 07 — Stakeholder Mapping' },
+  { value: 'agent_08_competitive', label: 'Agent 08 — Competitive Intel' },
+  { value: 'agent_09_market_sizing', label: 'Agent 09 — Market Sizing' },
+  { value: 'agent_10_gtm_insights', label: 'Agent 10 — GTM Insights' },
+  // Phase 3 — REACH
+  { value: 'agent_11_personalisation', label: 'Agent 11 — Personalisation' },
+  { value: 'agent_12_copywriter', label: 'Agent 12 — Copywriter' },
+  { value: 'agent_13_channel_strategy', label: 'Agent 13 — Channel Strategy' },
+  { value: 'agent_14_orchestrator', label: 'Agent 14 — Omnichannel Orchestrator' },
+  { value: 'agent_15_ab_testing', label: 'Agent 15 — A/B Testing' },
+  // CRM
+  { value: 'engage_email_ai', label: 'CRM — Email AI' },
+  { value: 'engage_compose_ai', label: 'CRM — Compose AI' },
+  { value: 'engage_template_ai', label: 'CRM — Template AI' },
+  { value: 'engage_sequence_ai', label: 'CRM — Sequence AI' },
 ]
 
 const MODEL_OPTIONS = [

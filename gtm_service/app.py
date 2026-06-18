@@ -137,11 +137,32 @@ def get_run(run_id: str) -> dict:
 def ga4_sync(body: Ga4SyncRequest, background: BackgroundTasks) -> dict:
     from gtm_service import ga4_ingest
 
+    org = body.organization_id or config.DEFAULT_ORG_ID or None
+
+    # Synchronous pre-flight so the CRM gets honest feedback instead of a silent
+    # "accepted" when GA4 isn't wired up yet (the #1 first-run confusion).
+    if not (config.GA4_SA_JSON or config.GA4_SA_FILE):
+        return {
+            "status": "not_configured",
+            "detail": "GA4 service-account credentials are not set on the server "
+            "(GA4_SA_JSON or GA4_SA_FILE).",
+        }
+    try:
+        conns = db.get_ga4_connections(org)
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "detail": f"could not read GA4 connections: {exc}"}
+    if not conns:
+        return {
+            "status": "no_connections",
+            "detail": "No GA4 property is connected for this organization yet. "
+            "Add one on Prospects → Anonymous Website Visitors.",
+        }
+
     def _job() -> None:
         try:
-            ga4_ingest.sync_all(body.organization_id)
-        except Exception:  # noqa: BLE001 - errors are recorded per-connection
-            pass
+            ga4_ingest.sync_all(org)
+        except Exception as exc:  # noqa: BLE001 - per-connection errors recorded in ga4_connections
+            print(f"[ga4/sync] ingest failed: {exc}")
 
     background.add_task(_job)
-    return {"status": "accepted"}
+    return {"status": "accepted", "connections": len(conns)}

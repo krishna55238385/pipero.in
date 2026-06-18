@@ -3,11 +3,13 @@ import { fetchByAgent } from '../api'
 import { AGENT_LABELS } from './AgentBarChart'
 import EmptyState from './EmptyState'
 
-const PHASE_ORDER = ['phase1', 'phase2', 'unknown']
+const PHASE_ORDER = ['phase1', 'phase2', 'phase3', 'crm', 'unknown']
 
 const PHASE_PILL_STYLES = {
   phase1: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300',
   phase2: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+  phase3: 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300',
+  crm: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
   unknown: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400',
 }
 

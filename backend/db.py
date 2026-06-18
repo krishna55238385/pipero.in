@@ -16,8 +16,16 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 _SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 _SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+_GTM_ORG_ID = os.environ.get("GTM_ORG_ID", "")
 
 _TABLE_MISSING_PHRASES = ("Could not find the table", "relation", "does not exist")
+
+
+def _org_filter(params: dict) -> dict:
+    """Restrict queries to the configured GTM org (matches Pipero CRM behaviour)."""
+    if _GTM_ORG_ID:
+        params["organization_id"] = f"eq.{_GTM_ORG_ID}"
+    return params
 
 
 def _make_client() -> httpx.Client:
@@ -60,7 +68,7 @@ def _get(path: str, params: dict | None = None) -> tuple[list[dict], int | None]
 # ---------------------------------------------------------------------------
 
 def get_usage_summary() -> dict[str, Any]:
-    rows, _ = _get("/llm_usage", params={"select": "*", "limit": "10000"})
+    rows, _ = _get("/llm_usage", params=_org_filter({"select": "*", "limit": "10000"}))
 
     total_calls = 0
     total_prompt = 0
@@ -135,11 +143,11 @@ def get_usage_timeline(days: int = 7) -> list[dict[str, Any]]:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     rows, _ = _get(
         "/llm_usage",
-        params={
+        params=_org_filter({
             "select": "created_at,total_tokens,estimated_cost_usd",
             "created_at": f"gte.{cutoff}",
             "limit": "50000",
-        },
+        }),
     )
 
     # Build a day-keyed accumulator covering the full requested range
@@ -177,12 +185,12 @@ def get_usage_calls(
     agent: str = "",
     model: str = "",
 ) -> dict[str, Any]:
-    params: dict[str, Any] = {
+    params: dict[str, Any] = _org_filter({
         "select": "*",
         "order": "created_at.desc",
         "limit": str(limit),
         "offset": str(offset),
-    }
+    })
     if agent:
         params["agent"] = f"eq.{agent}"
     if model:
@@ -204,10 +212,10 @@ def get_usage_calls(
 def get_usage_by_icp() -> list[dict[str, Any]]:
     usage_rows, _ = _get(
         "/llm_usage",
-        params={
+        params=_org_filter({
             "select": "icp_id,total_tokens,estimated_cost_usd",
             "limit": "50000",
-        },
+        }),
     )
 
     # Aggregate by icp_id
@@ -270,7 +278,7 @@ def get_usage_by_phase() -> list[dict[str, Any]]:
     # to llm_usage yet on this Supabase instance.
     rows, _ = _get(
         "/llm_usage",
-        params={"select": "*", "limit": "50000"},
+        params=_org_filter({"select": "*", "limit": "50000"}),
     )
 
     agg: dict[str, dict] = defaultdict(lambda: {
@@ -309,7 +317,7 @@ def get_usage_by_agent() -> list[dict[str, Any]]:
     # exist" and _get treats that as a missing-table response.
     rows, _ = _get(
         "/llm_usage",
-        params={"select": "*", "limit": "10000"},
+        params=_org_filter({"select": "*", "limit": "10000"}),
     )
 
     agg: dict[str, dict] = defaultdict(lambda: {

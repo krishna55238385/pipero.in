@@ -1,5 +1,6 @@
 import EngageSettingsClient from '@/components/engage/EngageSettingsClient'
 import {
+  getGmailMailboxes,
   getGtmSchedule,
   getIcpOptions,
   getMailboxSyncStatus,
@@ -13,6 +14,13 @@ export default async function EngageSettingsPage() {
     status = await getMailboxSyncStatus()
   } catch {
     status = null
+  }
+
+  let mailboxes: Awaited<ReturnType<typeof getGmailMailboxes>> = []
+  try {
+    mailboxes = await getGmailMailboxes()
+  } catch {
+    mailboxes = []
   }
 
   let unsubscribes: UnsubscribeRow[] = []
@@ -37,6 +45,7 @@ export default async function EngageSettingsPage() {
       lastSyncedAt={status?.lastSyncedAt || null}
       watchExpiration={status?.watchExpiration || null}
       historyId={status?.historyId || null}
+      mailboxes={mailboxes}
       unsubscribes={unsubscribes}
       schedule={schedule}
       icpOptions={icpOptions}

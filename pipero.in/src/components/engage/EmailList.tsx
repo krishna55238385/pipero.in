@@ -22,6 +22,7 @@ export type EmailRowMeta = {
   campaignId: string | null
   campaignName: string | null
   interestStatus: InterestStatus
+  bounced?: boolean
 }
 
 // Time-only is misleading for older messages; show time for today, otherwise a
@@ -135,6 +136,7 @@ export default function EmailList({
             {emails.map((email) => {
               const active = email.threadId === activeThreadId
               const m = threadMeta?.[email.threadId]
+              const showBounced = Boolean(m?.bounced)
               const showStatus = m && m.interestStatus !== 'lead'
               const showCampaign = Boolean(m?.campaignName)
               return (
@@ -154,8 +156,13 @@ export default function EmailList({
                   </div>
                   <p className={`text-sm truncate ${email.unread ? 'font-medium' : ''}`}>{email.subject}</p>
                   <p className="text-xs text-muted-foreground truncate">{email.snippet}</p>
-                  {showStatus || showCampaign ? (
+                  {showBounced || showStatus || showCampaign ? (
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {showBounced ? (
+                        <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+                          Bounced
+                        </span>
+                      ) : null}
                       {showStatus ? (
                         <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
                           {STATUS_LABELS[m!.interestStatus]}

@@ -73,7 +73,10 @@ export function buildGmailOAuthUrl(state: string) {
     redirect_uri: redirectUri,
     response_type: 'code',
     access_type: 'offline',
-    prompt: 'consent',
+    // `select_account` forces Google to show the account chooser so a user can
+    // connect a SECOND/THIRD mailbox instead of silently reusing the one they're
+    // already signed into; `consent` still guarantees a refresh_token is returned.
+    prompt: 'select_account consent',
     scope: getGmailScopes().join(' '),
     state,
   })

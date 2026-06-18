@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { refreshAccessToken, startGmailWatch } from '@/lib/gmail'
 import { syncMailboxEmails, type MailboxRow } from '@/lib/engage-sync'
-import { runEngageWorker, type WorkerReport } from '@/lib/engage-worker'
+import { enrollCampaignRecipients, runEngageWorker, type WorkerReport } from '@/lib/engage-worker'
 import { runWarmupCycle } from '@/lib/engage-warmup'
 import { generateJson } from '@/lib/llm'
 import nodemailer from 'nodemailer'
@@ -108,6 +108,27 @@ export async function getMailboxSyncStatus() {
     watchExpiration: mailbox.gmail_watch_expiration as string | null,
     historyId: mailbox.gmail_history_id as string | null,
   }
+}
+
+/** All connected Gmail mailboxes for the current user (most-recent first). */
+export async function getGmailMailboxes(): Promise<
+  Array<{ id: string; email: string; lastSyncedAt: string | null; watchExpiration: string | null }>
+> {
+  const supabase = await createClient()
+  const { userId } = await getCurrentActor(supabase)
+  const { data, error } = await supabase
+    .from('engage_mailboxes')
+    .select('id, email, last_synced_at, gmail_watch_expiration')
+    .eq('user_id', userId)
+    .eq('provider', 'gmail')
+    .order('connected_at', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map((m) => ({
+    id: String(m.id),
+    email: m.email as string,
+    lastSyncedAt: (m.last_synced_at as string | null) ?? null,
+    watchExpiration: (m.gmail_watch_expiration as string | null) ?? null,
+  }))
 }
 
 export async function getValidGmailAccessToken() {
@@ -356,6 +377,23 @@ export async function createEngageCampaign(input: Omit<EngageCampaign, 'id'>): P
     .select('id')
     .single()
   if (error) throw new Error(error.message)
+
+  // Enroll the audience right away so the campaign's Leads tab is populated
+  // immediately — matching auto-campaigns, which enroll on creation. Sending
+  // stays gated on status='running', so a draft or future-scheduled campaign
+  // shows its leads without sending early. Best-effort: a hiccup here must not
+  // fail campaign creation (the worker will re-enroll idempotently when due).
+  try {
+    await enrollCampaignRecipients(supabase, {
+      id: String(data.id),
+      organization_id: orgId,
+      audience_lead_ids: (input.audienceLeadIds ?? []).map(String),
+      sequence_id: input.sequenceId || null,
+    })
+  } catch (enrollError) {
+    console.error('createEngageCampaign: immediate enrollment failed', enrollError)
+  }
+
   revalidatePath('/engage/campaigns')
   return { id: String(data.id) }
 }
@@ -1163,7 +1201,7 @@ export async function getUniboxMeta(): Promise<import('@/types/engage').UniboxMe
   const [recipientsRes, campaignsRes, mailboxesRes] = await Promise.all([
     supabase
       .from('engage_campaign_recipients')
-      .select('id, campaign_id, gmail_thread_id, interest_status')
+      .select('id, campaign_id, gmail_thread_id, interest_status, status, last_error')
       .eq('organization_id', orgId)
       .not('gmail_thread_id', 'is', null),
     supabase.from('engage_campaigns').select('id, name').eq('organization_id', orgId).order('created_at', { ascending: false }),
@@ -1178,11 +1216,14 @@ export async function getUniboxMeta(): Promise<import('@/types/engage').UniboxMe
   for (const r of recipientsRes.data ?? []) {
     const threadId = String(r.gmail_thread_id)
     const status = (r.interest_status ?? 'lead') as import('@/types/engage').InterestStatus
+    // engage-sync marks a bounced recipient status='stopped', last_error='bounced'.
+    const bounced = r.status === 'stopped' && r.last_error === 'bounced'
     byThread[threadId] = {
       campaignId: r.campaign_id ? String(r.campaign_id) : null,
       campaignName: r.campaign_id ? nameById.get(String(r.campaign_id)) ?? null : null,
       interestStatus: status,
       recipientId: String(r.id),
+      bounced,
     }
     statusCounts[status] = (statusCounts[status] ?? 0) + 1
   }

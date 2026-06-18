@@ -11,16 +11,29 @@ import {
 import EmptyState from './EmptyState'
 
 export const AGENT_LABELS = {
+  // Phase 1 — FIND
   agent_01_icp: '01 · ICP Definition',
   agent_02_leads: '02 · Lead Generation',
   agent_03_enrichment: '03 · Enrichment',
   agent_04_signals: '04 · Buying Signals',
   agent_05_scoring: '05 · ICP Scoring',
+  // Phase 2 — UNDERSTAND
   agent_06_account_intel: '06 · Account Intelligence',
   agent_07_stakeholders: '07 · Stakeholder Mapping',
   agent_08_competitive: '08 · Competitive Intel',
   agent_09_market_sizing: '09 · Market Sizing',
   agent_10_gtm_insights: '10 · GTM Insights',
+  // Phase 3 — REACH
+  agent_11_personalisation: '11 · Personalisation',
+  agent_12_copywriter: '12 · Copywriter',
+  agent_13_channel_strategy: '13 · Channel Strategy',
+  agent_14_orchestrator: '14 · Omnichannel Orchestrator',
+  agent_15_ab_testing: '15 · A/B Testing',
+  // CRM engage agents
+  engage_email_ai: 'CRM · Email AI',
+  engage_compose_ai: 'CRM · Compose AI',
+  engage_template_ai: 'CRM · Template AI',
+  engage_sequence_ai: 'CRM · Sequence AI',
 }
 
 function prettifyAgent(name) {

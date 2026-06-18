@@ -214,7 +214,121 @@ async function mailboxForOrg(supabase: Db, orgId: string): Promise<MailboxRow | 
   return (data as MailboxRow) ?? null
 }
 
-/** Validates audience leads and creates per-recipient state rows. */
+/**
+ * Validate a campaign's audience and (idempotently) create per-recipient state
+ * rows in engage_campaign_recipients. Returns how many were enrolled vs skipped.
+ *
+ * Shared by the worker's scheduled-enrollment pass AND by manual campaign
+ * creation, so a manually-built campaign shows its leads immediately (like an
+ * auto-campaign) instead of staying empty until the worker's next due tick.
+ * It deliberately does NOT change campaign status — sending is gated elsewhere
+ * on status='running', so pre-enrolling a draft/future campaign never sends early.
+ */
+export async function enrollCampaignRecipients(
+  supabase: Db,
+  campaign: Pick<CampaignRow, 'id' | 'organization_id' | 'audience_lead_ids' | 'sequence_id'>,
+): Promise<{ enrolled: number; skipped: number }> {
+  const nowIso = new Date().toISOString()
+
+  let totalSteps = 1
+  if (campaign.sequence_id) {
+    const { data: seq } = await supabase
+      .from('engage_sequences')
+      .select('steps')
+      .eq('id', campaign.sequence_id)
+      .maybeSingle()
+    const steps = Array.isArray(seq?.steps) ? (seq.steps as SequenceStep[]) : []
+    totalSteps = Math.max(1, steps.length)
+  }
+
+  const leadIds = (campaign.audience_lead_ids ?? []).map((x) => Number(x)).filter((n) => Number.isFinite(n))
+  const { data: leads } = leadIds.length
+    ? await supabase
+        .from('leads_raw')
+        .select('id, contact_name, contact_email, contact_title, company_name, company_industry, bounce_status')
+        .in('id', leadIds)
+    : { data: [] }
+
+  const { data: unsubs } = await supabase.from('outreach_unsubscribes').select('email')
+  const suppressed = new Set((unsubs ?? []).map((u) => String(u.email).toLowerCase()))
+
+  const seenEmails = new Set<string>()
+  const rows = (leads ?? []).map((lead) => {
+    const email = String(lead.contact_email ?? '').trim().toLowerCase()
+    // Enrichment writes the literal "null"/"none" when it can't find a real
+    // value — treat those as blank so they don't pass the gate.
+    const name = blankIfPlaceholder(String(lead.contact_name ?? '').trim())
+    const company = blankIfPlaceholder(String(lead.company_name ?? '').trim())
+    const localPart = email.split('@')[0] ?? ''
+
+    // "No blanks" rule: a recipient must have every column the email needs;
+    // incomplete rows are skipped (visibly), never half-sent.
+    let skipReason: string | null = null
+    if (!email || !EMAIL_RE.test(email) || PLACEHOLDER_VALUES.has(localPart)) {
+      // catches blank, malformed, and synthesized "null@domain" addresses
+      skipReason = 'missing_or_invalid_email'
+    } else if (suppressed.has(email)) {
+      skipReason = 'unsubscribed'
+    } else if (BAD_BOUNCE_STATUSES.has(String(lead.bounce_status ?? '').toLowerCase())) {
+      // Only genuinely undeliverable addresses are skipped. "unknown" means
+      // the verifier was inconclusive, NOT that the address bounced — those
+      // still send (else nearly every unverified lead would be skipped).
+      skipReason = `bounce_status:${lead.bounce_status}`
+    } else if (!name && !company) {
+      skipReason = 'missing_name_and_company'
+    } else if (seenEmails.has(email)) {
+      skipReason = 'duplicate_email_in_audience'
+    }
+    if (email) seenEmails.add(email)
+
+    return {
+      campaign_id: campaign.id,
+      organization_id: campaign.organization_id,
+      lead_id: Number(lead.id),
+      email: email || `invalid-${lead.id}@invalid.local`,
+      name,
+      company,
+      job_title: blankIfPlaceholder(String(lead.contact_title ?? '').trim()) || null,
+      email_provider: email ? detectProvider(email) : null,
+      current_step: 0,
+      total_steps: totalSteps,
+      status: skipReason ? 'skipped' : 'pending',
+      skip_reason: skipReason,
+      next_run_at: skipReason ? null : nowIso,
+    }
+  })
+
+  if (rows.length) {
+    const { error } = await supabase
+      .from('engage_campaign_recipients')
+      .upsert(rows, { onConflict: 'campaign_id,email', ignoreDuplicates: true })
+    if (error) throw new Error(error.message)
+  }
+
+  // Unified delivery ledger: record skips in outreach_log too, so the
+  // "sent vs not sent" stats cover Path A (GTM) and Path B (campaigns) alike.
+  const skippedRows = rows.filter((r) => r.status === 'skipped')
+  if (skippedRows.length) {
+    await supabase.from('outreach_log').insert(
+      skippedRows.map((r) => ({
+        organization_id: campaign.organization_id,
+        lead_id: r.lead_id,
+        contact_email: r.email,
+        campaign_id: campaign.id,
+        channel: 'email',
+        status: 'skipped',
+        error: r.skip_reason,
+      })),
+    )
+  }
+
+  return {
+    enrolled: rows.filter((r) => r.status === 'pending').length,
+    skipped: skippedRows.length,
+  }
+}
+
+/** Enrolls due scheduled campaigns and flips them to 'running'. */
 async function enrollDueCampaigns(supabase: Db, report: WorkerReport) {
   const nowIso = new Date().toISOString()
   const { data: campaigns } = await supabase
@@ -224,100 +338,9 @@ async function enrollDueCampaigns(supabase: Db, report: WorkerReport) {
     .lte('schedule_at', nowIso)
   for (const c of (campaigns ?? []) as CampaignRow[]) {
     try {
-      let totalSteps = 1
-      if (c.sequence_id) {
-        const { data: seq } = await supabase
-          .from('engage_sequences')
-          .select('steps')
-          .eq('id', c.sequence_id)
-          .maybeSingle()
-        const steps = Array.isArray(seq?.steps) ? (seq.steps as SequenceStep[]) : []
-        totalSteps = Math.max(1, steps.length)
-      }
-
-      const leadIds = (c.audience_lead_ids ?? []).map((x) => Number(x)).filter((n) => Number.isFinite(n))
-      const { data: leads } = leadIds.length
-        ? await supabase
-            .from('leads_raw')
-            .select('id, contact_name, contact_email, contact_title, company_name, company_industry, bounce_status')
-            .in('id', leadIds)
-        : { data: [] }
-
-      const { data: unsubs } = await supabase.from('outreach_unsubscribes').select('email')
-      const suppressed = new Set((unsubs ?? []).map((u) => String(u.email).toLowerCase()))
-
-      const seenEmails = new Set<string>()
-      const rows = (leads ?? []).map((lead) => {
-        const email = String(lead.contact_email ?? '').trim().toLowerCase()
-        // Enrichment writes the literal "null"/"none" when it can't find a real
-        // value — treat those as blank so they don't pass the gate.
-        const name = blankIfPlaceholder(String(lead.contact_name ?? '').trim())
-        const company = blankIfPlaceholder(String(lead.company_name ?? '').trim())
-        const localPart = email.split('@')[0] ?? ''
-
-        // "No blanks" rule: a recipient must have every column the email needs;
-        // incomplete rows are skipped (visibly), never half-sent.
-        let skipReason: string | null = null
-        if (!email || !EMAIL_RE.test(email) || PLACEHOLDER_VALUES.has(localPart)) {
-          // catches blank, malformed, and synthesized "null@domain" addresses
-          skipReason = 'missing_or_invalid_email'
-        } else if (suppressed.has(email)) {
-          skipReason = 'unsubscribed'
-        } else if (BAD_BOUNCE_STATUSES.has(String(lead.bounce_status ?? '').toLowerCase())) {
-          // Only genuinely undeliverable addresses are skipped. "unknown" means
-          // the verifier was inconclusive, NOT that the address bounced — those
-          // still send (else nearly every unverified lead would be skipped).
-          skipReason = `bounce_status:${lead.bounce_status}`
-        } else if (!name && !company) {
-          skipReason = 'missing_name_and_company'
-        } else if (seenEmails.has(email)) {
-          skipReason = 'duplicate_email_in_audience'
-        }
-        if (email) seenEmails.add(email)
-
-        return {
-          campaign_id: c.id,
-          organization_id: c.organization_id,
-          lead_id: Number(lead.id),
-          email: email || `invalid-${lead.id}@invalid.local`,
-          name,
-          company,
-          job_title: blankIfPlaceholder(String(lead.contact_title ?? '').trim()) || null,
-          email_provider: email ? detectProvider(email) : null,
-          current_step: 0,
-          total_steps: totalSteps,
-          status: skipReason ? 'skipped' : 'pending',
-          skip_reason: skipReason,
-          next_run_at: skipReason ? null : nowIso,
-        }
-      })
-
-      if (rows.length) {
-        const { error } = await supabase
-          .from('engage_campaign_recipients')
-          .upsert(rows, { onConflict: 'campaign_id,email', ignoreDuplicates: true })
-        if (error) throw new Error(error.message)
-      }
-
-      // Unified delivery ledger: record skips in outreach_log too, so the
-      // "sent vs not sent" stats cover Path A (GTM) and Path B (campaigns) alike.
-      const skippedRows = rows.filter((r) => r.status === 'skipped')
-      if (skippedRows.length) {
-        await supabase.from('outreach_log').insert(
-          skippedRows.map((r) => ({
-            organization_id: c.organization_id,
-            lead_id: r.lead_id,
-            contact_email: r.email,
-            campaign_id: c.id,
-            channel: 'email',
-            status: 'skipped',
-            error: r.skip_reason,
-          })),
-        )
-      }
-
-      report.enrolled += rows.filter((r) => r.status === 'pending').length
-      report.skipped += skippedRows.length
+      const { enrolled, skipped } = await enrollCampaignRecipients(supabase, c)
+      report.enrolled += enrolled
+      report.skipped += skipped
 
       await supabase
         .from('engage_campaigns')

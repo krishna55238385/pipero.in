@@ -530,7 +530,12 @@ export default function AccountsListClient({
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${pending ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button size="sm" onClick={() => router.push('/engage/settings')}>
+          <Button
+            size="sm"
+            onClick={() => {
+              window.location.href = '/api/engage/gmail/connect?returnTo=/engage/accounts'
+            }}
+          >
             <Plus className="w-3.5 h-3.5 mr-1.5" />
             Connect account
           </Button>
@@ -665,7 +670,12 @@ export default function AccountsListClient({
               {accounts.length === 0 ? 'No accounts connected yet' : 'No accounts match your filters'}
             </p>
             {accounts.length === 0 && (
-              <Button size="sm" onClick={() => router.push('/engage/settings')}>
+              <Button
+                size="sm"
+                onClick={() => {
+                  window.location.href = '/api/engage/gmail/connect?returnTo=/engage/accounts'
+                }}
+              >
                 Connect your first account
               </Button>
             )}

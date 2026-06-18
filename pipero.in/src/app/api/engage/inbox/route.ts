@@ -36,6 +36,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    type EmailRow = Record<string, unknown>
+    const mapRow = (x: EmailRow) => ({
+      id: String(x.gmail_message_id),
+      threadId: String(x.gmail_thread_id),
+      from: String(x.from_email ?? ''),
+      to: String(x.to_email ?? ''),
+      subject: String(x.subject ?? ''),
+      snippet: String(x.snippet ?? ''),
+      date: String(x.date_header ?? x.received_at ?? new Date().toISOString()),
+      unread: Boolean(x.unread),
+      starred: Boolean(x.starred),
+      direction: (x.direction === 'sent' ? 'sent' : 'received') as 'sent' | 'received',
+    })
+
     let query = supabase
       .from('engage_emails')
       .select('*')
@@ -65,18 +79,49 @@ export async function GET(req: NextRequest) {
       // the unibox — they're system noise. The bounce is already reflected as
       // the lead's "bounced" status on the campaign.
       .filter((x) => !isBounceMessage(String(x.from_email ?? ''), String(x.subject ?? '')))
-      .map((x) => ({
-        id: String(x.gmail_message_id),
-        threadId: String(x.gmail_thread_id),
-        from: String(x.from_email ?? ''),
-        to: String(x.to_email ?? ''),
-        subject: String(x.subject ?? ''),
-        snippet: String(x.snippet ?? ''),
-        date: String(x.date_header ?? x.received_at ?? new Date().toISOString()),
-        unread: Boolean(x.unread),
-        starred: Boolean(x.starred),
-        direction: (x.direction === 'sent' ? 'sent' : 'received') as 'sent' | 'received',
-      }))
+      .map(mapRow)
+
+    // Bounced campaign threads would otherwise be invisible in the Inbox box:
+    // their only emails are the outbound send (direction='sent', wrong box) and a
+    // bounce DSN (filtered above). Yet the Unibox status rail counts them, so the
+    // count and the list disagree ("shows 4 but no mails"). Surface each bounced
+    // thread via its outbound send so the conversation shows (with a Bounced badge
+    // driven by unibox-meta), keeping the count and the list in sync.
+    if (box === 'inbox' && !unread && !starred && !q) {
+      const present = new Set(emails.map((e) => e.threadId))
+      const { data: bouncedRecips } = await supabase
+        .from('engage_campaign_recipients')
+        .select('gmail_thread_id')
+        .eq('organization_id', mailbox.organization_id)
+        .eq('status', 'stopped')
+        .eq('last_error', 'bounced')
+        .not('gmail_thread_id', 'is', null)
+      const missing = [
+        ...new Set(
+          (bouncedRecips ?? [])
+            .map((r) => String(r.gmail_thread_id))
+            .filter((t) => !present.has(t)),
+        ),
+      ]
+      if (missing.length) {
+        const { data: sentRows } = await supabase
+          .from('engage_emails')
+          .select('*')
+          .eq('mailbox_id', mailbox.id)
+          .eq('direction', 'sent')
+          .in('gmail_thread_id', missing)
+          .order('received_at', { ascending: false })
+        const seen = new Set<string>()
+        for (const x of sentRows ?? []) {
+          const t = String(x.gmail_thread_id)
+          if (seen.has(t)) continue // one representative (latest) per thread
+          seen.add(t)
+          emails.push(mapRow(x))
+        }
+        emails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      }
+    }
+
     return NextResponse.json({ emails, ...(syncError ? { syncError } : {}) })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'inbox_failed'

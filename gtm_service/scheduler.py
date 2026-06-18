@@ -28,12 +28,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
-from gtm_service import db, runner
+from gtm_service import db, ga4_ingest, runner
 from gtm_service.config import config
 
 TICK_SECONDS = 60
 LOG_TAIL_CHARS = 8000
 _WORKER_PING_TIMEOUT = 120.0
+
+# Tracks the UTC date on which the warmup endpoint was last pinged so it fires
+# at most once per calendar day (UTC), regardless of how many ticks have passed.
+_warmup_last_run_date: str = ""
+
+# Same once-per-UTC-day guard for the GA4 website-visitor ingest.
+_ga4_last_run_date: str = ""
 
 
 async def run_forever() -> None:
@@ -48,6 +55,14 @@ async def run_forever() -> None:
             await asyncio.to_thread(tick_schedules)
         except Exception as exc:  # noqa: BLE001 - never crash the loop
             print(f"[scheduler] schedule tick crashed: {exc}")
+        try:
+            await asyncio.to_thread(ping_warmup_once_daily)
+        except Exception as exc:  # noqa: BLE001 - never crash the loop
+            print(f"[scheduler] warmup ping crashed: {exc}")
+        try:
+            await asyncio.to_thread(sync_ga4_once_daily)
+        except Exception as exc:  # noqa: BLE001 - never crash the loop
+            print(f"[scheduler] GA4 sync crashed: {exc}")
         await asyncio.sleep(TICK_SECONDS)
 
 
@@ -75,7 +90,69 @@ def ping_crm_worker() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 2) Daily gtm_schedules
+# 2) Daily warmup ping (once per UTC day)
+# --------------------------------------------------------------------------- #
+def ping_warmup_once_daily() -> None:
+    """POST the CRM's warmup endpoint once per UTC day."""
+    global _warmup_last_run_date
+    today = datetime.utcnow().date().isoformat()
+    if _warmup_last_run_date == today:
+        return  # already ran today
+    base = (config.CRM_BASE_URL or "").rstrip("/")
+    if not base:
+        return  # CRM integration not configured — skip silently
+    try:
+        resp = httpx.post(
+            f"{base}/api/engage/warmup/run",
+            headers={"x-worker-token": config.ENGAGE_WORKER_TOKEN},
+            timeout=_WORKER_PING_TIMEOUT,
+        )
+        if resp.status_code >= 400:
+            print(
+                f"[scheduler] warmup ping → {resp.status_code}: "
+                f"{resp.text[:200]}"
+            )
+        else:
+            _warmup_last_run_date = today
+            print(f"[scheduler] warmup ping succeeded for {today}")
+    except Exception as exc:  # noqa: BLE001 - log, never raise
+        print(f"[scheduler] warmup ping failed: {exc}")
+
+
+# --------------------------------------------------------------------------- #
+# 3) Daily GA4 website-visitor ingest (once per UTC day)
+# --------------------------------------------------------------------------- #
+def sync_ga4_once_daily() -> None:
+    """Ingest every connected GA4 property once per UTC day so anonymous website
+    visitor signals flow in automatically — no more relying on the manual
+    "Sync now" button on the CRM's Prospects → Visitors page. No-op (silent)
+    when GA4 credentials aren't configured on this host."""
+    global _ga4_last_run_date
+    today = datetime.utcnow().date().isoformat()
+    if _ga4_last_run_date == today:
+        return  # already ran today
+    try:
+        result = ga4_ingest.sync_all()
+    except ga4_ingest.GA4NotConfigured:
+        # Service account not set on this host. Mark done for today so we don't
+        # re-attempt (and re-log) every 60s tick; the UI "Sync now" still works.
+        _ga4_last_run_date = today
+        return
+    except Exception as exc:  # noqa: BLE001 - log, never raise
+        print(f"[scheduler] GA4 sync failed: {exc}")
+        return
+    _ga4_last_run_date = today
+    errors = result.get("errors") or []
+    print(
+        f"[scheduler] GA4 sync for {today}: "
+        f"{result.get('connections', 0)} connections, "
+        f"{result.get('rows_written', 0)} signal rows"
+        + (f", {len(errors)} errors" if errors else "")
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 4) Daily gtm_schedules
 # --------------------------------------------------------------------------- #
 def tick_schedules() -> None:
     """Check every enabled schedule and launch the ones that are due."""

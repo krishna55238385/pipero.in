@@ -150,7 +150,7 @@ export default function CampaignBuilder({
     setCampaigns((prev) => [next, ...prev])
     startTransition(async () => {
       try {
-        await createEngageCampaign({
+        const { id } = await createEngageCampaign({
           name: next.name,
           audienceLeadIds: next.audienceLeadIds,
           templateId: next.templateId,
@@ -162,6 +162,10 @@ export default function CampaignBuilder({
           linkTracking: next.linkTracking,
           dailyLimit: next.dailyLimit,
         })
+        // Swap the optimistic `local-*` id for the real one so the campaign is
+        // immediately clickable (links are disabled for local rows) and its
+        // already-enrolled leads are reachable — without waiting on realtime.
+        setCampaigns((prev) => prev.map((c) => (c.id === next.id ? { ...c, id } : c)))
       } catch {
         // keep local row for UX continuity
       }

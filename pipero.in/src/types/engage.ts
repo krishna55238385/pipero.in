@@ -171,6 +171,8 @@ export type UniboxThreadMeta = {
   campaignName: string | null
   interestStatus: InterestStatus
   recipientId: string | null
+  // True when this campaign recipient bounced (undeliverable, sequence stopped).
+  bounced?: boolean
 }
 
 export type UniboxMeta = {

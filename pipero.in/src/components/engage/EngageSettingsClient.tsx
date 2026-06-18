@@ -19,7 +19,7 @@ export default function EngageSettingsClient({
   mailboxEmail,
   lastSyncedAt,
   watchExpiration,
-  historyId,
+  mailboxes = [],
   unsubscribes = [],
   schedule = null,
   icpOptions = [],
@@ -28,6 +28,7 @@ export default function EngageSettingsClient({
   lastSyncedAt?: string | null
   watchExpiration?: string | null
   historyId?: string | null
+  mailboxes?: Array<{ id: string; email: string; lastSyncedAt: string | null; watchExpiration: string | null }>
   unsubscribes?: UnsubscribeRow[]
   schedule?: GtmScheduleConfig | null
   icpOptions?: Array<{ id: number; name: string }>
@@ -51,6 +52,15 @@ export default function EngageSettingsClient({
   const [savingSchedule, setSavingSchedule] = useState(false)
   const [scheduleMessage, setScheduleMessage] = useState('')
   const [scheduleError, setScheduleError] = useState('')
+
+  // Prefer the full list of connected mailboxes; fall back to the single primary
+  // so the card still renders if only legacy props are passed.
+  const connectedMailboxes =
+    mailboxes.length > 0
+      ? mailboxes
+      : mailboxEmail
+        ? [{ id: 'primary', email: mailboxEmail, lastSyncedAt: lastSyncedAt ?? null, watchExpiration: watchExpiration ?? null }]
+        : []
 
   const startWatch = async () => {
     setWatchError('')
@@ -125,16 +135,33 @@ export default function EngageSettingsClient({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              {mailboxEmail ? `Connected: ${mailboxEmail}` : 'Not connected'}
-            </p>
-            {mailboxEmail ? (
-              <div className="text-xs text-muted-foreground space-y-1 rounded-xl border p-2">
-                <p>Last synced: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Never'}</p>
-                <p>Watch expires: {watchExpiration ? new Date(watchExpiration).toLocaleString() : 'Not started'}</p>
-                <p>History cursor: {historyId || '—'}</p>
+            {connectedMailboxes.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Not connected</p>
+            ) : (
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground">
+                  {connectedMailboxes.length} connected
+                </p>
+                <ul className="space-y-1">
+                  {connectedMailboxes.map((m, i) => (
+                    <li
+                      key={m.id}
+                      className="flex items-center justify-between gap-2 rounded-xl border px-2.5 py-1.5"
+                    >
+                      <span className="truncate text-sm font-medium">{m.email}</span>
+                      <span className="flex items-center gap-2 text-[11px] text-muted-foreground whitespace-nowrap">
+                        {i === 0 ? <Badge variant="secondary">Primary</Badge> : null}
+                        {m.lastSyncedAt ? new Date(m.lastSyncedAt).toLocaleDateString() : 'Never synced'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-muted-foreground">
+                  Manage per-account limits &amp; warmup on the{' '}
+                  <a href="/engage/accounts" className="underline">Email Accounts</a> page.
+                </p>
               </div>
-            ) : null}
+            )}
             <Button
               asChild
               type="button"
@@ -142,7 +169,7 @@ export default function EngageSettingsClient({
             >
               <a href="/api/engage/gmail/connect?returnTo=/engage/settings">
                 <PlugZap className="h-4 w-4 mr-2" />
-                {mailboxEmail ? 'Reconnect Gmail' : 'Connect Gmail'}
+                {connectedMailboxes.length > 0 ? 'Connect another account' : 'Connect Gmail'}
               </a>
             </Button>
             <Button

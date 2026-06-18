@@ -54,3 +54,8 @@ logs/
 
 # Backups
 backups/
+
+# GA4 service-account key (secret — never commit)
+gtm_service/ga4_service_account.json
+*ga4*service*account*.json
+secrets/
