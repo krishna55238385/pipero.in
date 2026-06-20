@@ -8,6 +8,6 @@ copywriting tests cover this module.
 """
 from __future__ import annotations
 
-from phase3.agents.agent_12_copywriter import run_copywriting
+from gtm_backend.phase3.agents.agent_12_copywriter import run_copywriting
 
 __all__ = ["run_copywriting"]

@@ -8,6 +8,6 @@ personalisation tests cover this module.
 """
 from __future__ import annotations
 
-from phase3.agents.agent_11_personalisation import run_personalisation
+from gtm_backend.phase3.agents.agent_11_personalisation import run_personalisation
 
 __all__ = ["run_personalisation"]

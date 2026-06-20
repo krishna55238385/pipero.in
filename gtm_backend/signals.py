@@ -9,6 +9,6 @@ signal-detection tests cover this module.
 """
 from __future__ import annotations
 
-from phase1.agents.agent_04_signals import detect_signals
+from gtm_backend.phase1.agents.agent_04_signals import detect_signals
 
 __all__ = ["detect_signals"]

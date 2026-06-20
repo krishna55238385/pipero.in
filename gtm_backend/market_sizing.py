@@ -8,6 +8,6 @@ market-sizing tests cover this module.
 """
 from __future__ import annotations
 
-from phase2.agents.agent_09_market_sizing import size_markets
+from gtm_backend.phase2.agents.agent_09_market_sizing import size_markets
 
 __all__ = ["size_markets"]

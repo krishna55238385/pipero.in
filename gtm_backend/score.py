@@ -9,6 +9,6 @@ tests cover this module.
 """
 from __future__ import annotations
 
-from phase1.agents.agent_05_scoring import score_leads
+from gtm_backend.phase1.agents.agent_05_scoring import score_leads
 
 __all__ = ["score_leads"]

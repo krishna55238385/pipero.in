@@ -9,6 +9,6 @@ phase2 account-intel tests cover this module.
 """
 from __future__ import annotations
 
-from phase2.agents.agent_06_account_intel import build_account_intelligence
+from gtm_backend.phase2.agents.agent_06_account_intel import build_account_intelligence
 
 __all__ = ["build_account_intelligence"]

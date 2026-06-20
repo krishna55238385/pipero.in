@@ -8,6 +8,6 @@ A/B-testing tests cover this module.
 """
 from __future__ import annotations
 
-from phase3.agents.agent_15_ab_testing import run_ab_testing
+from gtm_backend.phase3.agents.agent_15_ab_testing import run_ab_testing
 
 __all__ = ["run_ab_testing"]

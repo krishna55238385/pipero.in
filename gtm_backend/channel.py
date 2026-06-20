@@ -8,6 +8,6 @@ channel-strategy tests cover this module.
 """
 from __future__ import annotations
 
-from phase3.agents.agent_13_channel_strategy import run_channel_strategy
+from gtm_backend.phase3.agents.agent_13_channel_strategy import run_channel_strategy
 
 __all__ = ["run_channel_strategy"]

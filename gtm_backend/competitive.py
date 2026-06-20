@@ -9,6 +9,6 @@ phase2 competitive tests cover this module.
 """
 from __future__ import annotations
 
-from phase2.agents.agent_08_competitive import gather_competitive_intel
+from gtm_backend.phase2.agents.agent_08_competitive import gather_competitive_intel
 
 __all__ = ["gather_competitive_intel"]

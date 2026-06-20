@@ -8,6 +8,6 @@ stakeholder tests cover this module.
 """
 from __future__ import annotations
 
-from phase2.agents.agent_07_stakeholders import map_stakeholders
+from gtm_backend.phase2.agents.agent_07_stakeholders import map_stakeholders
 
 __all__ = ["map_stakeholders"]

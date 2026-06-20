@@ -15,8 +15,8 @@ existing phase1 tests cover this module's behaviour.
 """
 from __future__ import annotations
 
-from phase1.agents.agent_01_icp import define_icp
-from phase1.agents.agent_02_leads import generate_leads
+from gtm_backend.phase1.agents.agent_01_icp import define_icp
+from gtm_backend.phase1.agents.agent_02_leads import generate_leads
 
 __all__ = ["define_icp", "generate_leads", "find_leads"]
 

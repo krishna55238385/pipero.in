@@ -13,6 +13,6 @@ cover this module.
 """
 from __future__ import annotations
 
-from phase2.agents.agent_10_gtm_insights import approve_insights, generate_insights
+from gtm_backend.phase2.agents.agent_10_gtm_insights import approve_insights, generate_insights
 
 __all__ = ["generate_insights", "approve_insights"]

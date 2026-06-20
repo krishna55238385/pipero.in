@@ -2,7 +2,7 @@
 
 A clean, feature-named HTTP API that mirrors the deploy-time
 ``gtm_service`` trigger service, but delegates **in-process** to the
-``gtm_backend`` feature modules instead of spawning ``python -m phaseN``
+``gtm_backend`` feature modules instead of spawning ``python -m gtm_backend.phaseN``
 subprocesses.
 
 Routes

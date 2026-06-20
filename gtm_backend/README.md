@@ -1,23 +1,23 @@
-# gtm_backend — the pipero GTM product backend
+# gtm_backend — the Magnivo AI GTM product backend
 
-`gtm_backend` is the **one clean, feature-named home** for the Python GTM
-pipeline. It is a thin facade over the existing `phase1` / `phase2` / `phase3`
-packages: every feature module imports and re-exports the corresponding
-`phaseN/agents/agent_NN` function, so **behaviour is identical** and all the
-existing phase tests stay valid. The names describe *capabilities*
-(`find_leads`, `enrich`, `score`, `send`) instead of delivery phases.
+`gtm_backend` is the **one consolidated home** for the Python GTM pipeline.
+The implementation packages (`phase1` / `phase2` / `phase3`) and the deploy-time
+trigger service (`gtm_service`) now live **inside** this package as
+subpackages, and the top-level feature modules re-export the corresponding
+`phaseN/agents/agent_NN` functions under capability names (`find_leads`,
+`enrich`, `score`, `send`) instead of delivery phases.
 
 ## What this is — and what it is not
 
 | Folder | Role |
 |---|---|
-| **`gtm_backend/`** (this) | The **product** backend — the GTM pipeline a customer's leads flow through. New code, the unified CLI and the FastAPI service live here. |
-| `backend/` + `frontend/` | The **internal** dashboard — an LLM / API **usage & cost monitor** for the team. Not the GTM pipeline. |
-| `gtm_service/` | The **deploy-time trigger service** the pipero.in CRM calls (it shells out to `python -m phaseN`). `gtm_backend.service` mirrors its HTTP surface but runs the stages **in-process**. |
-| `phase1/2/3/` | The original implementation packages. **Unchanged** — `gtm_backend` wraps them. |
+| **`gtm_backend/`** (this) | The **product** backend — the whole GTM pipeline a customer's leads flow through: the unified CLI, the in-process FastAPI service, the phase subpackages and the trigger service. |
+| `gtm_backend/phase1/2/3/` | The implementation packages — FIND / UNDERSTAND / REACH (agents 01–15). |
+| `gtm_backend/gtm_service/` | The **deploy-time trigger service** the Magnivo AI CRM calls (it shells out to `python -m gtm_backend.phaseN`). `gtm_backend.service` mirrors its HTTP surface but runs the stages **in-process**. |
+| `../backend/` + `../frontend/` | The **internal** dashboard — an LLM / API **usage & cost monitor** for the team. Not the GTM pipeline. |
 
 Settings (OpenAI / SerpAPI / Supabase keys) are read from the single root
-`.env` via the existing `phaseN.core.config` — no new configuration. Importing
+`.env` via `gtm_backend.phaseN.core.config` — no new configuration. Importing
 `gtm_backend` (or any feature module) never runs a pipeline.
 
 ## Old → new name map
@@ -79,7 +79,7 @@ python -m gtm_backend reach-all --icp 1 --sender instantly   # full phase-3 chai
 ```
 
 Each subcommand maps 1:1 to a feature module and is equivalent to the matching
-`python -m phaseN …` command.
+`python -m gtm_backend.phaseN …` command.
 
 ## HTTP service
 
@@ -105,18 +105,30 @@ queued/background run tracking the CRM polls.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest gtm_backend/test_smoke.py -q     # 22 passed
+# smoke test (imports only, no network)
+.venv/bin/python -m pytest gtm_backend/test_smoke.py -q
+
+# full hermetic suite (phase1/2/3 + facades)
+.venv/bin/python -m pytest gtm_backend -q     # 152 passed
 ```
 
 The smoke test only imports — it makes no network/Supabase calls. The full
-existing suite (phase1/2/3 + gtm_service) remains green with `gtm_backend`
-present (the only red test is the pre-existing `test_supabase_url_is_reachable`
-live-network check, unrelated to this package).
+suite is hermetic (the connectors are mocked); the only live-network test
+(`test_supabase_url_is_reachable`) skips automatically unless real Supabase
+credentials are present in the root `.env`.
 
-## Status / follow-up
+## Structure
 
-This is the **logical** new home; it is a facade only. The original
-`phase1/2/3` packages are intentionally **not deleted yet** — the physical
-migration (moving agent implementations into `gtm_backend` and pointing
-`gtm_service` at it) is the follow-up. Until then, both the phase CLIs and this
-backend work side by side against the same code.
+The phase packages and the trigger service are consolidated under this one
+backend folder:
+
+```
+gtm_backend/
+├── __main__.py        # unified, feature-named CLI (python -m gtm_backend …)
+├── service.py         # in-process FastAPI app
+├── find_leads.py …    # capability-named facades over the phase agents
+├── phase1/            # FIND       agents 01–05
+├── phase2/            # UNDERSTAND agents 06–10
+├── phase3/            # REACH      agents 11–15
+└── gtm_service/       # deploy-time trigger service (Render blueprint)
+```

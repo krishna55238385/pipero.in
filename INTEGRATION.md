@@ -1,20 +1,20 @@
-# GTM Backend ↔ pipero.in CRM — Integration Guide
+# GTM Backend ↔ Magnivo AI CRM — Integration Guide
 
 This wires the Python **phase1 / phase2 / phase3** GTM pipelines into the
-**pipero.in** Next.js CRM so every lead, signal, account brief and outreach the
+**Magnivo AI** Next.js CRM so every lead, signal, account brief and outreach the
 backend produces shows up — live — in the CRM UI, and the CRM can trigger the
 pipelines on demand.
 
 ```
                          ┌─────────────────────────────────────────┐
    CRM (Vercel)          │            ONE Supabase project          │
-   pipero.in  ──reads──▶ │  CRM tables (leads, companies, engage…)  │
+   magnivo.ai  ──reads──▶ │  CRM tables (leads, companies, engage…)  │
       │                  │  + GTM tables (leads_raw, buying_signals,│
       │  "Run" button     │    account_intelligence, outreach_*, …)  │
       ▼                  └──────────────▲───────────────────────────┘
    actions/gtm.ts ──POST /run/phaseN──▶ │ writes
                                 gtm_service (Render/Railway, Python)
-                                  └ subprocess `python -m phaseN …` (GTM_ORG_ID set)
+                                  └ subprocess `python -m gtm_backend.phaseN …` (GTM_ORG_ID set)
                                   └ GA4 ingest → website_visitor_signals
                                   └ /track/open · /track/unsubscribe (email pixel)
 ```
@@ -26,7 +26,7 @@ appear in the CRM the instant a pipeline writes them — no ETL, no sync.
 
 ## What was added
 
-**DB migrations** (`pipero.in/supabase/migrations/`)
+**DB migrations** (`magnivo.ai/supabase/migrations/`)
 - `20260610000000_gtm_phase_tables.sql` — all phase1/2/3 tables, each with a
   nullable `organization_id` (RLS disabled, matching the CRM convention).
 - `20260610000100_gtm_crm_bridge.sql` — bridge columns
@@ -63,7 +63,7 @@ Create a new project at https://supabase.com. Note the **Project URL**, **anon
 key**, **service-role key**, and the **db password** (for the CLI).
 
 ### 2. Apply ALL migrations (CRM + GTM, in timestamp order)
-From `pipero.in/`:
+From `magnivo.ai/`:
 ```bash
 npx supabase link --project-ref <your-ref>
 npx supabase db push          # applies every file in supabase/migrations/
@@ -81,10 +81,10 @@ select id, name from organizations limit 1;
 ```
 
 ### 4. Configure the CRM
-Copy `pipero.in/.env.local.example` → `pipero.in/.env.local` and fill Supabase
+Copy `magnivo.ai/.env.local.example` → `magnivo.ai/.env.local` and fill Supabase
 keys + `GTM_SERVICE_URL` / `GTM_SERVICE_TOKEN`. Then:
 ```bash
-cd pipero.in && npm install && npm run dev
+cd magnivo.ai && npm install && npm run dev
 ```
 
 ### 5. Deploy the trigger service

@@ -20,7 +20,7 @@ Convenience chains (same order the phaseN ``run-all`` commands use):
   reach-all      personalize → copywrite → channel → send
 
 This CLI is a thin dispatcher; behaviour is identical to the underlying
-``python -m phaseN ...`` commands.
+``python -m gtm_backend.phaseN ...`` commands.
 """
 from __future__ import annotations
 
