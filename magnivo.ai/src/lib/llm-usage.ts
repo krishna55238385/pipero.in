@@ -1,14 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 
-/**
- * Records LLM/AI spend produced by the CRM itself (OpenAI calls) into the
- * shared `llm_usage` table — the SAME table the Python phases write to and the
- * GTM usage dashboard reads. This is the user's internal cost-tracking surface;
- * it never affects customer-facing behaviour.
- *
- * Rows use phase='crm' (vs 'phase1'/'phase2'/'phase3') so the dashboard's
- * "By Phase" view cleanly separates product spend from pipeline spend.
- */
 export type LlmUsageInput = {
   /** Feature that made the call, e.g. 'dialer_summary', 'content_ai'. */
   agent: string
@@ -38,10 +29,9 @@ export function estimateCostUsd(model: string, promptTokens: number, completionT
   return (promptTokens * p.input + completionTokens * p.output) / 1_000_000
 }
 
-async function resolveOrgId(supabase: any): Promise<string | undefined> {
-  // Mirror gtm.ts getDefaultOrgId(): single-tenant dev picks the first org.
-  const { data } = await supabase.from('organizations').select('id').limit(1).single()
-  return data?.id
+async function resolveOrgId(): Promise<string | undefined> {
+  const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+  return r.rows[0]?.id
 }
 
 /**
@@ -50,26 +40,17 @@ async function resolveOrgId(supabase: any): Promise<string | undefined> {
  */
 export async function logLlmUsage(input: LlmUsageInput): Promise<void> {
   try {
-    const supabase = await createClient()
-    if (!supabase) return
-    const org = await resolveOrgId(supabase)
+    const org = await resolveOrgId()
     const promptTokens = input.promptTokens ?? 0
     const completionTokens = input.completionTokens ?? 0
     const totalTokens = input.totalTokens ?? promptTokens + completionTokens
-    const cost =
-      input.estimatedCostUsd ?? estimateCostUsd(input.model, promptTokens, completionTokens)
+    const cost = input.estimatedCostUsd ?? estimateCostUsd(input.model, promptTokens, completionTokens)
 
-    await supabase.from('llm_usage').insert({
-      organization_id: org ?? null,
-      agent: input.agent,
-      model: input.model,
-      phase: input.phase ?? 'crm',
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: totalTokens,
-      estimated_cost_usd: cost,
-      icp_id: input.icpId ?? null,
-    })
+    await pool.query(
+      `INSERT INTO public.llm_usage (organization_id, agent, model, phase, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, icp_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [org ?? null, input.agent, input.model, input.phase ?? 'crm', promptTokens, completionTokens, totalTokens, cost, input.icpId ?? null]
+    )
   } catch (err) {
     console.error('[llm-usage] failed to log usage:', err)
   }

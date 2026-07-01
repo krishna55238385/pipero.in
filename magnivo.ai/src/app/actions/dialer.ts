@@ -7,23 +7,16 @@
  * enforced here in the server-action layer (same convention as crm.ts / gtm.ts).
  */
 
-import { cache } from 'react'
-import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 import type { CallLog, DialerCallSummary } from '@/components/dialer/storage'
 import type { DialerLead } from '@/components/dialer/types'
 
-async function getDefaultOrgId(supabase: any): Promise<string | undefined> {
-  const { data } = await supabase.from('organizations').select('id').limit(1).single()
-  return data?.id
+async function getDefaultOrgId(): Promise<string | undefined> {
+  try {
+    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+    return r.rows[0]?.id ?? undefined
+  } catch { return undefined }
 }
-
-// Per-request memoized org lookup — avoids re-querying `organizations` on every
-// dialer action during a single server render.
-const cachedOrgId = cache(async (): Promise<string | undefined> => {
-  const supabase = await createClient()
-  if (!supabase) return undefined
-  return getDefaultOrgId(supabase)
-})
 
 // --------------------------------------------------------------------------- //
 // Row → client-shape mapping
@@ -56,77 +49,61 @@ function mapRow(r: any): CallLog {
 // Leads for the dialer lead-selection list (GTM prospects)
 // --------------------------------------------------------------------------- //
 export async function listLeadsForDialer(): Promise<{ leads: DialerLead[] }> {
-  const supabase = await createClient()
-  if (!supabase) return { leads: [] }
+  try {
+    const org = await getDefaultOrgId()
+    if (!org) return { leads: [] }
 
-  const org = await cachedOrgId()
-  if (!org) return { leads: [] }
+    const r = await pool.query(
+      'SELECT id, contact_name, company_name, contact_title, company_phone, score_tier, icp_score FROM public.leads_raw WHERE organization_id = $1 ORDER BY icp_score DESC NULLS LAST LIMIT 100',
+      [org])
 
-  const { data: rows } = await supabase
-    .from('leads_raw')
-    .select('id, contact_name, company_name, contact_title, company_phone, score_tier, icp_score')
-    .eq('organization_id', org)
-    .order('icp_score', { ascending: false, nullsFirst: false })
-    .limit(100)
+    if (!r.rows.length) return { leads: [] }
 
-  if (!rows?.length) return { leads: [] }
+    const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+    const toTemperature = (tier: string | null): DialerLead['status'] => {
+      const t = (tier || '').toLowerCase()
+      if (t === 'hot') return 'Hot'
+      if (t === 'warm') return 'Warm'
+      return 'Cold'
+    }
 
-  const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
-  const toTemperature = (tier: string | null): DialerLead['status'] => {
-    const t = (tier || '').toLowerCase()
-    if (t === 'hot') return 'Hot'
-    if (t === 'warm') return 'Warm'
-    return 'Cold'
-  }
-
-  return {
-    leads: rows.map((r: any) => ({
-      id: String(r.id),
-      name: r.contact_name || r.company_name || 'Unknown',
-      company: r.company_name || '-',
-      phone: r.company_phone || '',
-      status: toTemperature(r.score_tier),
-      title: r.contact_title || titleCase(r.score_tier || ''),
-    })),
-  }
+    return {
+      leads: r.rows.map((row: any) => ({
+        id: String(row.id),
+        name: row.contact_name || row.company_name || 'Unknown',
+        company: row.company_name || '-',
+        phone: row.company_phone || '',
+        status: toTemperature(row.score_tier),
+        title: row.contact_title || titleCase(row.score_tier || ''),
+      })),
+    }
+  } catch (err: any) { console.error('listLeadsForDialer error:', err.message); return { leads: [] } }
 }
 
 // --------------------------------------------------------------------------- //
 // Call logs
 // --------------------------------------------------------------------------- //
 export async function listCallLogs(): Promise<CallLog[]> {
-  const supabase = await createClient()
-  if (!supabase) return []
+  try {
+    const org = await getDefaultOrgId()
+    if (!org) return []
 
-  const org = await cachedOrgId()
-  if (!org) return []
-
-  const { data: rows } = await supabase
-    .from('call_logs')
-    .select('*')
-    .eq('organization_id', org)
-    .order('started_at', { ascending: false, nullsFirst: false })
-
-  if (!rows?.length) return []
-  return rows.map(mapRow)
+    const r = await pool.query(
+      'SELECT * FROM public.call_logs WHERE organization_id = $1 ORDER BY started_at DESC NULLS LAST', [org])
+    return r.rows.map(mapRow)
+  } catch (err: any) { console.error('listCallLogs error:', err.message); return [] }
 }
 
 export async function getCallLog(id: string): Promise<CallLog | null> {
-  const supabase = await createClient()
-  if (!supabase) return null
+  try {
+    const org = await getDefaultOrgId()
+    if (!org) return null
 
-  const org = await cachedOrgId()
-  if (!org) return null
-
-  const { data: row } = await supabase
-    .from('call_logs')
-    .select('*')
-    .eq('id', id)
-    .eq('organization_id', org)
-    .single()
-
-  if (!row) return null
-  return mapRow(row)
+    const r = await pool.query(
+      'SELECT * FROM public.call_logs WHERE id = $1 AND organization_id = $2 LIMIT 1', [id, org])
+    if (!r.rows[0]) return null
+    return mapRow(r.rows[0])
+  } catch (err: any) { console.error('getCallLog error:', err.message); return null }
 }
 
 export async function createCallLog(input: {
@@ -143,34 +120,18 @@ export async function createCallLog(input: {
   transcript?: string | null
   recording_url?: string | null
 }): Promise<CallLog> {
-  const supabase = await createClient()
-  if (!supabase) throw new Error('Supabase client unavailable')
-
-  const org = await cachedOrgId()
+  const org = await getDefaultOrgId()
   if (!org) throw new Error('No organization found')
 
-  const { data: row, error } = await supabase
-    .from('call_logs')
-    .insert({
-      organization_id: org,
-      lead_ref: input.lead_id,
-      lead_name: input.lead_name,
-      company: input.company,
-      phone: input.phone,
-      direction: input.direction,
-      status: input.outcome,
-      started_at: input.started_at,
-      ended_at: input.ended_at,
-      duration_seconds: input.duration_seconds,
-      notes: input.notes ?? null,
-      transcript: input.transcript ?? null,
-      recording_url: input.recording_url ?? null,
-    })
-    .select()
-    .single()
+  const r = await pool.query(
+    `INSERT INTO public.call_logs
+     (organization_id, lead_ref, lead_name, company, phone, direction, status, started_at, ended_at, duration_seconds, notes, transcript, recording_url)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [org, input.lead_id, input.lead_name, input.company, input.phone, input.direction, input.outcome,
+     input.started_at, input.ended_at, input.duration_seconds,
+     input.notes ?? null, input.transcript ?? null, input.recording_url ?? null])
 
-  if (error) throw error
-  return mapRow(row)
+  return mapRow(r.rows[0])
 }
 
 export async function updateCallLog(
@@ -185,13 +146,9 @@ export async function updateCallLog(
     recording_url: string | null
   }>
 ): Promise<CallLog> {
-  const supabase = await createClient()
-  if (!supabase) throw new Error('Supabase client unavailable')
-
-  const org = await cachedOrgId()
+  const org = await getDefaultOrgId()
   if (!org) throw new Error('No organization found')
 
-  // Map client-shape patch keys to DB column names. `summary` → `ai_summary`.
   const dbPatch: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if ('notes' in patch) dbPatch.notes = patch.notes
   if ('transcript' in patch) dbPatch.transcript = patch.transcript
@@ -201,14 +158,13 @@ export async function updateCallLog(
   if ('scorecard' in patch) dbPatch.scorecard = patch.scorecard
   if ('recording_url' in patch) dbPatch.recording_url = patch.recording_url
 
-  const { data: row, error } = await supabase
-    .from('call_logs')
-    .update(dbPatch)
-    .eq('id', id)
-    .eq('organization_id', org)
-    .select()
-    .single()
+  const keys = Object.keys(dbPatch); const vals = Object.values(dbPatch)
+  const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
 
-  if (error) throw error
-  return mapRow(row)
+  const r = await pool.query(
+    `UPDATE public.call_logs SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2} RETURNING *`,
+    [...vals, id, org])
+
+  if (!r.rows[0]) throw new Error('Call log not found')
+  return mapRow(r.rows[0])
 }

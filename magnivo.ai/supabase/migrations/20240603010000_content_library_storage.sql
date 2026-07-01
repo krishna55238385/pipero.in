@@ -27,20 +27,23 @@ VALUES (
 ON CONFLICT (id) DO NOTHING;
 
 -- Public bucket simplifies local/dev. If your project enforces strict access, replace with authenticated policies.
-CREATE POLICY IF NOT EXISTS "content_library_public_read"
+DROP POLICY IF EXISTS "content_library_public_read" ON storage.objects;
+CREATE POLICY "content_library_public_read"
 ON storage.objects FOR SELECT
 USING (bucket_id = 'content-library');
 
-CREATE POLICY IF NOT EXISTS "content_library_public_insert"
+DROP POLICY IF EXISTS "content_library_public_insert" ON storage.objects;
+CREATE POLICY "content_library_public_insert"
 ON storage.objects FOR INSERT
 WITH CHECK (bucket_id = 'content-library');
 
-CREATE POLICY IF NOT EXISTS "content_library_public_update"
+DROP POLICY IF EXISTS "content_library_public_update" ON storage.objects;
+CREATE POLICY "content_library_public_update"
 ON storage.objects FOR UPDATE
 USING (bucket_id = 'content-library')
 WITH CHECK (bucket_id = 'content-library');
 
-CREATE POLICY IF NOT EXISTS "content_library_public_delete"
+DROP POLICY IF EXISTS "content_library_public_delete" ON storage.objects;
+CREATE POLICY "content_library_public_delete"
 ON storage.objects FOR DELETE
 USING (bucket_id = 'content-library');
-

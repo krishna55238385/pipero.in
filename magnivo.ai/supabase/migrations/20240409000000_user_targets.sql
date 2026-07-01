@@ -1,6 +1,6 @@
 -- Create user_targets table
 CREATE TABLE IF NOT EXISTS public.user_targets (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     month_year TEXT NOT NULL, -- Format: 'YYYY-MM'

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 import {
   createLeadRecord,
   PublicLeadPayload,
 } from '@/lib/create-lead-record'
 import { sendWhatsAppTemplateForLead } from '@/app/actions/interakt'
 
-// Allow longer run for Supabase + routing (e.g. when running locally or cold start)
+// Allow longer run for DB + routing (e.g. when running locally or cold start)
 export const maxDuration = 30
 
 const corsHeaders = {
@@ -19,11 +19,11 @@ export async function OPTIONS() {
   return NextResponse.json({}, { status: 200, headers: corsHeaders })
 }
 
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
 
-    // Accept common Zapier/Facebook/landing-page field names
     const rawName =
       body.name ??
       body.full_name ??
@@ -81,23 +81,17 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const supabase = await createClient()
-    if (!supabase) {
-      return NextResponse.json(
-        { success: false, error: 'Server configuration error. Please try again later.' },
-        { status: 503, headers: corsHeaders }
-      )
-    }
-    const { data: org } = await supabase.from('organizations').select('id').limit(1).single()
+    const orgRes = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+    const orgId = orgRes.rows[0]?.id
 
-    if (!org?.id) {
+    if (!orgId) {
       return NextResponse.json(
         { success: false, error: 'No organization found' },
         { status: 500, headers: corsHeaders }
       )
     }
 
-    const result = await createLeadRecord(supabase, org.id, payload, {
+    const result = await createLeadRecord(orgId, payload, {
       method: 'public_api',
       defaultSource: payload.source || 'Landing Page',
       initialOwnerId: null,
@@ -111,7 +105,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Fire-and-forget: send WhatsApp welcome template for Facebook leads
     const sourceLower = (payload.source || '').toLowerCase()
     if (sourceLower === 'facebook lead ads' && payload.phone) {
       try {
@@ -141,4 +134,3 @@ export async function POST(req: NextRequest) {
     )
   }
 }
-

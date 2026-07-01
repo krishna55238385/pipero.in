@@ -1,640 +1,465 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 import { revalidatePath } from 'next/cache'
+import { cookies } from 'next/headers'
+import { currentUser } from '@clerk/nextjs/server'
 
-async function getDefaultOrgId(supabase: any) {
-    const { cookies } = await import('next/headers')
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-
-    const { data: { user } } = await supabase.auth.getUser()
-    
-    if (user) {
-        const { data: profile } = await supabase
-            .from('users')
-            .select('organization_id')
-            .eq('id', user.id)
-            .single()
-        
-        if (profile?.organization_id) return profile.organization_id
-    }
-
-    // Fallback for local dev / mock auth
-    const { data: org } = await supabase.from('organizations').select('id').limit(1).single()
-    return org?.id
+async function getDefaultOrgId(): Promise<string | null> {
+  try {
+    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+    return r.rows[0]?.id ?? null
+  } catch { return null }
 }
 
-/**
- * Helper to ensure the current user has admin/super_admin privileges.
- */
-async function requireAdmin(supabase: any) {
-    const { cookies } = await import('next/headers')
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-    let { data: { user } } = await supabase.auth.getUser()
+async function requireAdmin() {
+  const cookieStore = await cookies()
+  const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
+  const clerkUser = await currentUser()
 
-    if (!user && isMockAuth) {
-        const { data: firstUser } = await supabase.from('users').select('*').limit(1).single()
-        if (firstUser) user = firstUser as any
-        return { isAdmin: true, user }
-    }
+  if (!clerkUser && isMockAuth) {
+    const r = await pool.query('SELECT * FROM public.users LIMIT 1')
+    const firstUser = r.rows[0]
+    if (firstUser) return { isAdmin: true, user: firstUser }
+    return { isAdmin: false, user: null, error: 'No users found' }
+  }
+  if (!clerkUser) return { isAdmin: false, user: null, error: 'Authentication required' }
 
-    if (!user) return { isAdmin: false, user: null, error: 'Authentication required' }
-
-    const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-    const isAdmin = profile?.role === 'admin' || profile?.role === 'super_admin'
-
-    if (!isAdmin) return { isAdmin: false, user, error: 'Admin privileges required' }
-    
-    return { isAdmin: true, user }
+  const r = await pool.query('SELECT role FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
+  const role = r.rows[0]?.role
+  const isAdmin = role === 'admin' || role === 'super_admin'
+  if (!isAdmin) return { isAdmin: false, user: clerkUser, error: 'Admin privileges required' }
+  return { isAdmin: true, user: clerkUser }
 }
 
-export async function logLeadEvent(supabase: any, orgId: string, event: { lead_id?: string, event_type: string, description: string, metadata?: any, performed_by?: string }) {
-    await supabase.from('lead_audit_logs').insert({
-        organization_id: orgId,
-        lead_id: event.lead_id,
-        event_type: event.event_type,
-        description: event.description,
-        metadata: event.metadata || {},
-        performed_by: event.performed_by
-    })
+// Signature preserved for backward-compat callers in crm.ts (supabase param ignored).
+export async function logLeadEvent(_supabase: any, orgId: string, event: {
+  lead_id?: string
+  event_type: string
+  description: string
+  metadata?: any
+  performed_by?: string
+}) {
+  try {
+    await pool.query(
+      'INSERT INTO public.lead_audit_logs (organization_id, lead_id, event_type, description, metadata, performed_by) VALUES ($1,$2,$3,$4,$5,$6)',
+      [orgId, event.lead_id ?? null, event.event_type, event.description, event.metadata ? JSON.stringify(event.metadata) : '{}', event.performed_by ?? null]
+    )
+  } catch (err: any) { console.error('logLeadEvent error:', err.message) }
 }
 
-// Lead Statuses
+// ─── Lead Statuses ─────────────────────────────────────────────────────────────
+
 export async function getLeadStatuses() {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return []
-
-    const { data, error } = await supabase
-        .from('lead_statuses')
-        .select('*')
-        .eq('organization_id', orgId)
-        .order('sort_order', { ascending: true })
-
-    if (error) {
-        console.error('Error fetching lead statuses:', error)
-        return []
-    }
-    return data
+    const r = await pool.query(
+      'SELECT * FROM public.lead_statuses WHERE organization_id = $1 ORDER BY sort_order ASC', [orgId])
+    return r.rows
+  } catch (err: any) { console.error('Error fetching lead statuses:', err.message); return [] }
 }
 
 export async function addLeadStatus(label: string, color: string) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
-
-    const { data: currentStatuses } = await supabase
-        .from('lead_statuses')
-        .select('sort_order')
-        .eq('organization_id', orgId)
-        .order('sort_order', { ascending: false })
-        .limit(1)
-
-    const nextOrder = (currentStatuses?.[0]?.sort_order ?? -1) + 1
-
-    const { error } = await supabase
-        .from('lead_statuses')
-        .insert({
-            organization_id: orgId,
-            label,
-            color,
-            sort_order: nextOrder
-        })
-
-    if (error) return { error: error.message }
-    revalidatePath('/settings')
-    revalidatePath('/leads')
+    const r = await pool.query(
+      'SELECT sort_order FROM public.lead_statuses WHERE organization_id = $1 ORDER BY sort_order DESC LIMIT 1', [orgId])
+    const nextOrder = (r.rows[0]?.sort_order ?? -1) + 1
+    await pool.query(
+      'INSERT INTO public.lead_statuses (organization_id, label, color, sort_order) VALUES ($1,$2,$3,$4)',
+      [orgId, label, color, nextOrder])
+    revalidatePath('/settings'); revalidatePath('/leads')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
 export async function deleteLeadStatus(id: string) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
-
-    const { isAdmin, error: authError } = await requireAdmin(supabase)
+    const { isAdmin, error: authError } = await requireAdmin()
     if (!isAdmin) return { error: authError || 'Unauthorized' }
-
-    const { error } = await supabase
-        .from('lead_statuses')
-        .delete()
-        .eq('id', id)
-        .eq('organization_id', orgId)
-
-    if (error) return { error: error.message }
-    revalidatePath('/settings')
-    revalidatePath('/leads')
+    await pool.query('DELETE FROM public.lead_statuses WHERE id = $1 AND organization_id = $2', [id, orgId])
+    revalidatePath('/settings'); revalidatePath('/leads')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
-// Pipeline Stages
+// ─── Pipeline Stages ───────────────────────────────────────────────────────────
+
 export async function getPipelineStages() {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return []
-
-    const { data, error } = await supabase
-        .from('pipeline_stages')
-        .select('*')
-        .eq('organization_id', orgId)
-        .order('sort_order', { ascending: true })
-
-    if (error) {
-        console.error('Error fetching pipeline stages:', error)
-        return []
-    }
-    return data
+    const r = await pool.query(
+      'SELECT * FROM public.pipeline_stages WHERE organization_id = $1 ORDER BY sort_order ASC', [orgId])
+    return r.rows
+  } catch (err: any) { console.error('Error fetching pipeline stages:', err.message); return [] }
 }
 
 export async function addPipelineStage(label: string, probability: number) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
-
-    const { data: currentStages } = await supabase
-        .from('pipeline_stages')
-        .select('sort_order')
-        .eq('organization_id', orgId)
-        .order('sort_order', { ascending: false })
-        .limit(1)
-
-    const nextOrder = (currentStages?.[0]?.sort_order ?? -1) + 1
-
-    const { error } = await supabase
-        .from('pipeline_stages')
-        .insert({
-            organization_id: orgId,
-            label,
-            probability,
-            sort_order: nextOrder
-        })
-
-    if (error) return { error: error.message }
-    revalidatePath('/settings')
-    revalidatePath('/deals')
+    const r = await pool.query(
+      'SELECT sort_order FROM public.pipeline_stages WHERE organization_id = $1 ORDER BY sort_order DESC LIMIT 1', [orgId])
+    const nextOrder = (r.rows[0]?.sort_order ?? -1) + 1
+    await pool.query(
+      'INSERT INTO public.pipeline_stages (organization_id, label, probability, sort_order) VALUES ($1,$2,$3,$4)',
+      [orgId, label, probability, nextOrder])
+    revalidatePath('/settings'); revalidatePath('/deals')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
 export async function deletePipelineStage(id: string) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
-
-    const { isAdmin, error: authError } = await requireAdmin(supabase)
+    const { isAdmin, error: authError } = await requireAdmin()
     if (!isAdmin) return { error: authError || 'Unauthorized' }
-
-    const { error } = await supabase
-        .from('pipeline_stages')
-        .delete()
-        .eq('id', id)
-        .eq('organization_id', orgId)
-
-    if (error) return { error: error.message }
-    revalidatePath('/settings')
-    revalidatePath('/deals')
+    await pool.query('DELETE FROM public.pipeline_stages WHERE id = $1 AND organization_id = $2', [id, orgId])
+    revalidatePath('/settings'); revalidatePath('/deals')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
-// Routing & Hygiene Settings
+// ─── Routing & Hygiene Settings ────────────────────────────────────────────────
+
 export async function getLeadManagementSettings() {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return null
-
-    const [routing, hygiene] = await Promise.all([
-        supabase.from('lead_routing_settings').select('*').eq('organization_id', orgId).single(),
-        supabase.from('lead_hygiene_settings').select('*').eq('organization_id', orgId).single()
+    const [routingRes, hygieneRes] = await Promise.all([
+      pool.query('SELECT * FROM public.lead_routing_settings WHERE organization_id = $1 LIMIT 1', [orgId]),
+      pool.query('SELECT * FROM public.lead_hygiene_settings WHERE organization_id = $1 LIMIT 1', [orgId])
     ])
-
     return {
-        routing: routing.data || { assignment_mode: 'manual', load_balancing_enabled: false, untouched_reassignment_days: 3, untouched_reassignment_minutes: 60 },
-        hygiene: hygiene.data || { duplicate_fields: [], merge_strategy: 'manual' }
+      routing: routingRes.rows[0] || { assignment_mode: 'manual', load_balancing_enabled: false, untouched_reassignment_days: 3, untouched_reassignment_minutes: 60 },
+      hygiene: hygieneRes.rows[0] || { duplicate_fields: [], merge_strategy: 'manual' }
     }
+  } catch (err: any) { console.error('Error fetching lead management settings:', err.message); return null }
 }
 
 export async function updateLeadRoutingSettings(settings: any) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
-
-    const { error } = await supabase
-        .from('lead_routing_settings')
-        .upsert({
-            organization_id: orgId,
-            ...settings,
-            updated_at: new Date().toISOString()
-        }, { onConflict: 'organization_id' })
-
-    if (error) return { error: error.message }
+    const payload = { organization_id: orgId, ...settings, updated_at: new Date().toISOString() }
+    const keys = Object.keys(payload); const vals = Object.values(payload)
+    const ph = keys.map((_, i) => `$${i + 1}`).join(', ')
+    const sets = keys.filter(k => k !== 'organization_id').map(k => `"${k}" = EXCLUDED."${k}"`).join(', ')
+    await pool.query(
+      `INSERT INTO public.lead_routing_settings (${keys.map(k => `"${k}"`).join(', ')}) VALUES (${ph})
+       ON CONFLICT (organization_id) DO UPDATE SET ${sets}`, vals)
     revalidatePath('/settings')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
 export async function updateLeadHygieneSettings(settings: any) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
-
-    const { error } = await supabase
-        .from('lead_hygiene_settings')
-        .upsert({
-            organization_id: orgId,
-            ...settings,
-            updated_at: new Date().toISOString()
-        })
-
-    if (error) return { error: error.message }
+    const payload = { organization_id: orgId, ...settings, updated_at: new Date().toISOString() }
+    const keys = Object.keys(payload); const vals = Object.values(payload)
+    const ph = keys.map((_, i) => `$${i + 1}`).join(', ')
+    const sets = keys.filter(k => k !== 'organization_id').map(k => `"${k}" = EXCLUDED."${k}"`).join(', ')
+    await pool.query(
+      `INSERT INTO public.lead_hygiene_settings (${keys.map(k => `"${k}"`).join(', ')}) VALUES (${ph})
+       ON CONFLICT (organization_id) DO UPDATE SET ${sets}`, vals)
     revalidatePath('/settings')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
 export async function getLeadRoutingRules() {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return []
-
-    const { data } = await supabase
-        .from('lead_routing_rules')
-        .select(`
-            *,
-            assign_to_user:users!lead_routing_rules_assign_to_user_id_fkey(full_name)
-        `)
-        .eq('organization_id', orgId)
-        .order('priority', { ascending: true })
-
-    return data || []
+    const r = await pool.query(`
+      SELECT rr.*, json_build_object('full_name', u.full_name) AS assign_to_user
+      FROM public.lead_routing_rules rr
+      LEFT JOIN public.users u ON u.id = rr.assign_to_user_id
+      WHERE rr.organization_id = $1
+      ORDER BY rr.priority ASC
+    `, [orgId])
+    return r.rows
+  } catch (err: any) { console.error('Error fetching routing rules:', err.message); return [] }
 }
 
 export async function addLeadRoutingRule(name: string, conditions: any[], assignTo: string, priority: number = 0) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
-
-    const { error } = await supabase
-        .from('lead_routing_rules')
-        .insert({
-            organization_id: orgId,
-            name,
-            conditions,
-            assign_to_user_id: assignTo,
-            priority
-        })
-
-    if (error) return { error: error.message }
+    await pool.query(
+      'INSERT INTO public.lead_routing_rules (organization_id, name, conditions, assign_to_user_id, priority) VALUES ($1,$2,$3,$4,$5)',
+      [orgId, name, JSON.stringify(conditions), assignTo, priority])
     revalidatePath('/settings')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
 export async function deleteLeadRoutingRule(id: string) {
-    const supabase = await createClient()
-
-    const { isAdmin, error: authError } = await requireAdmin(supabase)
+  try {
+    const { isAdmin, error: authError } = await requireAdmin()
     if (!isAdmin) return { error: authError || 'Unauthorized' }
-
-    const { error } = await supabase
-        .from('lead_routing_rules')
-        .delete()
-        .eq('id', id)
-
-    if (error) return { error: error.message }
+    await pool.query('DELETE FROM public.lead_routing_rules WHERE id = $1', [id])
     revalidatePath('/settings')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
-// Logic: Deduplication
-export async function findDuplicateLead(supabase: any, orgId: string, leadData: any) {
-    const { data: hygiene } = await supabase
-        .from('lead_hygiene_settings')
-        .select('duplicate_fields, merge_strategy')
-        .eq('organization_id', orgId)
-        .single()
+// ─── Deduplication ─────────────────────────────────────────────────────────────
 
-    if (!hygiene || !hygiene.duplicate_fields || hygiene.duplicate_fields.length === 0) return null
+// Signature preserved for backward-compat (supabase param ignored).
+export async function findDuplicateLead(_supabase: any, orgId: string, leadData: any) {
+  try {
+    const hygieneRes = await pool.query(
+      'SELECT duplicate_fields, merge_strategy FROM public.lead_hygiene_settings WHERE organization_id = $1 LIMIT 1', [orgId])
+    const hygiene = hygieneRes.rows[0]
+    if (!hygiene?.duplicate_fields?.length) return null
 
-    // Build the query dynamically based on duplicate_fields
-    let query = supabase.from('leads').select('id, name').eq('organization_id', orgId)
+    const conditions: string[] = ['organization_id = $1']
+    const vals: any[] = [orgId]
+    const orClauses: string[] = []
 
-    const conditions = hygiene.duplicate_fields.map((field: string) => {
-        const val = leadData[field]
-        if (val) return `${field}.eq.${val}`
-        return null
-    }).filter(Boolean)
-
-    if (conditions.length === 0) return null
-
-    // For simplicity in this iteration, we look for EXACT matches on ANY of the fields (OR logic)
-    const { data: duplicates } = await query.or(conditions.join(','))
-
-    if (duplicates && duplicates.length > 0) {
-        await logLeadEvent(supabase, orgId, {
-            lead_id: duplicates[0].id,
-            event_type: 'hygiene_duplicate_found',
-            description: `Duplicate detected during creation of ${leadData.name}. Strategy: ${hygiene.merge_strategy}`,
-            metadata: { duplicate_fields: hygiene.duplicate_fields, match: duplicates[0] }
-        })
-        return {
-            duplicate: duplicates[0],
-            strategy: hygiene.merge_strategy
-        }
+    for (const field of hygiene.duplicate_fields) {
+      const val = leadData[field]
+      if (val) { vals.push(val); orClauses.push(`"${field}" = $${vals.length}`) }
     }
 
-    return null
+    if (orClauses.length === 0) return null
+
+    const r = await pool.query(
+      `SELECT id, name FROM public.leads WHERE ${conditions.join(' AND ')} AND (${orClauses.join(' OR ')}) LIMIT 1`, vals)
+    const duplicate = r.rows[0]
+    if (!duplicate) return null
+
+    await logLeadEvent(null, orgId, {
+      lead_id: duplicate.id,
+      event_type: 'hygiene_duplicate_found',
+      description: `Duplicate detected during creation of ${leadData.name}. Strategy: ${hygiene.merge_strategy}`,
+      metadata: { duplicate_fields: hygiene.duplicate_fields, match: duplicate }
+    })
+
+    return { duplicate, strategy: hygiene.merge_strategy }
+  } catch (err: any) { console.error('findDuplicateLead error:', err.message); return null }
 }
 
-// Duplicate Review Queue (orphan-backed: lead_duplicates)
 export async function getLeadDuplicates() {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return []
-
-    const { data, error } = await supabase
-        .from('lead_duplicates')
-        .select(`
-            id,
-            similarity_score,
-            status,
-            created_at,
-            original_lead:leads!original_lead_id(id, name, email, phone_number, contact_person),
-            duplicate_lead:leads!duplicate_lead_id(id, name, email, phone_number, contact_person)
-        `)
-        .eq('organization_id', orgId)
-        .eq('status', 'pending')
-        .order('similarity_score', { ascending: false })
-        .order('created_at', { ascending: false })
-
-    if (error) {
-        console.error('Error fetching lead duplicates:', error)
-        return []
-    }
-    return data || []
+    const r = await pool.query(`
+      SELECT ld.id, ld.similarity_score, ld.status, ld.created_at,
+        json_build_object('id', ol.id, 'name', ol.name, 'email', ol.email, 'phone_number', ol.phone_number, 'contact_person', ol.contact_person) AS original_lead,
+        json_build_object('id', dl.id, 'name', dl.name, 'email', dl.email, 'phone_number', dl.phone_number, 'contact_person', dl.contact_person) AS duplicate_lead
+      FROM public.lead_duplicates ld
+      LEFT JOIN public.leads ol ON ol.id = ld.original_lead_id
+      LEFT JOIN public.leads dl ON dl.id = ld.duplicate_lead_id
+      WHERE ld.organization_id = $1 AND ld.status = 'pending'
+      ORDER BY ld.similarity_score DESC, ld.created_at DESC
+    `, [orgId])
+    return r.rows
+  } catch (err: any) { console.error('Error fetching lead duplicates:', err.message); return [] }
 }
 
 export async function dismissLeadDuplicate(id: string) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
-
-    const { error } = await supabase
-        .from('lead_duplicates')
-        .update({ status: 'rejected' })
-        .eq('id', id)
-        .eq('organization_id', orgId)
-
-    if (error) return { error: error.message }
-
-    await logLeadEvent(supabase, orgId, {
-        event_type: 'hygiene_duplicate_dismissed',
-        description: `Duplicate review entry dismissed (kept as separate leads)`,
-        metadata: { duplicate_id: id }
+    await pool.query(
+      "UPDATE public.lead_duplicates SET status = 'rejected' WHERE id = $1 AND organization_id = $2", [id, orgId])
+    await logLeadEvent(null, orgId, {
+      event_type: 'hygiene_duplicate_dismissed',
+      description: 'Duplicate review entry dismissed (kept as separate leads)',
+      metadata: { duplicate_id: id }
     })
-
     revalidatePath('/leads')
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
-// Logic: Lead Intelligence
+// ─── Lead Intelligence ─────────────────────────────────────────────────────────
+
 export async function calculateLeadScore(data: any) {
-    let score = 0
-    
-    // 1. Temperature (Max 40)
-    const temp = (data.temperature || 'cold').toLowerCase()
-    if (temp === 'hot') score += 40
-    else if (temp === 'warm') score += 20
-    else score += 5
-    
-    // 2. Value (Max 40)
-    const value = parseFloat(data.lead_value || data.value || 0)
-    if (value > 10000) score += 40
-    else if (value > 5000) score += 30
-    else if (value > 1000) score += 15
-    else if (value > 0) score += 5
-    
-    // 3. Completeness (Max 20)
-    if (data.phone_number) score += 10
-    if (data.contact_person || data.name) score += 10
-    
-    return Math.min(score, 100)
+  let score = 0
+  const temp = (data.temperature || 'cold').toLowerCase()
+  if (temp === 'hot') score += 40
+  else if (temp === 'warm') score += 20
+  else score += 5
+  const value = parseFloat(data.lead_value || data.value || 0)
+  if (value > 10000) score += 40
+  else if (value > 5000) score += 30
+  else if (value > 1000) score += 15
+  else if (value > 0) score += 5
+  if (data.phone_number) score += 10
+  if (data.contact_person || data.name) score += 10
+  return Math.min(score, 100)
 }
 
-// Logic: Lead Routing
-export async function getAssignedOwner(supabase: any, orgId: string, leadData: any) {
-    const { data: settings } = await supabase
-        .from('lead_routing_settings')
-        .select('*')
-        .eq('organization_id', orgId)
-        .single()
+// ─── Lead Routing ──────────────────────────────────────────────────────────────
 
+// Signature preserved for backward-compat (supabase param ignored).
+export async function getAssignedOwner(_supabase: any, orgId: string, leadData: any) {
+  try {
+    const settingsRes = await pool.query(
+      'SELECT * FROM public.lead_routing_settings WHERE organization_id = $1 LIMIT 1', [orgId])
+    const settings = settingsRes.rows[0]
     if (!settings) return null
 
-    // 1. Rule-based Routing (Geo, Industry, Source, etc.)
     if (settings.assignment_mode === 'rule_based') {
-        const { data: rules } = await supabase
-            .from('lead_routing_rules')
-            .select('*')
-            .eq('organization_id', orgId)
-            .eq('is_active', true)
-            .order('priority', { ascending: true })
-
-        for (const rule of rules || []) {
-            if (evaluateConditions(rule.conditions, leadData)) {
-                // Check if assignee is available and under capacity
-                const { data: user } = await supabase.from('users').select('availability_status').eq('id', rule.assign_to_user_id).single()
-                if (user?.availability_status !== false) {
-                     return rule.assign_to_user_id
-                }
-            }
+      const rulesRes = await pool.query(
+        "SELECT * FROM public.lead_routing_rules WHERE organization_id = $1 AND is_active = true ORDER BY priority ASC", [orgId])
+      for (const rule of rulesRes.rows) {
+        if (evaluateConditions(rule.conditions, leadData)) {
+          const userRes = await pool.query('SELECT availability_status FROM public.users WHERE id = $1 LIMIT 1', [rule.assign_to_user_id])
+          if (userRes.rows[0]?.availability_status !== false) return rule.assign_to_user_id
         }
+      }
     }
 
-    // Fetch all active/available team members
-    const { data: members } = await supabase
-        .from('users')
-        .select('id, lead_weight, availability_status')
-        .eq('organization_id', orgId)
-        .eq('is_active', true)
-        .eq('availability_status', true)
-        .order('created_at', { ascending: true })
+    const membersRes = await pool.query(
+      "SELECT id, lead_weight, availability_status FROM public.users WHERE organization_id = $1 AND is_active = true AND availability_status = true ORDER BY created_at ASC",
+      [orgId])
+    const members = membersRes.rows
+    if (!members.length) return settings.fallback_user_id
 
-    if (!members || members.length === 0) return settings.fallback_user_id
-
-    // 2. Load-Based (Capacity-Aware Routing)
     if (settings.assignment_mode === 'load_based' || settings.load_balancing_enabled) {
-        // Find member with fewest active items (Leads + Deals)
-        let bestMember = null
-        let minLoad = Infinity
-
-        for (const member of members) {
-            const [{ count: leadCount }, { count: dealCount }] = await Promise.all([
-                supabase.from('leads').select('*', { count: 'exact', head: true }).eq('owner_id', member.id).not('status', 'in', '("Won","Lost")'),
-                supabase.from('deals').select('*', { count: 'exact', head: true }).eq('owner_id', member.id).not('stage', 'in', '("Won","Lost")')
-            ])
-            
-            const totalLoad = (leadCount || 0) + (dealCount || 0)
-            if (totalLoad < minLoad && totalLoad < (settings.max_leads_per_user || 20)) {
-                minLoad = totalLoad
-                bestMember = member.id
-            }
+      let bestMember = null; let minLoad = Infinity
+      for (const member of members) {
+        const [leadRes, dealRes] = await Promise.all([
+          pool.query("SELECT COUNT(*) FROM public.leads WHERE owner_id = $1 AND status NOT IN ('Won','Lost')", [member.id]),
+          pool.query("SELECT COUNT(*) FROM public.deals WHERE assigned_to = $1 AND status NOT IN ('Won','Lost')", [member.id])
+        ])
+        const totalLoad = parseInt(leadRes.rows[0].count, 10) + parseInt(dealRes.rows[0].count, 10)
+        if (totalLoad < minLoad && totalLoad < (settings.max_leads_per_user || 20)) {
+          minLoad = totalLoad; bestMember = member.id
         }
-        if (bestMember) return bestMember
+      }
+      if (bestMember) return bestMember
     }
 
-    // 3. Weighted Distribution
     if (settings.assignment_mode === 'weighted') {
-        const totalWeight = members.reduce((sum: number, m: any) => sum + (m.lead_weight || 100), 0)
-        let random = Math.random() * totalWeight
-        for (const member of members) {
-            random -= (member.lead_weight || 100)
-            if (random <= 0) return member.id
-        }
+      const totalWeight = members.reduce((sum: number, m: any) => sum + (m.lead_weight || 100), 0)
+      let random = Math.random() * totalWeight
+      for (const member of members) {
+        random -= (member.lead_weight || 100)
+        if (random <= 0) return member.id
+      }
     }
 
-    // 4. Default: Round-Robin
-    const { data: lastLead } = await supabase
-        .from('leads')
-        .select('owner_id')
-        .eq('organization_id', orgId)
-        .not('owner_id', 'is', null)
-        .order('created_at', { descending: true })
-        .limit(1)
-        .single()
-
-    const lastIdx = members.findIndex((m: any) => m.id === lastLead?.owner_id)
+    const lastLeadRes = await pool.query(
+      'SELECT owner_id FROM public.leads WHERE organization_id = $1 AND owner_id IS NOT NULL ORDER BY created_at DESC LIMIT 1',
+      [orgId])
+    const lastOwnerId = lastLeadRes.rows[0]?.owner_id
+    const lastIdx = members.findIndex((m: any) => m.id === lastOwnerId)
     const nextIdx = (lastIdx + 1) % members.length
     const finalOwner = members[nextIdx].id
 
-    await logLeadEvent(supabase, orgId, {
-        event_type: 'lead_assigned',
-        description: `Lead assigned via ${settings.assignment_mode}`,
-        metadata: { mode: settings.assignment_mode, assigned_to: finalOwner }
+    await logLeadEvent(null, orgId, {
+      event_type: 'lead_assigned',
+      description: `Lead assigned via ${settings.assignment_mode}`,
+      metadata: { mode: settings.assignment_mode, assigned_to: finalOwner }
     })
 
     return finalOwner
+  } catch (err: any) { console.error('getAssignedOwner error:', err.message); return null }
 }
 
 function evaluateConditions(conditions: any[], data: any) {
-    if (!conditions || conditions.length === 0) return false
-    
-    // Simple evaluator: all conditions must match (AND logic)
-    return conditions.every(cond => {
-        const fieldVal = data[cond.field] || ''
-        const targetVal = cond.val
-        
-        switch (cond.op) {
-            case 'equals': return String(fieldVal).toLowerCase() == String(targetVal).toLowerCase()
-            case 'contains': return String(fieldVal).toLowerCase().includes(String(targetVal).toLowerCase())
-            case 'greater_than': return Number(fieldVal) > Number(targetVal)
-            case 'starts_with': return String(fieldVal).toLowerCase().startsWith(String(targetVal).toLowerCase())
-            case 'in_list': return String(targetVal).split(',').map(s => s.trim().toLowerCase()).includes(String(fieldVal).toLowerCase())
-            default: return false
-        }
-    })
+  if (!conditions || conditions.length === 0) return false
+  return conditions.every(cond => {
+    const fieldVal = data[cond.field] || ''
+    const targetVal = cond.val
+    switch (cond.op) {
+      case 'equals': return String(fieldVal).toLowerCase() == String(targetVal).toLowerCase()
+      case 'contains': return String(fieldVal).toLowerCase().includes(String(targetVal).toLowerCase())
+      case 'greater_than': return Number(fieldVal) > Number(targetVal)
+      case 'starts_with': return String(fieldVal).toLowerCase().startsWith(String(targetVal).toLowerCase())
+      case 'in_list': return String(targetVal).split(',').map((s: string) => s.trim().toLowerCase()).includes(String(fieldVal).toLowerCase())
+      default: return false
+    }
+  })
 }
 
 export async function auditLeadsSLA() {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No organization found' }
 
-    // Fetch settings for threshold
-    const { data: settings } = await supabase
-        .from('lead_routing_settings')
-        .select('untouched_reassignment_days, untouched_reassignment_minutes, fallback_user_id')
-        .eq('organization_id', orgId)
-        .single()
-    
-    // Priority to minutes if specifically requested by user in future? 
-    // For now, let's use whichever provides the stricter (shorter) threshold if both set, or just minutes if non-zero.
+    const settingsRes = await pool.query(
+      'SELECT untouched_reassignment_days, untouched_reassignment_minutes, fallback_user_id FROM public.lead_routing_settings WHERE organization_id = $1 LIMIT 1',
+      [orgId])
+    const settings = settingsRes.rows[0]
     const thresholdMinutes = settings?.untouched_reassignment_minutes || (settings?.untouched_reassignment_days || 3) * 1440
     const cutoff = new Date(Date.now() - thresholdMinutes * 60 * 1000).toISOString()
 
-    // Find leads matching SLA breach: Not Won/Lost, Created before cutoff, No last_contacted_at
-    const { data: breachingLeads } = await supabase
-        .from('leads')
-        .select('id, name, owner_id')
-        .eq('organization_id', orgId)
-        .is('last_contacted_at', null)
-        .lt('created_at', cutoff)
-        .not('status', 'in', '("Won","Lost")')
+    const breachRes = await pool.query(
+      "SELECT id, name, owner_id FROM public.leads WHERE organization_id = $1 AND last_contacted_at IS NULL AND created_at < $2 AND status NOT IN ('Won','Lost')",
+      [orgId, cutoff])
+    const breachingLeads = breachRes.rows
+    if (!breachingLeads.length) return { success: true, count: 0 }
 
-    if (!breachingLeads || breachingLeads.length === 0) return { success: true, count: 0 }
-
-    // For each breach, re-assign using Round-Robin (to skip the current owner)
     let reassignedCount = 0
     for (const lead of breachingLeads) {
-        const newOwnerId = await getAssignedOwner(supabase, orgId, lead)
-        if (newOwnerId && newOwnerId !== lead.owner_id) {
-            await supabase.from('leads').update({ owner_id: newOwnerId }).eq('id', lead.id)
-            reassignedCount++
-        }
+      const newOwnerId = await getAssignedOwner(null, orgId, lead)
+      if (newOwnerId && newOwnerId !== lead.owner_id) {
+        await pool.query('UPDATE public.leads SET owner_id = $1 WHERE id = $2', [newOwnerId, lead.id])
+        reassignedCount++
+      }
     }
 
     revalidatePath('/leads')
     return { success: true, count: reassignedCount }
+  } catch (err: any) { return { error: err.message } }
 }
 
-export async function updateUserRoutingSettings(userId: string, data: { lead_weight?: number, availability_status?: boolean, skills?: string[] }) {
-    const supabase = await createClient()
-    const { error } = await supabase.from('users').update(data).eq('id', userId)
-    if (error) return { error: error.message }
+export async function updateUserRoutingSettings(userId: string, data: { lead_weight?: number; availability_status?: boolean; skills?: string[] }) {
+  try {
+    const keys = Object.keys(data); const vals = Object.values(data)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(`UPDATE public.users SET ${sets} WHERE id = $${keys.length + 1}`, [...vals, userId])
     return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
-export async function getLeadAuditLogs(filters?: { 
-    event_type?: string, 
-    user_id?: string, 
-    start_date?: string, 
-    end_date?: string 
+export async function getLeadAuditLogs(filters?: {
+  event_type?: string; user_id?: string; start_date?: string; end_date?: string
 }) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return []
 
-    let query = supabase
-        .from('lead_audit_logs')
-        .select('*')
-        .eq('organization_id', orgId)
+    const values: any[] = [orgId]
+    const conditions: string[] = ['organization_id = $1']
 
-    if (filters?.event_type && filters.event_type !== 'all') {
-        query = query.eq('event_type', filters.event_type)
-    }
-    if (filters?.user_id && filters.user_id !== 'all') {
-        // user_id in logs is target_user_id usually
-        query = query.eq('target_user_id', filters.user_id)
-    }
-    if (filters?.start_date) {
-        query = query.gte('created_at', filters.start_date)
-    }
-    if (filters?.end_date) {
-        query = query.lte('created_at', filters.end_date)
-    }
+    if (filters?.event_type && filters.event_type !== 'all') { values.push(filters.event_type); conditions.push(`event_type = $${values.length}`) }
+    if (filters?.user_id && filters.user_id !== 'all') { values.push(filters.user_id); conditions.push(`target_user_id = $${values.length}`) }
+    if (filters?.start_date) { values.push(filters.start_date); conditions.push(`created_at >= $${values.length}`) }
+    if (filters?.end_date) { values.push(filters.end_date); conditions.push(`created_at <= $${values.length}`) }
 
-    const { data } = await query
-        .order('created_at', { ascending: false })
-        .limit(200)
-
-    return data || []
+    const r = await pool.query(
+      `SELECT * FROM public.lead_audit_logs WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT 200`, values)
+    return r.rows
+  } catch (err: any) { console.error('Error fetching lead audit logs:', err.message); return [] }
 }
 
 export async function getLeadAssignmentStats() {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return null
-
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-
-    const [todayTotal, byUser] = await Promise.all([
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('organization_id', orgId).gte('created_at', today.toISOString()),
-        supabase.rpc('get_lead_stats_by_user', { org_id: orgId }) // If we had an RPC, otherwise we fetch and reduce
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const [countRes, leadsRes] = await Promise.all([
+      pool.query('SELECT COUNT(*) FROM public.leads WHERE organization_id = $1 AND created_at >= $2', [orgId, today.toISOString()]),
+      pool.query('SELECT owner_id, source FROM public.leads WHERE organization_id = $1 AND created_at >= $2', [orgId, today.toISOString()])
     ])
-    
-    // For now simple fetch of all leads today
-    const { data: leadsToday } = await supabase.from('leads').select('owner_id, source').eq('organization_id', orgId).gte('created_at', today.toISOString())
-    
     return {
-        todayTotal: todayTotal.count,
-        leadsToday
+      todayTotal: parseInt(countRes.rows[0].count, 10),
+      leadsToday: leadsRes.rows
     }
+  } catch (err: any) { console.error('getLeadAssignmentStats error:', err.message); return null }
 }

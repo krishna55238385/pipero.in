@@ -2,6 +2,7 @@
 
 import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
+// createClient retained only for syncMailboxEmails / enrollCampaignRecipients — external libs that accept SupabaseClient
 import { createClient } from '@/lib/supabase/server'
 import { refreshAccessToken, startGmailWatch } from '@/lib/gmail'
 import { syncMailboxEmails, type MailboxRow } from '@/lib/engage-sync'
@@ -9,6 +10,8 @@ import { enrollCampaignRecipients, runEngageWorker, type WorkerReport } from '@/
 import { runWarmupCycle } from '@/lib/engage-warmup'
 import { generateJson } from '@/lib/llm'
 import nodemailer from 'nodemailer'
+import pool from '@/lib/db'
+import { currentUser } from '@clerk/nextjs/server'
 import type {
   AccountSettingsInput,
   AccountTag,
@@ -28,27 +31,30 @@ import type {
   UnsubscribeRow,
 } from '@/types/engage'
 
-type DbClient = Awaited<ReturnType<typeof createClient>>
-
-async function getDefaultOrgId(supabase: DbClient) {
-  const { data } = await supabase.from('organizations').select('id').limit(1).single()
-  return data?.id as string | undefined
+async function getDefaultOrgId(): Promise<string | undefined> {
+  try {
+    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+    return r.rows[0]?.id ?? undefined
+  } catch { return undefined }
 }
 
-async function getCurrentActor(supabase: DbClient) {
+async function getCurrentActor() {
   const cookieStore = await cookies()
   const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  const { data: authData } = await supabase.auth.getUser()
-  let userId = authData?.user?.id ?? null
-
-  if (!userId && isMockAuth) {
-    const { data: firstUser } = await supabase.from('users').select('id').limit(1).single()
-    userId = firstUser?.id ?? null
+  const clerkUser = await currentUser()
+  let userId: string | null = null
+  if (!clerkUser && isMockAuth) {
+    const r = await pool.query('SELECT id FROM public.users LIMIT 1')
+    userId = r.rows[0]?.id ?? null
+  } else if (clerkUser) {
+    const r = await pool.query('SELECT id FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
+    userId = r.rows[0]?.id ?? null
   }
   if (!userId) throw new Error('Authentication required')
-  const orgId = await getDefaultOrgId(supabase)
+  const orgRes = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+  const orgId = orgRes.rows[0]?.id
   if (!orgId) throw new Error('No organization found')
-  return { userId, orgId }
+  return { userId, orgId: orgId as string }
 }
 
 export async function upsertGmailMailbox(input: {
@@ -59,44 +65,34 @@ export async function upsertGmailMailbox(input: {
   scope?: string
   expiresIn?: number
 }) {
-  const supabase = await createClient()
-  const { userId, orgId } = await getCurrentActor(supabase)
+  const { userId, orgId } = await getCurrentActor()
   const expiresAt = input.expiresIn
     ? new Date(Date.now() + input.expiresIn * 1000).toISOString()
     : null
+  const now = new Date().toISOString()
 
-  const { error } = await supabase.from('engage_mailboxes').upsert(
-    {
-      user_id: userId,
-      organization_id: orgId,
-      provider: 'gmail',
-      email: input.email,
-      access_token: input.accessToken,
-      refresh_token: input.refreshToken ?? null,
-      token_type: input.tokenType ?? 'Bearer',
-      scope: input.scope ?? null,
-      expires_at: expiresAt,
-      updated_at: new Date().toISOString(),
-      connected_at: new Date().toISOString(),
-    },
-    { onConflict: 'user_id,provider,email' }
-  )
-  if (error) throw new Error(error.message)
+  await pool.query(
+    `INSERT INTO public.engage_mailboxes
+     (user_id, organization_id, provider, email, access_token, refresh_token, token_type, scope, expires_at, updated_at, connected_at)
+     VALUES ($1,$2,'gmail',$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (user_id, provider, email) DO UPDATE SET
+       access_token = EXCLUDED.access_token,
+       refresh_token = EXCLUDED.refresh_token,
+       token_type = EXCLUDED.token_type,
+       scope = EXCLUDED.scope,
+       expires_at = EXCLUDED.expires_at,
+       updated_at = EXCLUDED.updated_at,
+       connected_at = EXCLUDED.connected_at`,
+    [userId, orgId, input.email, input.accessToken, input.refreshToken ?? null,
+     input.tokenType ?? 'Bearer', input.scope ?? null, expiresAt, now, now])
 }
 
 export async function getGmailMailbox() {
-  const supabase = await createClient()
-  const { userId } = await getCurrentActor(supabase)
-  const { data, error } = await supabase
-    .from('engage_mailboxes')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('provider', 'gmail')
-    .order('connected_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (error) throw new Error(error.message)
-  return data
+  const { userId } = await getCurrentActor()
+  const r = await pool.query(
+    `SELECT * FROM public.engage_mailboxes WHERE user_id = $1 AND provider = 'gmail' ORDER BY connected_at DESC LIMIT 1`,
+    [userId])
+  return r.rows[0] ?? null
 }
 
 export async function getMailboxSyncStatus() {
@@ -110,20 +106,14 @@ export async function getMailboxSyncStatus() {
   }
 }
 
-/** All connected Gmail mailboxes for the current user (most-recent first). */
 export async function getGmailMailboxes(): Promise<
   Array<{ id: string; email: string; lastSyncedAt: string | null; watchExpiration: string | null }>
 > {
-  const supabase = await createClient()
-  const { userId } = await getCurrentActor(supabase)
-  const { data, error } = await supabase
-    .from('engage_mailboxes')
-    .select('id, email, last_synced_at, gmail_watch_expiration')
-    .eq('user_id', userId)
-    .eq('provider', 'gmail')
-    .order('connected_at', { ascending: false })
-  if (error) throw new Error(error.message)
-  return (data ?? []).map((m) => ({
+  const { userId } = await getCurrentActor()
+  const r = await pool.query(
+    `SELECT id, email, last_synced_at, gmail_watch_expiration FROM public.engage_mailboxes WHERE user_id = $1 AND provider = 'gmail' ORDER BY connected_at DESC`,
+    [userId])
+  return (r.rows ?? []).map((m: any) => ({
     id: String(m.id),
     email: m.email as string,
     lastSyncedAt: (m.last_synced_at as string | null) ?? null,
@@ -132,7 +122,6 @@ export async function getGmailMailboxes(): Promise<
 }
 
 export async function getValidGmailAccessToken() {
-  const supabase = await createClient()
   const mailbox = await getGmailMailbox()
   if (!mailbox) throw new Error('No Gmail mailbox connected')
 
@@ -144,101 +133,63 @@ export async function getValidGmailAccessToken() {
   const refreshed = await refreshAccessToken(mailbox.refresh_token as string)
   const expiresAt = new Date(Date.now() + (refreshed.expires_in ?? 3600) * 1000).toISOString()
 
-  const { error } = await supabase
-    .from('engage_mailboxes')
-    .update({
-      access_token: refreshed.access_token,
-      token_type: refreshed.token_type ?? 'Bearer',
-      scope: refreshed.scope ?? mailbox.scope,
-      expires_at: expiresAt,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', mailbox.id)
-  if (error) throw new Error(error.message)
+  await pool.query(
+    `UPDATE public.engage_mailboxes SET access_token=$1, token_type=$2, scope=$3, expires_at=$4, updated_at=$5 WHERE id=$6`,
+    [refreshed.access_token, refreshed.token_type ?? 'Bearer', refreshed.scope ?? mailbox.scope, expiresAt, new Date().toISOString(), mailbox.id])
+
   return refreshed.access_token
 }
 
 export async function registerGmailWatch() {
-  const supabase = await createClient()
   const mailbox = await getGmailMailbox()
   if (!mailbox) throw new Error('No Gmail mailbox connected')
   const accessToken = await getValidGmailAccessToken()
   const watch = await startGmailWatch(accessToken)
   const watchExpiration = watch.expiration ? new Date(Number(watch.expiration)).toISOString() : null
 
-  const { error } = await supabase
-    .from('engage_mailboxes')
-    .update({
-      gmail_history_id: watch.historyId ?? mailbox.gmail_history_id ?? null,
-      gmail_watch_expiration: watchExpiration,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', mailbox.id)
-  if (error) throw new Error(error.message)
+  await pool.query(
+    `UPDATE public.engage_mailboxes SET gmail_history_id=$1, gmail_watch_expiration=$2, updated_at=$3 WHERE id=$4`,
+    [watch.historyId ?? mailbox.gmail_history_id ?? null, watchExpiration, new Date().toISOString(), mailbox.id])
 
-  // Deep initial backfill (inbox + sent) through the shared sync path so
-  // direction/labels are classified consistently.
+  // syncMailboxEmails uses supabase internally — external lib compat
+  const supabase = await createClient()
   await syncMailboxEmails(supabase, mailbox as MailboxRow, accessToken, { maxResults: 300 })
 
   revalidatePath('/engage/settings')
 }
 
-/** Manual full re-sync from the Engage settings page. */
 export async function resyncMailboxNow() {
-  const supabase = await createClient()
   const mailbox = await getGmailMailbox()
   if (!mailbox) throw new Error('No Gmail mailbox connected')
   const accessToken = await getValidGmailAccessToken()
+  // syncMailboxEmails uses supabase internally — external lib compat
+  const supabase = await createClient()
   const count = await syncMailboxEmails(supabase, mailbox as MailboxRow, accessToken, { maxResults: 300 })
   revalidatePath('/engage/inbox')
   revalidatePath('/engage/settings')
   return { synced: count }
 }
 
-/** Runs one campaign-worker tick from the UI ("Run now"). */
 export async function runEngageWorkerNow(): Promise<WorkerReport> {
-  const supabase = await createClient()
-  await getCurrentActor(supabase) // auth gate
+  await getCurrentActor() // auth gate
   const report = await runEngageWorker()
   revalidatePath('/engage/campaigns')
   return report
 }
 
-/** Runs one warmup cycle from the UI ("Run warmup now"). */
 export async function triggerWarmupCycle(): Promise<{ sent: number; errors: string[] }> {
-  const supabase = await createClient()
-  await getCurrentActor(supabase) // auth gate
+  await getCurrentActor() // auth gate
   const report = await runWarmupCycle()
   revalidatePath('/engage/accounts')
   return { sent: report.sent, errors: report.errors }
 }
 
 export async function getEngageCampaigns(): Promise<EngageCampaign[]> {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { data, error } = await supabase
-    .from('engage_campaigns')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-  if (error) return []
-  return (data ?? []).map((x) => ({
-    id: String(x.id),
-    name: String(x.name),
-    audienceLeadIds: Array.isArray(x.audience_lead_ids) ? x.audience_lead_ids.map(String) : [],
-    templateId: x.template_id ? String(x.template_id) : '',
-    sequenceId: x.sequence_id ? String(x.sequence_id) : undefined,
-    scheduleAt: x.schedule_at ? String(x.schedule_at) : new Date().toISOString(),
-    status: (x.status ?? 'draft') as EngageCampaign['status'],
-    stopOnReply: Boolean(x.stop_on_reply ?? true),
-    openTracking: Boolean(x.open_tracking ?? true),
-    linkTracking: Boolean(x.link_tracking ?? true),
-    dailyLimit: Number(x.daily_limit ?? 50),
-    personalizeMode: (x.personalize_mode === 'ai' ? 'ai' : 'template'),
-    aiInstruction: x.ai_instruction ? String(x.ai_instruction) : '',
-    origin: (x.origin === 'auto' ? 'auto' : 'manual'),
-    icpId: x.icp_id != null ? Number(x.icp_id) : null,
-  }))
+  const { orgId } = await getCurrentActor()
+  const r = await pool.query(
+    `SELECT * FROM public.engage_campaigns WHERE organization_id = $1 ORDER BY created_at DESC`,
+    [orgId])
+  return (r.rows ?? []).map(campaignRow)
 }
 
 function campaignRow(x: Record<string, unknown>): EngageCampaign {
@@ -261,72 +212,39 @@ function campaignRow(x: Record<string, unknown>): EngageCampaign {
   }
 }
 
-// Creates (or reuses today's) auto-campaign for a phase-3 Reach-Out run so the
-// generated leads/sends are grouped under a named campaign ("<ICP> — Campaign N")
-// that shows in the campaigns list, tagged origin='auto'. Returns its id, which
-// the caller passes to the pipeline as the outreach_log campaign_id.
-// ONE campaign per ICP: find the existing auto-campaign for this ICP and
-// re-activate it (so newly-prepared leads get enrolled + sent), or create it
-// the first time. Every manual "Send now" and every auto 3 AM run for the same
-// ICP funnels its leads into this single campaign — never a new one each click.
 export async function ensureAutoCampaignForRun(icpId: number): Promise<{ id: string; name: string }> {
-  const supabase = await createClient()
-  const { orgId, userId } = await getCurrentActor(supabase)
+  const { orgId, userId } = await getCurrentActor()
 
-  const { data: existing } = await supabase
-    .from('engage_campaigns')
-    .select('id, name')
-    .eq('organization_id', orgId)
-    .eq('origin', 'auto')
-    .eq('icp_id', icpId)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
+  const existingRes = await pool.query(
+    `SELECT id, name FROM public.engage_campaigns WHERE organization_id = $1 AND origin = 'auto' AND icp_id = $2 ORDER BY created_at ASC LIMIT 1`,
+    [orgId, icpId])
+  const existing = existingRes.rows[0]
 
   if (existing) {
-    // Re-activate so the worker enrolls any new, un-sent leads for this ICP.
-    await supabase
-      .from('engage_campaigns')
-      .update({ status: 'running', completed_at: null, updated_at: new Date().toISOString() })
-      .eq('id', existing.id)
+    await pool.query(
+      `UPDATE public.engage_campaigns SET status = 'running', completed_at = NULL, updated_at = $1 WHERE id = $2`,
+      [new Date().toISOString(), existing.id])
     revalidatePath('/engage/campaigns')
     return { id: String(existing.id), name: String(existing.name) }
   }
 
-  const { data: icp } = await supabase.from('icp_profiles').select('name').eq('id', icpId).maybeSingle()
-  const name = `${String(icp?.name || `ICP ${icpId}`)} — Outreach`
+  const icpRes = await pool.query(`SELECT name FROM public.icp_profiles WHERE id = $1 LIMIT 1`, [icpId])
+  const name = `${String(icpRes.rows[0]?.name || `ICP ${icpId}`)} — Outreach`
 
-  const { data, error } = await supabase
-    .from('engage_campaigns')
-    .insert({
-      organization_id: orgId,
-      created_by: userId,
-      name,
-      origin: 'auto',
-      icp_id: icpId,
-      status: 'running',
-      personalize_mode: 'template',
-      started_at: new Date().toISOString(),
-    })
-    .select('id, name')
-    .single()
-  if (error) throw new Error(error.message)
+  const r = await pool.query(
+    `INSERT INTO public.engage_campaigns (organization_id, created_by, name, origin, icp_id, status, personalize_mode, started_at)
+     VALUES ($1,$2,$3,'auto',$4,'running','template',$5) RETURNING id, name`,
+    [orgId, userId, name, icpId, new Date().toISOString()])
+  if (!r.rows[0]) throw new Error('Failed to create auto-campaign')
   revalidatePath('/engage/campaigns')
-  return { id: String(data.id), name: String(data.name) }
+  return { id: String(r.rows[0].id), name: String(r.rows[0].name) }
 }
 
-// "Send now" (manual, agent-14-only): create the auto-campaign and immediately
-// run the worker, which dispatches the ALREADY-GENERATED per-lead sequences
-// from the database — no LLM, no re-running agents 11/12/13 — to leads that
-// haven't been emailed yet. Fast.
 export async function sendNowForIcp(icpId: number): Promise<{ campaignId: string; report: WorkerReport }> {
-  const supabase = await createClient()
-  await getCurrentActor(supabase)
-  // Require generated sequences first (Find leads / prep), else there's nothing to send.
-  const { count } = await supabase
-    .from('outreach_sequences')
-    .select('lead_id', { count: 'exact', head: true })
-    .eq('icp_id', icpId)
+  await getCurrentActor()
+  const countRes = await pool.query(
+    `SELECT COUNT(*) FROM public.outreach_sequences WHERE icp_id = $1`, [icpId])
+  const count = Number(countRes.rows[0]?.count ?? 0)
   if (!count) {
     throw new Error('No prepared emails for this ICP yet — run "Find leads" first to generate them.')
   }
@@ -338,54 +256,37 @@ export async function sendNowForIcp(icpId: number): Promise<{ campaignId: string
 }
 
 export async function getEngageCampaign(id: string): Promise<EngageCampaign | null> {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { data, error } = await supabase
-    .from('engage_campaigns')
-    .select('*')
-    .eq('organization_id', orgId)
-    .eq('id', id)
-    .maybeSingle()
-  if (error || !data) return null
-  return campaignRow(data)
+  const { orgId } = await getCurrentActor()
+  const r = await pool.query(
+    `SELECT * FROM public.engage_campaigns WHERE organization_id = $1 AND id = $2 LIMIT 1`,
+    [orgId, id])
+  if (!r.rows[0]) return null
+  return campaignRow(r.rows[0])
 }
 
 export async function createEngageCampaign(input: Omit<EngageCampaign, 'id'>): Promise<{ id: string }> {
-  const supabase = await createClient()
-  const { orgId, userId } = await getCurrentActor(supabase)
+  const { orgId, userId } = await getCurrentActor()
   if (!input.templateId && !input.sequenceId) {
     throw new Error('Pick a template or a sequence for the campaign')
   }
-  const { data, error } = await supabase
-    .from('engage_campaigns')
-    .insert({
-      organization_id: orgId,
-      created_by: userId,
-      name: input.name,
-      audience_lead_ids: input.audienceLeadIds,
-      template_id: input.templateId || null,
-      sequence_id: input.sequenceId || null,
-      schedule_at: input.scheduleAt,
-      status: input.status,
-      stop_on_reply: input.stopOnReply ?? true,
-      open_tracking: input.openTracking ?? true,
-      link_tracking: input.linkTracking ?? true,
-      daily_limit: input.dailyLimit ?? 50,
-      personalize_mode: input.personalizeMode === 'ai' ? 'ai' : 'template',
-      ai_instruction: input.aiInstruction || null,
-    })
-    .select('id')
-    .single()
-  if (error) throw new Error(error.message)
+  const r = await pool.query(
+    `INSERT INTO public.engage_campaigns
+     (organization_id, created_by, name, audience_lead_ids, template_id, sequence_id, schedule_at, status,
+      stop_on_reply, open_tracking, link_tracking, daily_limit, personalize_mode, ai_instruction)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+    [orgId, userId, input.name, JSON.stringify(input.audienceLeadIds ?? []),
+     input.templateId || null, input.sequenceId || null, input.scheduleAt, input.status,
+     input.stopOnReply ?? true, input.openTracking ?? true, input.linkTracking ?? true,
+     input.dailyLimit ?? 50, input.personalizeMode === 'ai' ? 'ai' : 'template',
+     input.aiInstruction || null])
+  if (!r.rows[0]) throw new Error('Failed to create campaign')
+  const newId = String(r.rows[0].id)
 
-  // Enroll the audience right away so the campaign's Leads tab is populated
-  // immediately — matching auto-campaigns, which enroll on creation. Sending
-  // stays gated on status='running', so a draft or future-scheduled campaign
-  // shows its leads without sending early. Best-effort: a hiccup here must not
-  // fail campaign creation (the worker will re-enroll idempotently when due).
   try {
+    // enrollCampaignRecipients uses supabase internally — external lib compat
+    const supabase = await createClient()
     await enrollCampaignRecipients(supabase, {
-      id: String(data.id),
+      id: newId,
       organization_id: orgId,
       audience_lead_ids: (input.audienceLeadIds ?? []).map(String),
       sequence_id: input.sequenceId || null,
@@ -395,19 +296,17 @@ export async function createEngageCampaign(input: Omit<EngageCampaign, 'id'>): P
   }
 
   revalidatePath('/engage/campaigns')
-  return { id: String(data.id) }
+  return { id: newId }
 }
 
-// Patch a campaign's settings/schedule/audience/status from the detail tabs.
 export async function updateEngageCampaign(
   id: string,
   patch: Partial<Omit<EngageCampaign, 'id'>>,
 ) {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
+  const { orgId } = await getCurrentActor()
   const dbPatch: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (patch.name !== undefined) dbPatch.name = patch.name
-  if (patch.audienceLeadIds !== undefined) dbPatch.audience_lead_ids = patch.audienceLeadIds
+  if (patch.audienceLeadIds !== undefined) dbPatch.audience_lead_ids = JSON.stringify(patch.audienceLeadIds)
   if (patch.templateId !== undefined) dbPatch.template_id = patch.templateId || null
   if (patch.sequenceId !== undefined) dbPatch.sequence_id = patch.sequenceId || null
   if (patch.scheduleAt !== undefined) dbPatch.schedule_at = patch.scheduleAt
@@ -418,36 +317,32 @@ export async function updateEngageCampaign(
   if (patch.dailyLimit !== undefined) dbPatch.daily_limit = patch.dailyLimit
   if (patch.personalizeMode !== undefined) dbPatch.personalize_mode = patch.personalizeMode
   if (patch.aiInstruction !== undefined) dbPatch.ai_instruction = patch.aiInstruction || null
-  const { error } = await supabase
-    .from('engage_campaigns')
-    .update(dbPatch)
-    .eq('organization_id', orgId)
-    .eq('id', id)
-  if (error) throw new Error(error.message)
+
+  const keys = Object.keys(dbPatch)
+  const vals = Object.values(dbPatch)
+  const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+  await pool.query(
+    `UPDATE public.engage_campaigns SET ${sets} WHERE organization_id = $${keys.length + 1} AND id = $${keys.length + 2}`,
+    [...vals, orgId, id])
   revalidatePath('/engage/campaigns')
   revalidatePath(`/engage/campaigns/${id}`)
 }
 
-// Pause / resume / schedule a campaign from the detail header.
 export async function setCampaignStatus(id: string, status: EngageCampaign['status']) {
   return updateEngageCampaign(id, { status })
 }
 
-/** Per-campaign recipient progress (enrolled / sent / replied / failed). */
 export async function getEngageCampaignProgress(): Promise<Record<string, Record<string, number>>> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return {}
   }
-  const { data } = await supabase
-    .from('engage_campaign_recipients')
-    .select('campaign_id, status')
-    .eq('organization_id', orgId)
+  const r = await pool.query(
+    `SELECT campaign_id, status FROM public.engage_campaign_recipients WHERE organization_id = $1`, [orgId])
   const out: Record<string, Record<string, number>> = {}
-  for (const row of data ?? []) {
+  for (const row of r.rows ?? []) {
     const cid = String(row.campaign_id)
     const status = String(row.status)
     out[cid] = out[cid] ?? {}
@@ -456,23 +351,18 @@ export async function getEngageCampaignProgress(): Promise<Record<string, Record
   return out
 }
 
-// Per-campaign breakdown of WHY recipients were skipped, so "N skipped" in the
-// UI is explainable (missing email, unsubscribed, bounced, duplicate, …).
 export async function getEngageCampaignSkips(): Promise<Record<string, Record<string, number>>> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return {}
   }
-  const { data } = await supabase
-    .from('engage_campaign_recipients')
-    .select('campaign_id, skip_reason')
-    .eq('organization_id', orgId)
-    .eq('status', 'skipped')
+  const r = await pool.query(
+    `SELECT campaign_id, skip_reason FROM public.engage_campaign_recipients WHERE organization_id = $1 AND status = 'skipped'`,
+    [orgId])
   const out: Record<string, Record<string, number>> = {}
-  for (const row of data ?? []) {
+  for (const row of r.rows ?? []) {
     const cid = String(row.campaign_id)
     const reason = String(row.skip_reason ?? 'unknown')
     out[cid] = out[cid] ?? {}
@@ -481,15 +371,10 @@ export async function getEngageCampaignSkips(): Promise<Record<string, Record<st
   return out
 }
 
-// --------------------------------------------------------------------------- //
-// Campaign detail (Instantly-style): leads, step analytics, KPIs, lead status
-// --------------------------------------------------------------------------- //
-
 export async function getCampaignDetail(id: string): Promise<import('@/types/engage').CampaignDetailData | null> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return null
   }
@@ -497,34 +382,36 @@ export async function getCampaignDetail(id: string): Promise<import('@/types/eng
   if (!campaign) return null
 
   const [recipientsRes, logRes, opensRes, clicksRes, repliesRes, unsubsRes] = await Promise.all([
-    supabase.from('engage_campaign_recipients').select('*').eq('campaign_id', id).order('created_at', { ascending: true }),
-    supabase.from('outreach_log').select('email:contact_email, status, step_number, sent_at, created_at').eq('campaign_id', id),
-    supabase.from('outreach_opens').select('email, opened_at, created_at').eq('campaign_id', id),
-    supabase.from('outreach_clicks').select('email, clicked_at, created_at').eq('campaign_id', id),
-    supabase.from('outreach_replies').select('email, replied_at, created_at').eq('campaign_id', id),
-    supabase.from('outreach_unsubscribes').select('email, unsubscribed_at, created_at').eq('campaign_id', id),
+    pool.query(`SELECT * FROM public.engage_campaign_recipients WHERE campaign_id = $1 ORDER BY created_at ASC`, [id]),
+    pool.query(`SELECT contact_email AS email, status, step_number, sent_at, created_at FROM public.outreach_log WHERE campaign_id = $1`, [id]),
+    pool.query(`SELECT email, opened_at, created_at FROM public.outreach_opens WHERE campaign_id = $1`, [id]),
+    pool.query(`SELECT email, clicked_at, created_at FROM public.outreach_clicks WHERE campaign_id = $1`, [id]),
+    pool.query(`SELECT email, replied_at, created_at FROM public.outreach_replies WHERE campaign_id = $1`, [id]),
+    pool.query(`SELECT email, unsubscribed_at, created_at FROM public.outreach_unsubscribes WHERE campaign_id = $1`, [id]),
   ])
 
-  const recipients = recipientsRes.data ?? []
-  const sentRows = (logRes.data ?? []).filter((r) => r.status === 'sent')
-  const opens = opensRes.data ?? []
-  const clicks = clicksRes.data ?? []
-  const replies = repliesRes.data ?? []
-  const unsubs = unsubsRes.data ?? []
+  void orgId
+
+  const recipients = recipientsRes.rows ?? []
+  const sentRows = (logRes.rows ?? []).filter((r: any) => r.status === 'sent')
+  const opens = opensRes.rows ?? []
+  const clicks = clicksRes.rows ?? []
+  const replies = repliesRes.rows ?? []
+  const unsubs = unsubsRes.rows ?? []
 
   const uniq = (rows: Array<{ email?: string | null }>) =>
     new Set(rows.map((r) => String(r.email ?? '').toLowerCase()).filter(Boolean)).size
-  const sequenceStarted = recipients.filter((r) =>
+  const sequenceStarted = recipients.filter((r: any) =>
     ['in_progress', 'completed', 'replied'].includes(String(r.status)),
   ).length
   const uniqueOpens = uniq(opens)
   const uniqueClicks = uniq(clicks)
   const uniqueReplies = uniq(replies)
-  const opportunities = recipients.filter((r) =>
+  const opportunities = recipients.filter((r: any) =>
     (['interested', 'meeting_booked', 'meeting_completed', 'won'] as string[]).includes(String(r.interest_status)),
   ).length
   const denom = sequenceStarted || sentRows.length || 1
-  const completed = recipients.filter((r) => ['completed', 'replied'].includes(String(r.status))).length
+  const completed = recipients.filter((r: any) => ['completed', 'replied'].includes(String(r.status))).length
 
   const kpis: import('@/types/engage').CampaignKpis = {
     sequenceStarted,
@@ -540,16 +427,13 @@ export async function getCampaignDetail(id: string): Promise<import('@/types/eng
     progressPct: recipients.length ? (completed / recipients.length) * 100 : 0,
   }
 
-  // Per-step analytics (sent/opened/replied/clicked are at the campaign grain;
-  // step-level sent comes from outreach_log.step_number).
-  const stepNumValues: number[] = sentRows.map((r) => Number((r as { step_number?: number }).step_number ?? 1))
+  const stepNumValues: number[] = sentRows.map((r: any) => Number(r.step_number ?? 1))
   const stepNums: number[] = Array.from(new Set<number>(stepNumValues)).sort((a, b) => a - b)
   const steps: import('@/types/engage').CampaignStepStat[] = (stepNums.length ? stepNums : [1]).map((step) => {
-    const sentForStep = sentRows.filter((r) => Number(r.step_number ?? 1) === step).length
+    const sentForStep = sentRows.filter((r: any) => Number(r.step_number ?? 1) === step).length
     return {
       step,
       sent: sentForStep,
-      // opens/clicks/replies aren't step-attributed in our schema; show on step 1.
       opened: step === (stepNums[0] ?? 1) ? uniqueOpens : 0,
       clicked: step === (stepNums[0] ?? 1) ? uniqueClicks : 0,
       replied: step === (stepNums[0] ?? 1) ? uniqueReplies : 0,
@@ -557,7 +441,7 @@ export async function getCampaignDetail(id: string): Promise<import('@/types/eng
     }
   })
 
-  const leads: import('@/types/engage').CampaignLeadRow[] = recipients.map((r) => ({
+  const leads: import('@/types/engage').CampaignLeadRow[] = recipients.map((r: any) => ({
     recipientId: String(r.id),
     leadId: r.lead_id != null ? Number(r.lead_id) : null,
     email: String(r.email ?? ''),
@@ -572,7 +456,6 @@ export async function getCampaignDetail(id: string): Promise<import('@/types/eng
     lastSentAt: r.last_sent_at ? String(r.last_sent_at) : null,
   }))
 
-  // Daily series for the chart.
   type Bucket = { sends: number; opens: number; clicks: number; replies: number; unsubscribes: number }
   const byDate: Record<string, Bucket> = {}
   const add = (dt: string | null | undefined, key: keyof Bucket) => {
@@ -583,38 +466,29 @@ export async function getCampaignDetail(id: string): Promise<import('@/types/eng
     byDate[k] = byDate[k] ?? { sends: 0, opens: 0, clicks: 0, replies: 0, unsubscribes: 0 }
     byDate[k][key] += 1
   }
-  sentRows.forEach((r) => add(r.sent_at ?? r.created_at, 'sends'))
-  opens.forEach((r) => add(r.opened_at ?? r.created_at, 'opens'))
-  clicks.forEach((r) => add(r.clicked_at ?? r.created_at, 'clicks'))
-  replies.forEach((r) => add(r.replied_at ?? r.created_at, 'replies'))
-  unsubs.forEach((r) => add(r.unsubscribed_at ?? r.created_at, 'unsubscribes'))
+  sentRows.forEach((r: any) => add(r.sent_at ?? r.created_at, 'sends'))
+  opens.forEach((r: any) => add(r.opened_at ?? r.created_at, 'opens'))
+  clicks.forEach((r: any) => add(r.clicked_at ?? r.created_at, 'clicks'))
+  replies.forEach((r: any) => add(r.replied_at ?? r.created_at, 'replies'))
+  unsubs.forEach((r: any) => add(r.unsubscribed_at ?? r.created_at, 'unsubscribes'))
   const timeSeries = Object.entries(byDate).sort(([a], [b]) => a.localeCompare(b)).map(([date, b]) => ({ date, ...b }))
 
   return { campaign, kpis, steps, leads, timeSeries }
 }
 
-// Set a lead's interest label inside a campaign (Lead / Interested / Won / …).
 export async function setRecipientInterest(recipientId: string, status: import('@/types/engage').InterestStatus) {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { data, error } = await supabase
-    .from('engage_campaign_recipients')
-    .update({ interest_status: status, updated_at: new Date().toISOString() })
-    .eq('organization_id', orgId)
-    .eq('id', recipientId)
-    .select('campaign_id')
-    .maybeSingle()
-  if (error) throw new Error(error.message)
-  if (data?.campaign_id) revalidatePath(`/engage/campaigns/${data.campaign_id}`)
+  const { orgId } = await getCurrentActor()
+  const r = await pool.query(
+    `UPDATE public.engage_campaign_recipients SET interest_status=$1, updated_at=$2 WHERE organization_id=$3 AND id=$4 RETURNING campaign_id`,
+    [status, new Date().toISOString(), orgId, recipientId])
+  const campaignId = r.rows[0]?.campaign_id
+  if (campaignId) revalidatePath(`/engage/campaigns/${campaignId}`)
 }
 
-// Unified "sent vs not sent" delivery stats across Path A (GTM) + Path B
-// (campaigns), grouped by campaign_id from the outreach_log ledger.
 export async function getOutreachDeliveryStats(days: number = 30): Promise<import('@/types/engage').DeliveryStats[]> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return []
   }
@@ -622,18 +496,17 @@ export async function getOutreachDeliveryStats(days: number = 30): Promise<impor
   since.setDate(since.getDate() - days)
 
   const [logRes, campaignsRes] = await Promise.all([
-    supabase
-      .from('outreach_log')
-      .select('campaign_id, status')
-      .eq('organization_id', orgId)
-      .gte('created_at', since.toISOString()),
-    supabase.from('engage_campaigns').select('id, name').eq('organization_id', orgId),
+    pool.query(
+      `SELECT campaign_id, status FROM public.outreach_log WHERE organization_id = $1 AND created_at >= $2`,
+      [orgId, since.toISOString()]),
+    pool.query(`SELECT id, name FROM public.engage_campaigns WHERE organization_id = $1`, [orgId]),
   ])
+
   const nameById = new Map<string, string>()
-  for (const c of campaignsRes.data ?? []) nameById.set(String(c.id), String(c.name))
+  for (const c of campaignsRes.rows ?? []) nameById.set(String(c.id), String(c.name))
 
   const agg = new Map<string, { sent: number; failed: number; skipped: number }>()
-  for (const row of logRes.data ?? []) {
+  for (const row of logRes.rows ?? []) {
     const cid = String(row.campaign_id ?? 'manual')
     const a = agg.get(cid) ?? { sent: 0, failed: 0, skipped: 0 }
     const s = String(row.status ?? 'sent')
@@ -657,15 +530,10 @@ export async function getOutreachDeliveryStats(days: number = 30): Promise<impor
 }
 
 export async function getEngageTemplates(): Promise<EngageTemplate[]> {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { data, error } = await supabase
-    .from('engage_templates')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('updated_at', { ascending: false })
-  if (error) return []
-  return (data ?? []).map((x) => ({
+  const { orgId } = await getCurrentActor()
+  const r = await pool.query(
+    `SELECT * FROM public.engage_templates WHERE organization_id = $1 ORDER BY updated_at DESC`, [orgId])
+  return (r.rows ?? []).map((x: any) => ({
     id: String(x.id),
     name: String(x.name),
     subject: String(x.subject ?? ''),
@@ -676,49 +544,40 @@ export async function getEngageTemplates(): Promise<EngageTemplate[]> {
 }
 
 export async function upsertEngageTemplate(input: Omit<EngageTemplate, 'updatedAt'>): Promise<{ id: string }> {
-  const supabase = await createClient()
-  const { orgId, userId } = await getCurrentActor(supabase)
-  const payload = {
-    id: input.id || undefined,
-    organization_id: orgId,
-    created_by: userId,
-    name: input.name,
-    subject: input.subject,
-    body: input.body,
-    attachments: input.attachments ?? [],
-    updated_at: new Date().toISOString(),
+  const { orgId, userId } = await getCurrentActor()
+  const now = new Date().toISOString()
+  if (input.id) {
+    await pool.query(
+      `UPDATE public.engage_templates SET name=$1, subject=$2, body=$3, attachments=$4, updated_at=$5 WHERE organization_id=$6 AND id=$7`,
+      [input.name, input.subject, input.body, JSON.stringify(input.attachments ?? []), now, orgId, input.id])
+    revalidatePath('/engage/templates')
+    return { id: input.id }
   }
-  const { data, error } = await supabase.from('engage_templates').upsert(payload).select('id').single()
-  if (error) throw new Error(error.message)
+  const r = await pool.query(
+    `INSERT INTO public.engage_templates (organization_id, created_by, name, subject, body, attachments, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [orgId, userId, input.name, input.subject, input.body, JSON.stringify(input.attachments ?? []), now])
   revalidatePath('/engage/templates')
-  return { id: String(data.id) }
+  return { id: String(r.rows[0].id) }
 }
 
-// Autonomous AI sequence builder: from a single prompt, the AI SELECTS and
-// ORDERS the user's ALREADY-SAVED templates into a multi-step sequence and
-// assigns sensible wait-days between them. It does not invent new content —
-// it reuses existing templates. Returns the wired steps for the UI to review.
 export async function generateSequenceWithAI(prompt: string): Promise<{
   name: string
   steps: Array<{ templateId: string; delayDays: number; templateName: string }>
 }> {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
+  const { orgId } = await getCurrentActor()
   const instruction = (prompt || '').trim()
   if (!instruction) throw new Error('Tell the AI what the sequence should achieve.')
 
-  const { data: tpls } = await supabase
-    .from('engage_templates')
-    .select('id, name, subject, body')
-    .eq('organization_id', orgId)
-    .order('updated_at', { ascending: false })
-  const templates = tpls ?? []
+  const tplRes = await pool.query(
+    `SELECT id, name, subject, body FROM public.engage_templates WHERE organization_id = $1 ORDER BY updated_at DESC`,
+    [orgId])
+  const templates = tplRes.rows ?? []
   if (!templates.length) {
     throw new Error('Create some templates first — the AI builds the sequence from your saved templates.')
   }
 
   const list = templates
-    .map((t, i) => `[${i}] ${String(t.name)} — subject: "${String(t.subject ?? '')}" — body: ${String(t.body ?? '').replace(/\s+/g, ' ').slice(0, 180)}`)
+    .map((t: any, i: number) => `[${i}] ${String(t.name)} — subject: "${String(t.subject ?? '')}" — body: ${String(t.body ?? '').replace(/\s+/g, ' ').slice(0, 180)}`)
     .join('\n')
   const llmPrompt = [
     'You are a B2B outbound sequence designer. From the AVAILABLE TEMPLATES below,',
@@ -761,7 +620,6 @@ export async function generateSequenceWithAI(prompt: string): Promise<{
       templateName: String(t.name),
     })
   }
-  // Fallback: if the AI returned nothing usable, seed with the first template.
   if (!steps.length) {
     steps.push({ templateId: String(templates[0].id), delayDays: 0, templateName: String(templates[0].name) })
   }
@@ -769,27 +627,16 @@ export async function generateSequenceWithAI(prompt: string): Promise<{
 }
 
 export async function deleteEngageTemplate(id: string) {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { error } = await supabase
-    .from('engage_templates')
-    .delete()
-    .eq('organization_id', orgId)
-    .eq('id', id)
-  if (error) throw new Error(error.message)
+  const { orgId } = await getCurrentActor()
+  await pool.query(`DELETE FROM public.engage_templates WHERE organization_id = $1 AND id = $2`, [orgId, id])
   revalidatePath('/engage/templates')
 }
 
 export async function getEngageSequences(): Promise<EngageSequence[]> {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { data, error } = await supabase
-    .from('engage_sequences')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-  if (error) return []
-  return (data ?? []).map((x) => ({
+  const { orgId } = await getCurrentActor()
+  const r = await pool.query(
+    `SELECT * FROM public.engage_sequences WHERE organization_id = $1 ORDER BY created_at DESC`, [orgId])
+  return (r.rows ?? []).map((x: any) => ({
     id: String(x.id),
     name: String(x.name),
     steps: Array.isArray(x.steps)
@@ -806,70 +653,39 @@ export async function getEngageSequences(): Promise<EngageSequence[]> {
 }
 
 export async function createEngageSequence(input: Omit<EngageSequence, 'id'>) {
-  const supabase = await createClient()
-  const { orgId, userId } = await getCurrentActor(supabase)
-  const { error } = await supabase.from('engage_sequences').insert({
-    organization_id: orgId,
-    created_by: userId,
-    name: input.name,
-    steps: input.steps,
-  })
-  if (error) throw new Error(error.message)
+  const { orgId, userId } = await getCurrentActor()
+  await pool.query(
+    `INSERT INTO public.engage_sequences (organization_id, created_by, name, steps) VALUES ($1,$2,$3,$4)`,
+    [orgId, userId, input.name, JSON.stringify(input.steps)])
   revalidatePath('/engage/sequences')
 }
 
 export async function updateEngageSequence(id: string, input: Omit<EngageSequence, 'id'>) {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { error } = await supabase
-    .from('engage_sequences')
-    .update({ name: input.name, steps: input.steps, updated_at: new Date().toISOString() })
-    .eq('organization_id', orgId)
-    .eq('id', id)
-  if (error) throw new Error(error.message)
+  const { orgId } = await getCurrentActor()
+  await pool.query(
+    `UPDATE public.engage_sequences SET name=$1, steps=$2, updated_at=$3 WHERE organization_id=$4 AND id=$5`,
+    [input.name, JSON.stringify(input.steps), new Date().toISOString(), orgId, id])
   revalidatePath('/engage/sequences')
 }
 
 export async function deleteEngageSequence(id: string) {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { error } = await supabase
-    .from('engage_sequences')
-    .delete()
-    .eq('organization_id', orgId)
-    .eq('id', id)
-  if (error) throw new Error(error.message)
+  const { orgId } = await getCurrentActor()
+  await pool.query(`DELETE FROM public.engage_sequences WHERE organization_id=$1 AND id=$2`, [orgId, id])
   revalidatePath('/engage/sequences')
 }
 
 export async function deleteEngageCampaign(id: string) {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  // engage_campaign_recipients cascade-delete via FK ON DELETE CASCADE.
-  const { error } = await supabase
-    .from('engage_campaigns')
-    .delete()
-    .eq('organization_id', orgId)
-    .eq('id', id)
-  if (error) throw new Error(error.message)
+  const { orgId } = await getCurrentActor()
+  await pool.query(`DELETE FROM public.engage_campaigns WHERE organization_id=$1 AND id=$2`, [orgId, id])
   revalidatePath('/engage/campaigns')
 }
 
-// Emailable prospects come from the GTM `leads_raw` table (the same source the
-// outreach_* tables reference via lead_id). The CRM `leads` table only stores
-// name + phone, so it cannot back an email campaign audience.
 export async function getEngageLeads(): Promise<EngageLead[]> {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { data, error } = await supabase
-    .from('leads_raw')
-    .select('id, contact_name, contact_email, company_name')
-    .eq('organization_id', orgId)
-    .not('contact_email', 'is', null)
-    .order('icp_score', { ascending: false, nullsFirst: false })
-    .limit(200)
-  if (error) return []
-  return (data ?? []).map((x) => ({
+  const { orgId } = await getCurrentActor()
+  const r = await pool.query(
+    `SELECT id, contact_name, contact_email, company_name FROM public.leads_raw WHERE organization_id = $1 AND contact_email IS NOT NULL ORDER BY icp_score DESC NULLS LAST LIMIT 200`,
+    [orgId])
+  return (r.rows ?? []).map((x: any) => ({
     id: String(x.id),
     name: String(x.contact_name || x.company_name || 'Unknown'),
     email: String(x.contact_email || ''),
@@ -877,11 +693,6 @@ export async function getEngageLeads(): Promise<EngageLead[]> {
   }))
 }
 
-// Aggregates real outreach engagement into Instantly-style analytics: totals,
-// unique-based rates, a per-day series, plus per-campaign and per-account
-// breakdowns. Source tables: outreach_log / outreach_opens / outreach_clicks /
-// outreach_replies / outreach_unsubscribes (shared by composer sends, Engage
-// campaigns, and the GTM Phase 3 pipeline).
 export async function getEngageAnalytics(days: number = 30): Promise<EngageAnalyticsData> {
   const empty: EngageAnalyticsData = {
     totals: {
@@ -897,10 +708,9 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
     accounts: [],
   }
 
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return empty
   }
@@ -910,38 +720,18 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
   const sinceISO = since.toISOString()
 
   const [sendsRes, opensRes, clicksRes, repliesRes, unsubsRes] = await Promise.all([
-    supabase
-      .from('outreach_log')
-      .select('sent_at, created_at, campaign_id, contact_email, status')
-      .eq('organization_id', orgId)
-      .gte('created_at', sinceISO),
-    supabase
-      .from('outreach_opens')
-      .select('opened_at, created_at, campaign_id, email')
-      .eq('organization_id', orgId)
-      .gte('created_at', sinceISO),
-    supabase
-      .from('outreach_clicks')
-      .select('clicked_at, created_at, campaign_id, email')
-      .eq('organization_id', orgId)
-      .gte('created_at', sinceISO),
-    supabase
-      .from('outreach_replies')
-      .select('replied_at, created_at, campaign_id, email, classification')
-      .eq('organization_id', orgId)
-      .gte('created_at', sinceISO),
-    supabase
-      .from('outreach_unsubscribes')
-      .select('unsubscribed_at, created_at, campaign_id, email')
-      .eq('organization_id', orgId)
-      .gte('created_at', sinceISO),
+    pool.query(`SELECT sent_at, created_at, campaign_id, contact_email AS email, status FROM public.outreach_log WHERE organization_id = $1 AND created_at >= $2`, [orgId, sinceISO]),
+    pool.query(`SELECT opened_at, created_at, campaign_id, email FROM public.outreach_opens WHERE organization_id = $1 AND created_at >= $2`, [orgId, sinceISO]),
+    pool.query(`SELECT clicked_at, created_at, campaign_id, email FROM public.outreach_clicks WHERE organization_id = $1 AND created_at >= $2`, [orgId, sinceISO]),
+    pool.query(`SELECT replied_at, created_at, campaign_id, email, classification FROM public.outreach_replies WHERE organization_id = $1 AND created_at >= $2`, [orgId, sinceISO]),
+    pool.query(`SELECT unsubscribed_at, created_at, campaign_id, email FROM public.outreach_unsubscribes WHERE organization_id = $1 AND created_at >= $2`, [orgId, sinceISO]),
   ])
 
-  const sends = (sendsRes.data ?? []).filter((s) => (s.status ?? 'sent') === 'sent')
-  const opens = opensRes.data ?? []
-  const clicks = clicksRes.data ?? []
-  const replies = repliesRes.data ?? []
-  const unsubs = unsubsRes.data ?? []
+  const sends = (sendsRes.rows ?? []).filter((s: any) => (s.status ?? 'sent') === 'sent')
+  const opens = opensRes.rows ?? []
+  const clicks = clicksRes.rows ?? []
+  const replies = repliesRes.rows ?? []
+  const unsubs = unsubsRes.rows ?? []
 
   const uniqueBy = (rows: Array<{ email?: string | null }>) =>
     new Set(rows.map((r) => String(r.email ?? '').toLowerCase()).filter(Boolean)).size
@@ -956,7 +746,7 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
     replies: replies.length,
     uniqueReplies: uniqueBy(replies),
     unsubscribes: unsubs.length,
-    opportunities: replies.filter((r) => POSITIVE.has(String(r.classification ?? ''))).length,
+    opportunities: replies.filter((r: any) => POSITIVE.has(String(r.classification ?? ''))).length,
   }
 
   type Bucket = { sends: number; opens: number; clicks: number; replies: number; unsubscribes: number }
@@ -969,41 +759,29 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
     if (!byDate[date]) byDate[date] = { sends: 0, opens: 0, clicks: 0, replies: 0, unsubscribes: 0 }
     byDate[date][key] += 1
   }
-  sends.forEach((r) => addToBucket(r.sent_at ?? r.created_at, 'sends'))
-  opens.forEach((r) => addToBucket(r.opened_at ?? r.created_at, 'opens'))
-  clicks.forEach((r) => addToBucket(r.clicked_at ?? r.created_at, 'clicks'))
-  replies.forEach((r) => addToBucket(r.replied_at ?? r.created_at, 'replies'))
-  unsubs.forEach((r) => addToBucket(r.unsubscribed_at ?? r.created_at, 'unsubscribes'))
+  sends.forEach((r: any) => addToBucket(r.sent_at ?? r.created_at, 'sends'))
+  opens.forEach((r: any) => addToBucket(r.opened_at ?? r.created_at, 'opens'))
+  clicks.forEach((r: any) => addToBucket(r.clicked_at ?? r.created_at, 'clicks'))
+  replies.forEach((r: any) => addToBucket(r.replied_at ?? r.created_at, 'replies'))
+  unsubs.forEach((r: any) => addToBucket(r.unsubscribed_at ?? r.created_at, 'unsubscribes'))
 
   const timeSeries = Object.entries(byDate)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, bucket]) => ({ date, ...bucket }))
 
-  // ---- Campaign breakdown ----------------------------------------------------
   const [campaignsRes, recipientsRes] = await Promise.all([
-    supabase
-      .from('engage_campaigns')
-      .select('id, name, status')
-      .eq('organization_id', orgId),
-    supabase
-      .from('engage_campaign_recipients')
-      .select('campaign_id, status')
-      .eq('organization_id', orgId),
+    pool.query(`SELECT id, name, status FROM public.engage_campaigns WHERE organization_id = $1`, [orgId]),
+    pool.query(`SELECT campaign_id, status FROM public.engage_campaign_recipients WHERE organization_id = $1`, [orgId]),
   ])
 
   const campaignNames = new Map<string, { name: string; status: string }>()
-  for (const c of campaignsRes.data ?? []) {
+  for (const c of campaignsRes.rows ?? []) {
     campaignNames.set(String(c.id), { name: String(c.name), status: String(c.status) })
   }
 
   type CampAgg = {
-    sent: number
-    opens: number
-    openEmails: Set<string>
-    clicks: number
-    clickEmails: Set<string>
-    replies: number
-    opportunities: number
+    sent: number; opens: number; openEmails: Set<string>
+    clicks: number; clickEmails: Set<string>; replies: number; opportunities: number
   }
   const campAgg = new Map<string, CampAgg>()
   const aggFor = (cid: string): CampAgg => {
@@ -1014,20 +792,20 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
     }
     return agg
   }
-  sends.forEach((r) => { if (r.campaign_id) aggFor(String(r.campaign_id)).sent += 1 })
-  opens.forEach((r) => {
+  sends.forEach((r: any) => { if (r.campaign_id) aggFor(String(r.campaign_id)).sent += 1 })
+  opens.forEach((r: any) => {
     if (!r.campaign_id) return
     const a = aggFor(String(r.campaign_id))
     a.opens += 1
     if (r.email) a.openEmails.add(String(r.email).toLowerCase())
   })
-  clicks.forEach((r) => {
+  clicks.forEach((r: any) => {
     if (!r.campaign_id) return
     const a = aggFor(String(r.campaign_id))
     a.clicks += 1
     if (r.email) a.clickEmails.add(String(r.email).toLowerCase())
   })
-  replies.forEach((r) => {
+  replies.forEach((r: any) => {
     if (!r.campaign_id) return
     const a = aggFor(String(r.campaign_id))
     a.replies += 1
@@ -1035,7 +813,7 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
   })
 
   const recipientCounts = new Map<string, { total: number; completed: number; failed: number }>()
-  for (const r of recipientsRes.data ?? []) {
+  for (const r of recipientsRes.rows ?? []) {
     const cid = String(r.campaign_id)
     const entry = recipientCounts.get(cid) ?? { total: 0, completed: 0, failed: 0 }
     entry.total += 1
@@ -1066,13 +844,11 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
     }
   }).sort((x, y) => y.sent - x.sent)
 
-  // ---- Account breakdown -------------------------------------------------------
-  const { data: mailboxes } = await supabase
-    .from('engage_mailboxes')
-    .select('email, provider, connected_at, last_synced_at, gmail_watch_expiration')
-    .eq('organization_id', orgId)
+  const mailboxRes = await pool.query(
+    `SELECT email, provider, connected_at, last_synced_at, gmail_watch_expiration FROM public.engage_mailboxes WHERE organization_id = $1`,
+    [orgId])
 
-  const accounts: EngageAccountStats[] = (mailboxes ?? []).map((mb) => ({
+  const accounts: EngageAccountStats[] = (mailboxRes.rows ?? []).map((mb: any) => ({
     email: String(mb.email),
     provider: String(mb.provider ?? 'gmail'),
     connectedAt: mb.connected_at ? String(mb.connected_at) : null,
@@ -1080,7 +856,6 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
     watchActive: Boolean(
       mb.gmail_watch_expiration && new Date(String(mb.gmail_watch_expiration)).getTime() > Date.now(),
     ),
-    // Single-mailbox setup: org-wide counters map 1:1 to the account.
     sent: totals.sends,
     opens: totals.opens,
     replies: totals.replies,
@@ -1099,27 +874,17 @@ export async function getEngageAnalytics(days: number = 30): Promise<EngageAnaly
   }
 }
 
-// --------------------------------------------------------------------------- //
-// Daily GTM automation schedule (3 AM scrape -> enrich -> score -> send)
-// --------------------------------------------------------------------------- //
-// One row per organization in gtm_schedules; the gtm_service scheduler loop
-// reads it every minute and fires the phase pipeline at the configured time.
-
 export async function getGtmSchedule(): Promise<GtmScheduleConfig | null> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return null
   }
-  const { data } = await supabase
-    .from('gtm_schedules')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
+  const r = await pool.query(
+    `SELECT * FROM public.gtm_schedules WHERE organization_id = $1 ORDER BY created_at ASC LIMIT 1`,
+    [orgId])
+  const data = r.rows[0]
   if (!data) return null
   return {
     id: String(data.id),
@@ -1137,86 +902,68 @@ export async function getGtmSchedule(): Promise<GtmScheduleConfig | null> {
 }
 
 export async function saveGtmSchedule(input: Omit<GtmScheduleConfig, 'lastRunDate' | 'lastRunStatus'>) {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const payload = {
-    organization_id: orgId,
-    icp_id: input.icpId,
-    enabled: input.enabled,
-    run_hour: Math.min(23, Math.max(0, Math.trunc(input.runHour))),
-    run_minute: Math.min(59, Math.max(0, Math.trunc(input.runMinute))),
-    timezone: input.timezone || 'Asia/Kolkata',
-    leads_per_day: Math.min(500, Math.max(1, Math.trunc(input.leadsPerDay))),
-    sender: input.sender,
-    auto_send: input.autoSend,
-    updated_at: new Date().toISOString(),
+  const { orgId } = await getCurrentActor()
+  const now = new Date().toISOString()
+  const icp_id = input.icpId
+  const enabled = input.enabled
+  const run_hour = Math.min(23, Math.max(0, Math.trunc(input.runHour)))
+  const run_minute = Math.min(59, Math.max(0, Math.trunc(input.runMinute)))
+  const timezone = input.timezone || 'Asia/Kolkata'
+  const leads_per_day = Math.min(500, Math.max(1, Math.trunc(input.leadsPerDay)))
+  const sender = input.sender
+  const auto_send = input.autoSend
+
+  const existingRes = await pool.query(
+    `SELECT id FROM public.gtm_schedules WHERE organization_id = $1 LIMIT 1`, [orgId])
+  const existing = existingRes.rows[0]
+
+  if (existing) {
+    await pool.query(
+      `UPDATE public.gtm_schedules SET icp_id=$1, enabled=$2, run_hour=$3, run_minute=$4, timezone=$5, leads_per_day=$6, sender=$7, auto_send=$8, updated_at=$9 WHERE id=$10`,
+      [icp_id, enabled, run_hour, run_minute, timezone, leads_per_day, sender, auto_send, now, existing.id])
+  } else {
+    await pool.query(
+      `INSERT INTO public.gtm_schedules (organization_id, icp_id, enabled, run_hour, run_minute, timezone, leads_per_day, sender, auto_send, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [orgId, icp_id, enabled, run_hour, run_minute, timezone, leads_per_day, sender, auto_send, now])
   }
-  const { data: existing } = await supabase
-    .from('gtm_schedules')
-    .select('id')
-    .eq('organization_id', orgId)
-    .limit(1)
-    .maybeSingle()
-  const { error } = existing
-    ? await supabase.from('gtm_schedules').update(payload).eq('id', existing.id)
-    : await supabase.from('gtm_schedules').insert(payload)
-  if (error) throw new Error(error.message)
   revalidatePath('/engage/settings')
 }
 
 export async function getIcpOptions(): Promise<Array<{ id: number; name: string }>> {
-  const supabase = await createClient()
   try {
-    await getCurrentActor(supabase)
+    await getCurrentActor()
   } catch {
     return []
   }
-  const { data } = await supabase
-    .from('icp_profiles')
-    .select('id, name')
-    .order('id', { ascending: true })
-    .limit(100)
-  return (data ?? []).map((x) => ({ id: Number(x.id), name: String(x.name ?? `ICP ${x.id}`) }))
+  const r = await pool.query(`SELECT id, name FROM public.icp_profiles ORDER BY id ASC LIMIT 100`)
+  return (r.rows ?? []).map((x: any) => ({ id: Number(x.id), name: String(x.name ?? `ICP ${x.id}`) }))
 }
-
-// --------------------------------------------------------------------------- //
-// Unibox metadata (Instantly-style filters: Status / Campaign / Inbox)
-// --------------------------------------------------------------------------- //
-// Maps Gmail threads to the campaign + lead interest-status they belong to, so
-// the inbox can be filtered by lead label (Interested, Won, …), by campaign,
-// and by mailbox — exactly like Instantly's Unibox left rail.
-// NB: types live in '@/types/engage' — a 'use server' module may only export
-// async functions, not types.
 
 export async function getUniboxMeta(): Promise<import('@/types/engage').UniboxMeta> {
   const empty: import('@/types/engage').UniboxMeta = { byThread: {}, campaigns: [], mailboxes: [], statusCounts: {} }
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return empty
   }
 
   const [recipientsRes, campaignsRes, mailboxesRes] = await Promise.all([
-    supabase
-      .from('engage_campaign_recipients')
-      .select('id, campaign_id, gmail_thread_id, interest_status, status, last_error')
-      .eq('organization_id', orgId)
-      .not('gmail_thread_id', 'is', null),
-    supabase.from('engage_campaigns').select('id, name').eq('organization_id', orgId).order('created_at', { ascending: false }),
-    supabase.from('engage_mailboxes').select('email').eq('organization_id', orgId),
+    pool.query(
+      `SELECT id, campaign_id, gmail_thread_id, interest_status, status, last_error FROM public.engage_campaign_recipients WHERE organization_id = $1 AND gmail_thread_id IS NOT NULL`,
+      [orgId]),
+    pool.query(`SELECT id, name FROM public.engage_campaigns WHERE organization_id = $1 ORDER BY created_at DESC`, [orgId]),
+    pool.query(`SELECT email FROM public.engage_mailboxes WHERE organization_id = $1`, [orgId]),
   ])
 
   const nameById = new Map<string, string>()
-  for (const c of campaignsRes.data ?? []) nameById.set(String(c.id), String(c.name))
+  for (const c of campaignsRes.rows ?? []) nameById.set(String(c.id), String(c.name))
 
   const byThread: Record<string, import('@/types/engage').UniboxThreadMeta> = {}
   const statusCounts: Record<string, number> = {}
-  for (const r of recipientsRes.data ?? []) {
+  for (const r of recipientsRes.rows ?? []) {
     const threadId = String(r.gmail_thread_id)
     const status = (r.interest_status ?? 'lead') as import('@/types/engage').InterestStatus
-    // engage-sync marks a bounced recipient status='stopped', last_error='bounced'.
     const bounced = r.status === 'stopped' && r.last_error === 'bounced'
     byThread[threadId] = {
       campaignId: r.campaign_id ? String(r.campaign_id) : null,
@@ -1230,60 +977,36 @@ export async function getUniboxMeta(): Promise<import('@/types/engage').UniboxMe
 
   return {
     byThread,
-    campaigns: (campaignsRes.data ?? []).map((c) => ({ id: String(c.id), name: String(c.name) })),
-    mailboxes: (mailboxesRes.data ?? []).map((m) => ({ email: String(m.email) })),
+    campaigns: (campaignsRes.rows ?? []).map((c: any) => ({ id: String(c.id), name: String(c.name) })),
+    mailboxes: (mailboxesRes.rows ?? []).map((m: any) => ({ email: String(m.email) })),
     statusCounts,
   }
 }
 
-// Set a lead's interest label from the Unibox (by thread).
 export async function setThreadInterest(threadId: string, status: import('@/types/engage').InterestStatus) {
-  const supabase = await createClient()
-  const { orgId } = await getCurrentActor(supabase)
-  const { error } = await supabase
-    .from('engage_campaign_recipients')
-    .update({ interest_status: status, updated_at: new Date().toISOString() })
-    .eq('organization_id', orgId)
-    .eq('gmail_thread_id', threadId)
-  if (error) throw new Error(error.message)
+  const { orgId } = await getCurrentActor()
+  await pool.query(
+    `UPDATE public.engage_campaign_recipients SET interest_status=$1, updated_at=$2 WHERE organization_id=$3 AND gmail_thread_id=$4`,
+    [status, new Date().toISOString(), orgId, threadId])
   revalidatePath('/engage/inbox')
 }
 
-// --------------------------------------------------------------------------- //
-// Conversations (real two-way threads)
-// --------------------------------------------------------------------------- //
-// Source tables: `conversations` (thread per lead), `messages` (turns) and
-// `ai_insights` (intent / sentiment / suggested reply). `conversations.lead_id`
-// references the CRM `leads` table (name + phone). Everything is org-scoped in
-// this layer because RLS is disabled project-wide (same convention as crm.ts).
-
-
-// Email reply conversations: surface Gmail threads where a lead replied to our
-// outreach as ConversationThread items, so email replies show up in the
-// Conversations page alongside WhatsApp chats (not only in the Unibox).
 export async function getEmailConversations(): Promise<ConversationThread[]> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return []
   }
 
-  // Threads that received a reply (outreach_replies), with classification.
-  const { data: repliesRaw } = await supabase
-    .from('outreach_replies')
-    .select('thread_id, email, classification, replied_at')
-    .eq('organization_id', orgId)
-    .not('thread_id', 'is', null)
-    .order('replied_at', { ascending: false })
-    .limit(100)
-  // Defensively drop bounce/mailer-daemon "replies" — only real human replies
-  // become conversations.
-  const replies = (repliesRaw ?? []).filter((r) => !/mailer-daemon|postmaster|no-?reply/i.test(String(r.email ?? '')))
+  const repliesRawRes = await pool.query(
+    `SELECT thread_id, email, classification, replied_at FROM public.outreach_replies WHERE organization_id = $1 AND thread_id IS NOT NULL ORDER BY replied_at DESC LIMIT 100`,
+    [orgId])
+  const repliesRaw = repliesRawRes.rows ?? []
+  const replies = repliesRaw.filter((r: any) => !/mailer-daemon|postmaster|no-?reply/i.test(String(r.email ?? '')))
   if (!replies.length) return []
 
-  const threadIds: string[] = Array.from(new Set<string>(replies.map((r) => String(r.thread_id))))
+  const threadIds: string[] = Array.from(new Set<string>(replies.map((r: any) => String(r.thread_id))))
   const replyByThread = new Map<string, { classification: string | null; repliedAt: string | null; email: string }>()
   for (const r of replies) {
     const t = String(r.thread_id)
@@ -1292,23 +1015,17 @@ export async function getEmailConversations(): Promise<ConversationThread[]> {
     }
   }
 
-  // The emails in those threads (both directions) + recipient names.
   const [emailsRes, recipientsRes] = await Promise.all([
-    supabase
-      .from('engage_emails')
-      .select('gmail_message_id, gmail_thread_id, from_email, to_email, subject, snippet, direction, received_at, unread')
-      .eq('organization_id', orgId)
-      .in('gmail_thread_id', threadIds)
-      .order('received_at', { ascending: true }),
-    supabase
-      .from('engage_campaign_recipients')
-      .select('gmail_thread_id, name, company, interest_status')
-      .eq('organization_id', orgId)
-      .in('gmail_thread_id', threadIds),
+    pool.query(
+      `SELECT gmail_message_id, gmail_thread_id, from_email, to_email, subject, snippet, direction, received_at, unread FROM public.engage_emails WHERE organization_id = $1 AND gmail_thread_id = ANY($2) ORDER BY received_at ASC`,
+      [orgId, threadIds]),
+    pool.query(
+      `SELECT gmail_thread_id, name, company, interest_status FROM public.engage_campaign_recipients WHERE organization_id = $1 AND gmail_thread_id = ANY($2)`,
+      [orgId, threadIds]),
   ])
 
   const recipientByThread = new Map<string, { name: string; company: string; interest: string }>()
-  for (const r of recipientsRes.data ?? []) {
+  for (const r of recipientsRes.rows ?? []) {
     if (r.gmail_thread_id) {
       recipientByThread.set(String(r.gmail_thread_id), {
         name: String(r.name ?? ''),
@@ -1320,7 +1037,7 @@ export async function getEmailConversations(): Promise<ConversationThread[]> {
 
   const emailsByThread = new Map<string, ConversationMessage[]>()
   const lastReceivedByThread = new Map<string, string>()
-  for (const e of emailsRes.data ?? []) {
+  for (const e of emailsRes.rows ?? []) {
     const t = String(e.gmail_thread_id)
     const list = emailsByThread.get(t) ?? []
     const sent = e.direction === 'sent'
@@ -1365,44 +1082,38 @@ export async function getEmailConversations(): Promise<ConversationThread[]> {
 }
 
 export async function getConversations(): Promise<ConversationThread[]> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return []
   }
 
-  const { data: convos, error } = await supabase
-    .from('conversations')
-    .select(
-      'id, unread_count, last_customer_message_at, created_at, lead:leads(name, phone_number)'
-    )
-    .eq('organization_id', orgId)
-    .order('last_customer_message_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false })
-    .limit(100)
-  if (error || !convos || convos.length === 0) return []
+  const convosRes = await pool.query(
+    `SELECT c.id, c.unread_count, c.last_customer_message_at, c.created_at,
+       json_build_object('name', l.name, 'phone_number', l.phone_number) AS lead
+     FROM public.conversations c
+     LEFT JOIN public.leads l ON l.id = c.lead_id
+     WHERE c.organization_id = $1
+     ORDER BY c.last_customer_message_at DESC NULLS LAST, c.created_at DESC
+     LIMIT 100`,
+    [orgId])
+  const convos = convosRes.rows ?? []
+  if (!convos.length) return []
 
-  const conversationIds = convos.map((c) => String(c.id))
+  const conversationIds = convos.map((c: any) => String(c.id))
 
   const [messagesRes, insightsRes] = await Promise.all([
-    supabase
-      .from('messages')
-      .select('id, conversation_id, sender_type, message_type, content, media_url, status, created_at')
-      .eq('organization_id', orgId)
-      .in('conversation_id', conversationIds)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('ai_insights')
-      .select('conversation_id, intent, sentiment, suggested_reply, urgency, created_at')
-      .eq('organization_id', orgId)
-      .in('conversation_id', conversationIds)
-      .order('created_at', { ascending: false }),
+    pool.query(
+      `SELECT id, conversation_id, sender_type, message_type, content, media_url, status, created_at FROM public.messages WHERE organization_id = $1 AND conversation_id = ANY($2) ORDER BY created_at ASC`,
+      [orgId, conversationIds]),
+    pool.query(
+      `SELECT conversation_id, intent, sentiment, suggested_reply, urgency, created_at FROM public.ai_insights WHERE organization_id = $1 AND conversation_id = ANY($2) ORDER BY created_at DESC`,
+      [orgId, conversationIds]),
   ])
 
   const messagesByConvo = new Map<string, ConversationMessage[]>()
-  for (const m of messagesRes.data ?? []) {
+  for (const m of messagesRes.rows ?? []) {
     const key = String(m.conversation_id)
     const list = messagesByConvo.get(key) ?? []
     list.push({
@@ -1417,9 +1128,8 @@ export async function getConversations(): Promise<ConversationThread[]> {
     messagesByConvo.set(key, list)
   }
 
-  // ai_insights ordered newest-first; keep the latest insight per conversation.
   const insightByConvo = new Map<string, ConversationInsight>()
-  for (const i of insightsRes.data ?? []) {
+  for (const i of insightsRes.rows ?? []) {
     const key = String(i.conversation_id)
     if (insightByConvo.has(key)) continue
     insightByConvo.set(key, {
@@ -1430,8 +1140,8 @@ export async function getConversations(): Promise<ConversationThread[]> {
     })
   }
 
-  return convos.map((c) => {
-    const lead = Array.isArray(c.lead) ? c.lead[0] : c.lead
+  return convos.map((c: any) => {
+    const lead = c.lead
     const id = String(c.id)
     return {
       id,
@@ -1446,124 +1156,100 @@ export async function getConversations(): Promise<ConversationThread[]> {
   })
 }
 
-// --------------------------------------------------------------------------- //
-// Unsubscribes
-// --------------------------------------------------------------------------- //
-// Source table: `outreach_unsubscribes` (Phase 3 Agent 14 engagement tracking).
-// Read-only list surfaced in Engage Settings so operators can audit suppressed
-// recipients. Org-scoped in this layer (RLS disabled project-wide).
-
-
 export async function getUnsubscribes(): Promise<UnsubscribeRow[]> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return []
   }
 
-  const { data, error } = await supabase
-    .from('outreach_unsubscribes')
-    .select('email, campaign_id, unsubscribed_at, created_at')
-    .eq('organization_id', orgId)
-    .order('unsubscribed_at', { ascending: false, nullsFirst: false })
-    .limit(500)
-  if (error) return []
+  const r = await pool.query(
+    `SELECT email, campaign_id, unsubscribed_at, created_at FROM public.outreach_unsubscribes WHERE organization_id = $1 ORDER BY unsubscribed_at DESC NULLS LAST LIMIT 500`,
+    [orgId])
 
-  return (data ?? []).map((x) => ({
+  return (r.rows ?? []).map((x: any) => ({
     email: String(x.email ?? ''),
     campaignId: x.campaign_id ? String(x.campaign_id) : null,
     unsubscribedAt: x.unsubscribed_at ? String(x.unsubscribed_at) : x.created_at ? String(x.created_at) : null,
   }))
 }
 
-// =========================================================================
-// Email Accounts dashboard (Instantly-style)
-// =========================================================================
-
 export async function getEmailAccounts(): Promise<EmailAccount[]> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return []
   }
 
-  const { data: mailboxes } = await supabase
-    .from('engage_mailboxes')
-    .select(`
-      id, email, provider, status, connected_at, last_synced_at,
-      gmail_watch_expiration, daily_send_limit,
-      warmup_enabled, warmup_started_at, warmup_daily_limit,
-      warmup_reply_rate, warmup_open_rate,
-      warmup_spam_rescue_pct, warmup_mark_important_pct,
-      mailbox_tags ( tag_id, account_tags ( id, name, color ) )
-    `)
-    .eq('organization_id', orgId)
-    .order('connected_at', { ascending: false })
+  const mailboxesRes = await pool.query(
+    `SELECT em.id, em.email, em.provider, em.status, em.connected_at, em.last_synced_at,
+       em.gmail_watch_expiration, em.daily_send_limit,
+       em.warmup_enabled, em.warmup_started_at, em.warmup_daily_limit,
+       em.warmup_reply_rate, em.warmup_open_rate,
+       em.warmup_spam_rescue_pct, em.warmup_mark_important_pct,
+       COALESCE(
+         json_agg(json_build_object('tag_id', mt.tag_id, 'account_tags', json_build_object('id', at.id, 'name', at.name, 'color', at.color)))
+         FILTER (WHERE mt.tag_id IS NOT NULL),
+         '[]'::json
+       ) AS mailbox_tags
+     FROM public.engage_mailboxes em
+     LEFT JOIN public.mailbox_tags mt ON mt.mailbox_id = em.id
+     LEFT JOIN public.account_tags at ON at.id = mt.tag_id
+     WHERE em.organization_id = $1
+     GROUP BY em.id
+     ORDER BY em.connected_at DESC`,
+    [orgId])
 
-  if (!mailboxes?.length) return []
+  const mailboxes = mailboxesRes.rows ?? []
+  if (!mailboxes.length) return []
 
-  // Warmup emails sent in last 7 days per mailbox
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-  const { data: warmupRows } = await supabase
-    .from('engage_warmup_log')
-    .select('mailbox_id, placed_inbox')
-    .eq('organization_id', orgId)
-    .gte('sent_at', sevenDaysAgo)
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+
+  const [warmupRes, todaySendsRes, analyticsRes] = await Promise.all([
+    pool.query(
+      `SELECT mailbox_id, placed_inbox FROM public.engage_warmup_log WHERE organization_id = $1 AND sent_at >= $2`,
+      [orgId, sevenDaysAgo]),
+    pool.query(
+      `SELECT mailbox_id FROM public.outreach_log WHERE organization_id = $1 AND status = 'sent' AND sent_at >= $2 AND mailbox_id IS NOT NULL`,
+      [orgId, todayStart.toISOString()]),
+    pool.query(
+      `SELECT mailbox_id, status FROM public.outreach_log WHERE organization_id = $1 AND mailbox_id IS NOT NULL`,
+      [orgId]),
+  ])
 
   const warmupByMailbox: Record<string, { total: number; inbox: number }> = {}
-  for (const w of warmupRows ?? []) {
+  for (const w of warmupRes.rows ?? []) {
     const key = String(w.mailbox_id)
     if (!warmupByMailbox[key]) warmupByMailbox[key] = { total: 0, inbox: 0 }
     warmupByMailbox[key].total++
     if (w.placed_inbox === true) warmupByMailbox[key].inbox++
   }
 
-  // Sends today per mailbox (forward-tracked via mailbox_id on outreach_log)
-  const todayStart = new Date()
-  todayStart.setHours(0, 0, 0, 0)
-  const { data: todaySends } = await supabase
-    .from('outreach_log')
-    .select('mailbox_id')
-    .eq('organization_id', orgId)
-    .eq('status', 'sent')
-    .gte('sent_at', todayStart.toISOString())
-    .not('mailbox_id', 'is', null)
-
   const sentTodayByMailbox: Record<string, number> = {}
-  for (const s of todaySends ?? []) {
+  for (const s of todaySendsRes.rows ?? []) {
     const key = String(s.mailbox_id)
     sentTodayByMailbox[key] = (sentTodayByMailbox[key] ?? 0) + 1
   }
 
-  // Campaign analytics per mailbox (all-time open+reply for combined score)
-  const { data: analyticsRows } = await supabase
-    .from('outreach_log')
-    .select('mailbox_id, status')
-    .eq('organization_id', orgId)
-    .not('mailbox_id', 'is', null)
-
   const analyticsByMailbox: Record<string, { sent: number; opens: number; replies: number; clicks: number }> = {}
-  for (const r of analyticsRows ?? []) {
+  for (const r of analyticsRes.rows ?? []) {
     const key = String(r.mailbox_id)
     if (!analyticsByMailbox[key]) analyticsByMailbox[key] = { sent: 0, opens: 0, replies: 0, clicks: 0 }
     analyticsByMailbox[key].sent++
   }
 
-  return mailboxes.map((mb) => {
+  return mailboxes.map((mb: any) => {
     const id = String(mb.id)
     const warmup = warmupByMailbox[id] ?? { total: 0, inbox: 0 }
-    const healthScore =
-      warmup.total > 0 ? Math.round((warmup.inbox / warmup.total) * 100) : null
+    const healthScore = warmup.total > 0 ? Math.round((warmup.inbox / warmup.total) * 100) : null
     const analytics = analyticsByMailbox[id] ?? { sent: 0, opens: 0, replies: 0, clicks: 0 }
     const combinedScore =
       analytics.sent >= 100
-        ? Math.round(
-            ((analytics.opens / analytics.sent) * 0.5 + (analytics.replies / analytics.sent) * 0.5) * 100,
-          )
+        ? Math.round(((analytics.opens / analytics.sent) * 0.5 + (analytics.replies / analytics.sent) * 0.5) * 100)
         : null
 
     const rawTags = (mb.mailbox_tags as any[]) ?? []
@@ -1580,8 +1266,7 @@ export async function getEmailAccounts(): Promise<EmailAccount[]> {
       connectedAt: mb.connected_at ? String(mb.connected_at) : null,
       lastSyncedAt: mb.last_synced_at ? String(mb.last_synced_at) : null,
       watchActive: Boolean(
-        mb.gmail_watch_expiration &&
-          new Date(String(mb.gmail_watch_expiration)).getTime() > Date.now(),
+        mb.gmail_watch_expiration && new Date(String(mb.gmail_watch_expiration)).getTime() > Date.now(),
       ),
       dailySendLimit: Number(mb.daily_send_limit ?? 50),
       sentToday: sentTodayByMailbox[id] ?? 0,
@@ -1608,10 +1293,9 @@ export async function updateAccountSettings(
   id: string,
   settings: AccountSettingsInput,
 ): Promise<{ error?: string }> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return { error: 'Unauthorized' }
   }
@@ -1631,15 +1315,18 @@ export async function updateAccountSettings(
   if (settings.warmupSpamRescuePct !== undefined) patch.warmup_spam_rescue_pct = settings.warmupSpamRescuePct
   if (settings.warmupMarkImportantPct !== undefined) patch.warmup_mark_important_pct = settings.warmupMarkImportantPct
 
-  const { error } = await supabase
-    .from('engage_mailboxes')
-    .update(patch)
-    .eq('id', id)
-    .eq('organization_id', orgId)
-
-  if (error) return { error: error.message }
-  revalidatePath('/engage/accounts')
-  return {}
+  try {
+    const keys = Object.keys(patch)
+    const vals = Object.values(patch)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.engage_mailboxes SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+      [...vals, id, orgId])
+    revalidatePath('/engage/accounts')
+    return {}
+  } catch (err: any) {
+    return { error: err.message }
+  }
 }
 
 export async function bulkUpdateAccounts(
@@ -1647,10 +1334,9 @@ export async function bulkUpdateAccounts(
   action: 'enable_warmup' | 'pause_warmup' | 'unpause' | 'pause',
 ): Promise<{ error?: string }> {
   if (!ids.length) return {}
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return { error: 'Unauthorized' }
   }
@@ -1666,33 +1352,30 @@ export async function bulkUpdateAccounts(
     patch = { ...patch, status: 'paused' }
   }
 
-  const { error } = await supabase
-    .from('engage_mailboxes')
-    .update(patch)
-    .in('id', ids)
-    .eq('organization_id', orgId)
-
-  if (error) return { error: error.message }
-  revalidatePath('/engage/accounts')
-  return {}
+  try {
+    const keys = Object.keys(patch)
+    const vals = Object.values(patch)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.engage_mailboxes SET ${sets} WHERE id = ANY($${keys.length + 1}) AND organization_id = $${keys.length + 2}`,
+      [...vals, ids, orgId])
+    revalidatePath('/engage/accounts')
+    return {}
+  } catch (err: any) {
+    return { error: err.message }
+  }
 }
 
 export async function getAccountTags(): Promise<AccountTag[]> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return []
   }
-
-  const { data } = await supabase
-    .from('account_tags')
-    .select('id, name, color')
-    .eq('organization_id', orgId)
-    .order('name')
-
-  return (data ?? []).map((t) => ({
+  const r = await pool.query(
+    `SELECT id, name, color FROM public.account_tags WHERE organization_id = $1 ORDER BY name`, [orgId])
+  return (r.rows ?? []).map((t: any) => ({
     id: String(t.id),
     name: String(t.name),
     color: String(t.color ?? '#6366f1'),
@@ -1703,23 +1386,21 @@ export async function createAccountTag(
   name: string,
   color = '#6366f1',
 ): Promise<{ tag?: AccountTag; error?: string }> {
-  const supabase = await createClient()
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor(supabase))
+    ;({ orgId } = await getCurrentActor())
   } catch {
     return { error: 'Unauthorized' }
   }
-
-  const { data, error } = await supabase
-    .from('account_tags')
-    .insert({ organization_id: orgId, name: name.trim(), color })
-    .select('id, name, color')
-    .single()
-
-  if (error) return { error: error.message }
-  revalidatePath('/engage/accounts')
-  return { tag: { id: String(data.id), name: String(data.name), color: String(data.color) } }
+  try {
+    const r = await pool.query(
+      `INSERT INTO public.account_tags (organization_id, name, color) VALUES ($1,$2,$3) RETURNING id, name, color`,
+      [orgId, name.trim(), color])
+    revalidatePath('/engage/accounts')
+    return { tag: { id: String(r.rows[0].id), name: String(r.rows[0].name), color: String(r.rows[0].color) } }
+  } catch (err: any) {
+    return { error: err.message }
+  }
 }
 
 export async function applyTagsToAccounts(
@@ -1727,45 +1408,43 @@ export async function applyTagsToAccounts(
   tagIds: string[],
 ): Promise<{ error?: string }> {
   if (!accountIds.length || !tagIds.length) return {}
-  const supabase = await createClient()
   try {
-    await getCurrentActor(supabase)
+    await getCurrentActor()
   } catch {
     return { error: 'Unauthorized' }
   }
-
-  const rows = accountIds.flatMap((mailboxId) =>
-    tagIds.map((tagId) => ({ mailbox_id: mailboxId, tag_id: tagId })),
-  )
-  const { error } = await supabase.from('mailbox_tags').upsert(rows, { onConflict: 'mailbox_id,tag_id' })
-  if (error) return { error: error.message }
-  revalidatePath('/engage/accounts')
-  return {}
+  try {
+    for (const mailboxId of accountIds) {
+      for (const tagId of tagIds) {
+        await pool.query(
+          `INSERT INTO public.mailbox_tags (mailbox_id, tag_id) VALUES ($1,$2) ON CONFLICT (mailbox_id, tag_id) DO NOTHING`,
+          [mailboxId, tagId])
+      }
+    }
+    revalidatePath('/engage/accounts')
+    return {}
+  } catch (err: any) {
+    return { error: err.message }
+  }
 }
 
 export async function removeTagFromAccount(
   accountId: string,
   tagId: string,
 ): Promise<{ error?: string }> {
-  const supabase = await createClient()
   try {
-    await getCurrentActor(supabase)
+    await getCurrentActor()
   } catch {
     return { error: 'Unauthorized' }
   }
-
-  const { error } = await supabase
-    .from('mailbox_tags')
-    .delete()
-    .eq('mailbox_id', accountId)
-    .eq('tag_id', tagId)
-
-  if (error) return { error: error.message }
-  revalidatePath('/engage/accounts')
-  return {}
+  try {
+    await pool.query(`DELETE FROM public.mailbox_tags WHERE mailbox_id=$1 AND tag_id=$2`, [accountId, tagId])
+    revalidatePath('/engage/accounts')
+    return {}
+  } catch (err: any) {
+    return { error: err.message }
+  }
 }
-
-// SMTP account connection
 
 function buildSmtpTransport(input: {
   smtpHost: string
@@ -1809,11 +1488,10 @@ export async function connectSmtpAccount(input: {
   imapHost?: string
   imapPort?: number
 }): Promise<{ error?: string }> {
-  const supabase = await createClient()
   let userId: string
   let orgId: string
   try {
-    ;({ userId, orgId } = await getCurrentActor(supabase))
+    ;({ userId, orgId } = await getCurrentActor())
   } catch {
     return { error: 'Unauthorized' }
   }
@@ -1828,30 +1506,24 @@ export async function connectSmtpAccount(input: {
   if (!test.ok) return { error: test.error ?? 'SMTP connection failed' }
 
   const now = new Date().toISOString()
-  const { error: upsertError } = await supabase.from('engage_mailboxes').upsert(
-    {
-      user_id: userId,
-      organization_id: orgId,
-      provider: 'smtp',
-      email: input.smtpUser,
-      smtp_host: input.smtpHost,
-      smtp_port: input.smtpPort,
-      smtp_user: input.smtpUser,
-      smtp_pass: input.smtpPass,
-      smtp_from_name: input.fromName,
-      smtp_security: input.smtpSecurity,
-      imap_host: input.imapHost ?? null,
-      imap_port: input.imapPort ?? null,
-      status: 'active',
-      updated_at: now,
-      connected_at: now,
-    },
-    { onConflict: 'user_id,provider,email' }
-  )
-  if (upsertError) return { error: upsertError.message }
-
-  revalidatePath('/engage/accounts')
-  revalidatePath('/engage/settings')
-  return {}
+  try {
+    await pool.query(
+      `INSERT INTO public.engage_mailboxes
+       (user_id, organization_id, provider, email, smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from_name, smtp_security, imap_host, imap_port, status, updated_at, connected_at)
+       VALUES ($1,$2,'smtp',$3,$4,$5,$6,$7,$8,$9,$10,$11,'active',$12,$13)
+       ON CONFLICT (user_id, provider, email) DO UPDATE SET
+         smtp_host = EXCLUDED.smtp_host, smtp_port = EXCLUDED.smtp_port,
+         smtp_user = EXCLUDED.smtp_user, smtp_pass = EXCLUDED.smtp_pass,
+         smtp_from_name = EXCLUDED.smtp_from_name, smtp_security = EXCLUDED.smtp_security,
+         imap_host = EXCLUDED.imap_host, imap_port = EXCLUDED.imap_port,
+         status = EXCLUDED.status, updated_at = EXCLUDED.updated_at`,
+      [userId, orgId, input.smtpUser, input.smtpHost, input.smtpPort, input.smtpUser,
+       input.smtpPass, input.fromName, input.smtpSecurity,
+       input.imapHost ?? null, input.imapPort ?? null, now, now])
+    revalidatePath('/engage/accounts')
+    revalidatePath('/engage/settings')
+    return {}
+  } catch (err: any) {
+    return { error: err.message }
+  }
 }
-

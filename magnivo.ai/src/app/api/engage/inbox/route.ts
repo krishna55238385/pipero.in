@@ -2,14 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getGmailMailbox, getValidGmailAccessToken } from '@/app/actions/engage'
 import { isBounceMessage, syncMailboxEmails, type MailboxRow } from '@/lib/engage-sync'
 import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 
 // How stale the local cache may get before a read triggers a Gmail pull.
-// Keeps the unibox fresh even when the push webhook isn't configured.
 const SYNC_STALENESS_MS = 60_000
 
 export async function GET(req: NextRequest) {
   try {
-    const supabase = await createClient()
     const mailbox = (await getGmailMailbox()) as MailboxRow | null
     if (!mailbox) {
       return NextResponse.json({ emails: [] })
@@ -18,19 +17,17 @@ export async function GET(req: NextRequest) {
     const unread = req.nextUrl.searchParams.get('unread') === 'true'
     const starred = req.nextUrl.searchParams.get('starred') === 'true'
     const forceRefresh = req.nextUrl.searchParams.get('refresh') === 'true'
-    // box: 'inbox' (received), 'sent', or 'all'.
     const box = (req.nextUrl.searchParams.get('box') || 'inbox').toLowerCase()
 
-    // Sync from Gmail when forced (Refresh button) or when the cache is stale.
     const lastSynced = mailbox.last_synced_at ? new Date(mailbox.last_synced_at).getTime() : 0
     let syncError: string | null = null
     if (forceRefresh || Date.now() - lastSynced > SYNC_STALENESS_MS) {
       try {
         const accessToken = await getValidGmailAccessToken()
+        // syncMailboxEmails uses supabase internally — external lib compat
+        const supabase = await createClient()
         await syncMailboxEmails(supabase, mailbox, accessToken, { maxResults: forceRefresh ? 200 : 50 })
       } catch (e) {
-        // Serve cached emails even if Gmail is briefly unreachable, but
-        // surface the problem instead of hiding it.
         syncError = e instanceof Error ? e.message : 'gmail_sync_failed'
         console.error('[engage/inbox] sync failed:', syncError)
       }
@@ -50,71 +47,55 @@ export async function GET(req: NextRequest) {
       direction: (x.direction === 'sent' ? 'sent' : 'received') as 'sent' | 'received',
     })
 
-    let query = supabase
-      .from('engage_emails')
-      .select('*')
-      .eq('mailbox_id', mailbox.id)
-      .order('received_at', { ascending: false })
-      .limit(200)
+    const conditions: string[] = ['mailbox_id = $1']
+    const params: any[] = [mailbox.id]
+    let idx = 2
 
-    if (box === 'sent' || box === 'inbox') {
-      query = query.eq('direction', box === 'sent' ? 'sent' : 'received')
-    }
-    if (unread) query = query.eq('unread', true)
-    if (starred) query = query.eq('starred', true)
+    if (box === 'sent') { conditions.push(`direction = $${idx++}`); params.push('sent') }
+    else if (box === 'inbox') { conditions.push(`direction = $${idx++}`); params.push('received') }
+    if (unread) { conditions.push(`unread = $${idx++}`); params.push(true) }
+    if (starred) { conditions.push(`starred = $${idx++}`); params.push(true) }
     if (q) {
       const term = q.replace(/[%,()]/g, ' ').trim()
       if (term) {
-        query = query.or(
-          `from_email.ilike.%${term}%,to_email.ilike.%${term}%,subject.ilike.%${term}%,snippet.ilike.%${term}%`,
-        )
+        conditions.push(`(from_email ILIKE $${idx} OR to_email ILIKE $${idx} OR subject ILIKE $${idx} OR snippet ILIKE $${idx})`)
+        params.push(`%${term}%`)
+        idx++
       }
     }
 
-    const { data, error } = await query
-    if (error) throw new Error(error.message)
+    const emailsRes = await pool.query(
+      `SELECT * FROM public.engage_emails WHERE ${conditions.join(' AND ')} ORDER BY received_at DESC LIMIT 200`,
+      params
+    )
 
-    const emails = (data ?? [])
-      // Hide bounce / delivery-failure notifications (mailer-daemon DSNs) from
-      // the unibox — they're system noise. The bounce is already reflected as
-      // the lead's "bounced" status on the campaign.
-      .filter((x) => !isBounceMessage(String(x.from_email ?? ''), String(x.subject ?? '')))
+    const emails = (emailsRes.rows ?? [])
+      .filter((x: any) => !isBounceMessage(String(x.from_email ?? ''), String(x.subject ?? '')))
       .map(mapRow)
 
-    // Bounced campaign threads would otherwise be invisible in the Inbox box:
-    // their only emails are the outbound send (direction='sent', wrong box) and a
-    // bounce DSN (filtered above). Yet the Unibox status rail counts them, so the
-    // count and the list disagree ("shows 4 but no mails"). Surface each bounced
-    // thread via its outbound send so the conversation shows (with a Bounced badge
-    // driven by unibox-meta), keeping the count and the list in sync.
     if (box === 'inbox' && !unread && !starred && !q) {
       const present = new Set(emails.map((e) => e.threadId))
-      const { data: bouncedRecips } = await supabase
-        .from('engage_campaign_recipients')
-        .select('gmail_thread_id')
-        .eq('organization_id', mailbox.organization_id)
-        .eq('status', 'stopped')
-        .eq('last_error', 'bounced')
-        .not('gmail_thread_id', 'is', null)
+      const bouncedRes = await pool.query(
+        `SELECT gmail_thread_id FROM public.engage_campaign_recipients
+         WHERE organization_id = $1 AND status = 'stopped' AND last_error = 'bounced' AND gmail_thread_id IS NOT NULL`,
+        [mailbox.organization_id]
+      )
       const missing = [
         ...new Set(
-          (bouncedRecips ?? [])
-            .map((r) => String(r.gmail_thread_id))
+          (bouncedRes.rows ?? [])
+            .map((r: any) => String(r.gmail_thread_id))
             .filter((t) => !present.has(t)),
         ),
       ]
       if (missing.length) {
-        const { data: sentRows } = await supabase
-          .from('engage_emails')
-          .select('*')
-          .eq('mailbox_id', mailbox.id)
-          .eq('direction', 'sent')
-          .in('gmail_thread_id', missing)
-          .order('received_at', { ascending: false })
+        const sentRowsRes = await pool.query(
+          `SELECT * FROM public.engage_emails WHERE mailbox_id = $1 AND direction = 'sent' AND gmail_thread_id = ANY($2) ORDER BY received_at DESC`,
+          [mailbox.id, missing]
+        )
         const seen = new Set<string>()
-        for (const x of sentRows ?? []) {
+        for (const x of sentRowsRes.rows ?? []) {
           const t = String(x.gmail_thread_id)
-          if (seen.has(t)) continue // one representative (latest) per thread
+          if (seen.has(t)) continue
           seen.add(t)
           emails.push(mapRow(x))
         }

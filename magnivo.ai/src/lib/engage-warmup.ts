@@ -7,7 +7,7 @@
  * Call runWarmupCycle() from the /api/engage/warmup/run endpoint (daily cron).
  */
 
-import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 import { refreshAccessToken, sendEmail } from '@/lib/gmail'
 import type { ComposePayload } from '@/types/engage'
 
@@ -75,24 +75,20 @@ export type WarmupReport = {
 }
 
 export async function runWarmupCycle(): Promise<WarmupReport> {
-  const supabase = await createClient()
   const report: WarmupReport = { processed: 0, sent: 0, skipped: 0, errors: [] }
 
-  // Load all warmup-enabled Gmail accounts
-  const { data: mailboxes, error } = await supabase
-    .from('engage_mailboxes')
-    .select(
-      'id, email, access_token, refresh_token, expires_at, organization_id, warmup_daily_limit, warmup_current_day, warmup_started_at',
-    )
-    .eq('warmup_enabled', true)
-    .eq('provider', 'gmail')
-    .neq('status', 'disconnected')
+  const r = await pool.query(
+    `SELECT id, email, access_token, refresh_token, expires_at, organization_id,
+            warmup_daily_limit, warmup_current_day, warmup_started_at
+     FROM public.engage_mailboxes
+     WHERE warmup_enabled = true AND provider = 'gmail' AND status != 'disconnected'`
+  )
+  const mailboxes: WarmupMailbox[] = r.rows
 
-  if (error || !mailboxes?.length) return report
+  if (!mailboxes.length) return report
 
-  // Group by org so we can cross-send within each org
   const byOrg: Record<string, WarmupMailbox[]> = {}
-  for (const mb of mailboxes as WarmupMailbox[]) {
+  for (const mb of mailboxes) {
     if (!byOrg[mb.organization_id]) byOrg[mb.organization_id] = []
     byOrg[mb.organization_id].push(mb)
   }
@@ -108,39 +104,30 @@ export async function runWarmupCycle(): Promise<WarmupReport> {
       const token = await getValidToken(sender)
       if (!token) {
         report.skipped++
-        await supabase
-          .from('engage_mailboxes')
-          .update({ status: 'error', updated_at: new Date().toISOString() })
-          .eq('id', sender.id)
+        await pool.query(
+          `UPDATE public.engage_mailboxes SET status = 'error', updated_at = $1 WHERE id = $2`,
+          [new Date().toISOString(), sender.id]
+        )
         continue
       }
 
-      // Pick recipients: other accounts in the org, or self if only one
       const recipients =
         orgAccounts.length > 1 ? orgAccounts.filter((a) => a.id !== sender.id) : [sender]
 
-      let sentCount = 0
       for (let i = 0; i < emailsToSend; i++) {
         const recipient = recipients[i % recipients.length]
         const subject = pickRandom(WARMUP_SUBJECTS)
         const bodyHtml = pickRandom(WARMUP_BODIES)
 
-        const payload: ComposePayload = {
-          to: recipient.email,
-          subject,
-          bodyHtml,
-        }
+        const payload: ComposePayload = { to: recipient.email, subject, bodyHtml }
 
         try {
           const result = await sendEmail(token, payload)
           if (result?.id) {
-            await supabase.from('engage_warmup_log').insert({
-              mailbox_id: sender.id,
-              organization_id: sender.organization_id,
-              sent_at: new Date().toISOString(),
-              placed_inbox: null,
-            })
-            sentCount++
+            await pool.query(
+              `INSERT INTO public.engage_warmup_log (mailbox_id, organization_id, sent_at, placed_inbox) VALUES ($1,$2,$3,NULL)`,
+              [sender.id, sender.organization_id, new Date().toISOString()]
+            )
             report.sent++
           }
         } catch (err) {
@@ -149,73 +136,58 @@ export async function runWarmupCycle(): Promise<WarmupReport> {
         }
       }
 
-      // Update warmup progress and status
-      await supabase
-        .from('engage_mailboxes')
-        .update({
-          warmup_current_day: newDay,
-          status: 'warming',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', sender.id)
+      await pool.query(
+        `UPDATE public.engage_mailboxes SET warmup_current_day = $1, status = 'warming', updated_at = $2 WHERE id = $3`,
+        [newDay, new Date().toISOString(), sender.id]
+      )
     }
   }
 
-  // Resolve placement for warmup logs sent > 10 minutes ago
-  await resolvePlacement(supabase)
+  await resolvePlacement()
 
   return report
 }
 
-async function resolvePlacement(supabase: Awaited<ReturnType<typeof createClient>>) {
+async function resolvePlacement() {
   const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString()
 
-  const { data: pending } = await supabase
-    .from('engage_warmup_log')
-    .select('id, mailbox_id')
-    .is('placed_inbox', null)
-    .lt('sent_at', cutoff)
-    .limit(200)
+  const pendingRes = await pool.query(
+    `SELECT id, mailbox_id FROM public.engage_warmup_log WHERE placed_inbox IS NULL AND sent_at < $1 LIMIT 200`,
+    [cutoff]
+  )
+  const pending = pendingRes.rows
+  if (!pending.length) return
 
-  if (!pending?.length) return
-
-  // For each unique mailbox, load recent inbox messages and match
-  const mailboxIds = [...new Set(pending.map((r) => r.mailbox_id as string))]
-
-  const { data: mailboxes } = await supabase
-    .from('engage_mailboxes')
-    .select('id, access_token, refresh_token, expires_at')
-    .in('id', mailboxIds)
+  const mailboxIds = [...new Set(pending.map((r: any) => String(r.mailbox_id)))]
+  const mbRes = await pool.query(
+    `SELECT id, access_token, refresh_token, expires_at FROM public.engage_mailboxes WHERE id = ANY($1)`,
+    [mailboxIds]
+  )
 
   const tokenMap: Record<string, string | null> = {}
-  for (const mb of mailboxes ?? []) {
+  for (const mb of mbRes.rows) {
     tokenMap[mb.id] = await getValidToken(mb as WarmupMailbox)
   }
 
-  // Mark unresolved rows as inbox (optimistic — no token means we can't check)
   const unresolvableIds = pending
-    .filter((r) => !tokenMap[String(r.mailbox_id)])
-    .map((r) => r.id)
+    .filter((r: any) => !tokenMap[String(r.mailbox_id)])
+    .map((r: any) => r.id)
 
   if (unresolvableIds.length) {
-    await supabase
-      .from('engage_warmup_log')
-      .update({ placed_inbox: true, resolved_at: new Date().toISOString() })
-      .in('id', unresolvableIds)
+    await pool.query(
+      `UPDATE public.engage_warmup_log SET placed_inbox = true, resolved_at = $1 WHERE id = ANY($2)`,
+      [new Date().toISOString(), unresolvableIds]
+    )
   }
 
-  // For accounts where we have a token, fetch recent label data
-  // Gmail doesn't expose sent-mail placement directly, so we use a heuristic:
-  // if the warmup email was received by another account in the org, check its labels.
-  // For self-sends or when we can't verify, mark as inbox (conservative).
   const resolvableIds = pending
-    .filter((r) => tokenMap[String(r.mailbox_id)])
-    .map((r) => r.id)
+    .filter((r: any) => tokenMap[String(r.mailbox_id)])
+    .map((r: any) => r.id)
 
   if (resolvableIds.length) {
-    await supabase
-      .from('engage_warmup_log')
-      .update({ placed_inbox: true, resolved_at: new Date().toISOString() })
-      .in('id', resolvableIds)
+    await pool.query(
+      `UPDATE public.engage_warmup_log SET placed_inbox = true, resolved_at = $1 WHERE id = ANY($2)`,
+      [new Date().toISOString(), resolvableIds]
+    )
   }
 }

@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { cookies } from 'next/headers'
+import { currentUser } from '@clerk/nextjs/server'
 import {
     getOrganizationDetails,
     getUsersHubData,
@@ -14,19 +15,16 @@ export const metadata = {
 }
 
 export default async function SettingsPage() {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-
-    const { cookies } = await import('next/headers')
     const cookieStore = await cookies()
     const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
     const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
+    const clerkUser = await currentUser()
 
-    if (!user && !isMockAuth && !bypassAuth) {
+    if (!clerkUser && !isMockAuth && !bypassAuth) {
         redirect('/login')
     }
 
-    const [org, hubData, integrations, currentUser] = await Promise.all([
+    const [org, hubData, , currentUserData] = await Promise.all([
         getOrganizationDetails(),
         getUsersHubData(),
         getIntegrations(),
@@ -35,11 +33,10 @@ export default async function SettingsPage() {
 
     return (
         <SettingsContainer
-            currentUser={currentUser}
+            currentUser={currentUserData}
             initialOrg={org}
             initialMembers={hubData.users}
             initialInvites={hubData.invites}
         />
     )
 }
-

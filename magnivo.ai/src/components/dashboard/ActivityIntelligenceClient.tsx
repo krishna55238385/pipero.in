@@ -32,9 +32,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { getGlobalActivities, getOrgMembers } from '@/app/actions/crm'
+import { getGlobalActivities, getOrgMembers, getLeads, getDeals } from '@/app/actions/crm'
 import { motion, AnimatePresence } from 'framer-motion'
-import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 import { useWorkspace } from '@/components/providers/WorkspaceProvider'
 import { toText } from '@/lib/gtm-render'
@@ -61,19 +60,17 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
     const [page, setPage] = useState(1)
     const limit = 20
 
-    const supabase = createClient()
-
     useEffect(() => {
         if (!isCoreAdmin) return
         async function fetchInitialData() {
-            const [m, l, d] = await Promise.all([
+            const [m, leadsRes, dealsArr] = await Promise.all([
                 getOrgMembers(),
-                supabase.from('leads').select('id, name').limit(100),
-                supabase.from('deals').select('id, title').limit(100)
+                getLeads(),
+                getDeals()
             ])
             setMembers(m)
-            setLeads(l.data || [])
-            setDeals(d.data || [])
+            setLeads((Array.isArray(leadsRes) ? leadsRes : leadsRes?.data || []).map((l: any) => ({ id: l.id, name: l.name })))
+            setDeals(dealsArr.map((d: any) => ({ id: d.id, title: d.title })))
         }
         fetchInitialData()
     }, [isCoreAdmin])

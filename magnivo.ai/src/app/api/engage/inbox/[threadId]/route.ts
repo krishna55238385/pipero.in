@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getGmailMailbox, getValidGmailAccessToken } from '@/app/actions/engage'
 import { getThreadById, markThreadRead } from '@/lib/gmail'
-import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ threadId: string }> }) {
   try {
@@ -13,14 +13,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ threadId: 
     // the unread filter/badge reflects what the user has actually seen.
     try {
       await markThreadRead(accessToken, threadId)
-      const supabase = await createClient()
       const mailbox = await getGmailMailbox()
       if (mailbox) {
-        await supabase
-          .from('engage_emails')
-          .update({ unread: false, updated_at: new Date().toISOString() })
-          .eq('mailbox_id', mailbox.id)
-          .eq('gmail_thread_id', threadId)
+        await pool.query(
+          `UPDATE public.engage_emails SET unread = false, updated_at = $1 WHERE mailbox_id = $2 AND gmail_thread_id = $3`,
+          [new Date().toISOString(), mailbox.id, threadId]
+        )
       }
     } catch (e) {
       console.error('[engage/thread] mark-read failed:', e instanceof Error ? e.message : e)

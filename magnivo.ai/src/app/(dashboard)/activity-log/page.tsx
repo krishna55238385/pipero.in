@@ -1,8 +1,8 @@
-import { History } from 'lucide-react'
 import ActivityIntelligenceClient from '@/components/dashboard/ActivityIntelligenceClient'
 import { getGlobalActivities } from '@/app/actions/crm'
-import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
+import { currentUser } from '@clerk/nextjs/server'
 
 export const metadata = {
     title: "Activity Intelligence | Magnivo AI",
@@ -10,15 +10,12 @@ export const metadata = {
 }
 
 export default async function ActivityLogPage() {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-
-    const { cookies } = await import('next/headers')
     const cookieStore = await cookies()
     const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
     const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
+    const clerkUser = await currentUser()
 
-    if (!user && !isMockAuth && !bypassAuth) {
+    if (!clerkUser && !isMockAuth && !bypassAuth) {
         redirect('/login')
     }
 
@@ -26,4 +23,3 @@ export default async function ActivityLogPage() {
 
     return <ActivityIntelligenceClient initialActivities={data} initialTotal={total} />
 }
-

@@ -1,217 +1,252 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { createNotification, getMockableUser } from '@/app/actions/notifications'
 import { cookies } from 'next/headers'
 import { executeAutomationFlows } from '@/app/actions/automation'
+import { currentUser } from '@clerk/nextjs/server'
+import { logLeadEvent } from '@/app/actions/lead-management'
+import { createLeadRecord, type PublicLeadPayload } from '@/lib/create-lead-record'
 
-// Utility to get the default org for local dev (bypassing auth)
-async function getDefaultOrgId(supabase: any) {
-  const { data } = await supabase.from('organizations').select('id').limit(1).single()
-  return data?.id
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async function getDefaultOrgId(): Promise<string | null> {
+  try {
+    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+    return r.rows[0]?.id ?? null
+  } catch { return null }
 }
 
-/**
- * Helper to ensure the current user has admin/super_admin privileges.
- * Returns { isAdmin: boolean, user: any, error?: string }
- */
-async function requireAdmin(supabase: any) {
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-    let { data: { user } } = await supabase.auth.getUser()
+async function getClerkUser() {
+  try {
+    const u = await currentUser()
+    if (!u) return null
+    return { id: u.id, email: u.emailAddresses?.[0]?.emailAddress ?? null }
+  } catch { return null }
+}
 
-    if (!user && isMockAuth) {
-        // Fallback to first user for mock auth
-        const { data: firstUser } = await supabase.from('users').select('*').limit(1).single()
-        if (firstUser) user = firstUser as any
-        return { isAdmin: true, user }
+async function requireAdmin() {
+  const cookieStore = await cookies()
+  const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
+  const clerkUser = await getClerkUser()
+
+  if (!clerkUser && isMockAuth) {
+    const r = await pool.query('SELECT * FROM public.users LIMIT 1')
+    const firstUser = r.rows[0]
+    if (firstUser) return { isAdmin: true, user: firstUser }
+    return { isAdmin: false, user: null, error: 'No users found' }
+  }
+  if (!clerkUser) return { isAdmin: false, user: null, error: 'Authentication required' }
+
+  const r = await pool.query('SELECT id, role FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
+  const role = r.rows[0]?.role
+  const isAdmin = role === 'admin' || role === 'super_admin'
+  // clerkUser.id is the Clerk ID string, not the public.users UUID — swap in the resolved DB id
+  const dbUser = r.rows[0]?.id ? { ...clerkUser, id: r.rows[0].id } : clerkUser
+  if (!isAdmin) return { isAdmin: false, user: dbUser, error: 'Admin privileges required' }
+  return { isAdmin: true, user: dbUser }
+}
+
+// Minimal shim for imported functions (logLeadEvent, createLeadRecord) that still expect supabase
+function createDbShim() {
+  function makeTable(tableName: string) {
+    let conds: Array<{ col: string; val: any; op: string }> = []
+    let limitN: number | null = null
+    const tbl: any = {
+      select: () => tbl, eq: (col: string, val: any) => { conds.push({ col, val, op: '=' }); return tbl },
+      limit: (n: number) => { limitN = n; return tbl },
+      order: () => tbl, single: () => tbl, maybeSingle: () => tbl,
+      ilike: () => tbl, or: () => tbl, is: () => tbl, gte: () => tbl, in: () => tbl, neq: () => tbl,
+      then: async (resolve: any) => {
+        try {
+          const vals = conds.map(c => c.val)
+          const where = conds.length ? `WHERE ${conds.map((c, i) => `"${c.col}" ${c.op} $${i + 1}`).join(' AND ')}` : ''
+          const lim = limitN ? `LIMIT ${limitN}` : ''
+          const result = await pool.query(`SELECT * FROM public."${tableName}" ${where} ${lim}`.trim(), vals)
+          const data = limitN === 1 ? (result.rows[0] ?? null) : result.rows
+          resolve({ data, error: null })
+        } catch (err: any) { resolve({ data: null, error: { message: err.message } }) }
+      },
+      insert: async (row: any) => {
+        try {
+          const items = Array.isArray(row) ? row : [row]
+          const rows: any[] = []
+          for (const item of items) {
+            const keys = Object.keys(item); const vals = Object.values(item)
+            const ph = keys.map((_, i) => `$${i + 1}`).join(', ')
+            const res = await pool.query(`INSERT INTO public."${tableName}" (${keys.map(k => `"${k}"`).join(', ')}) VALUES (${ph}) RETURNING *`, vals)
+            rows.push(res.rows[0])
+          }
+          const data = rows.length === 1 ? rows[0] : rows
+          return { data, error: null, select: () => ({ data, error: null, single: () => ({ data, error: null }) }) }
+        } catch (err: any) { return { data: null, error: { message: err.message } } }
+      },
+      update: (updates: any) => {
+        const uq: any = {
+          eq: (col: string, val: any) => { conds.push({ col, val, op: '=' }); return uq },
+          is: () => uq, gte: () => uq, select: () => uq, single: () => uq,
+          then: async (resolve: any) => {
+            try {
+              const ukeys = Object.keys(updates); const uvals = Object.values(updates)
+              const sets = ukeys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+              const where = conds.length ? `WHERE ${conds.map((c, i) => `"${c.col}" ${c.op} $${ukeys.length + i + 1}`).join(' AND ')}` : ''
+              const res = await pool.query(`UPDATE public."${tableName}" SET ${sets} ${where} RETURNING *`.trim(), [...uvals, ...conds.map(c => c.val)])
+              resolve({ data: res.rows, error: null })
+            } catch (err: any) { resolve({ data: null, error: { message: err.message } }) }
+          }
+        }
+        return uq
+      }
     }
-
-    if (!user) return { isAdmin: false, user: null, error: 'Authentication required' }
-
-    const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-    const isAdmin = profile?.role === 'admin' || profile?.role === 'super_admin'
-
-    if (!isAdmin) return { isAdmin: false, user, error: 'Admin privileges required' }
-    
-    return { isAdmin: true, user }
+    return tbl
+  }
+  return {
+    from: (table: string) => makeTable(table),
+    auth: { getUser: async () => { const u = await getClerkUser(); return { data: { user: u }, error: null } } }
+  }
 }
+
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
 interface LeadFilters {
-  q?: string;
-  temperature?: string;
-  status?: string;
-  source?: string;
-  subject?: string;
-  campaign?: string;
-  owner_id?: string;
-  dateRange?: string; // e.g. '7d', '30d', 'all'
-  dateFrom?: string;
-  dateTo?: string;
-  page?: number;
-  pageSize?: number;
+  q?: string; temperature?: string; status?: string; source?: string
+  subject?: string; campaign?: string; owner_id?: string; dateRange?: string
+  dateFrom?: string; dateTo?: string; page?: number; pageSize?: number
 }
 
+// ─── getLeads ─────────────────────────────────────────────────────────────────
+
 export async function getLeads(filters: LeadFilters = {}) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { data: [], count: 0, debug: 'no-org-id' }
 
   const cookieStore = await cookies()
   const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
+  const clerkUser = await getClerkUser()
 
-  let { data: { user } } = await supabase.auth.getUser()
-  
   let isAdmin = false
+  let userId: string | null = null
 
-  if (!user && isMockAuth) {
-    isAdmin = true // Allow mock admin view
-  } else if (!user && !isMockAuth) {
-    return { data: [], count: 0, debug: 'no-user-prod' }
-  } else if (user) {
-    const { data: userData } = await supabase.from('users').select('role').eq('id', user.id).single()
-    isAdmin = userData?.role === 'admin' || userData?.role === 'super_admin'
-  }
-  
-  let query = supabase
-    .from('leads')
-    .select('*, deals(id, value, status), tasks(id, status)', { count: 'exact' })
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-
-  // Non-admins only see leads they own, or leads with no owner
-  if (!isAdmin && user) {
-      query = query.or(`owner_id.eq.${user.id},owner_id.is.null`)
+  if (!clerkUser && isMockAuth) { isAdmin = true }
+  else if (!clerkUser && !isMockAuth) { return { data: [], count: 0, debug: 'no-user-prod' } }
+  else if (clerkUser) {
+    const r = await pool.query('SELECT id, role FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
+    userId = r.rows[0]?.id ?? null
+    const role = r.rows[0]?.role
+    isAdmin = role === 'admin' || role === 'super_admin'
   }
 
+  const values: any[] = [orgId]
+  const conditions: string[] = ['l.organization_id = $1']
+
+  if (!isAdmin && userId) {
+    values.push(userId)
+    conditions.push(`(l.owner_id = $${values.length} OR l.owner_id IS NULL)`)
+  }
   if (filters.q) {
-    query = query.or(`name.ilike.%${filters.q}%,contact_person.ilike.%${filters.q}%`)
+    values.push(`%${filters.q}%`); const n = values.length
+    conditions.push(`(l.name ILIKE $${n} OR l.contact_person ILIKE $${n})`)
   }
-  if (filters.temperature && filters.temperature !== 'all') {
-    query = query.eq('temperature', filters.temperature)
-  }
-  if (filters.status && filters.status !== 'All Statuses') {
-    query = query.eq('status', filters.status)
-  }
-  if (filters.source && filters.source !== 'All Sources') {
-    query = query.eq('source', filters.source)
-  }
-  if (filters.subject && filters.subject !== 'All Subjects') {
-    query = query.eq('subject', filters.subject)
-  }
-  if (filters.campaign && filters.campaign !== 'All Campaigns') {
-    query = query.eq('campaign', filters.campaign)
-  }
-  if (filters.owner_id && filters.owner_id !== 'All Owners') {
-    query = query.eq('owner_id', filters.owner_id)
-  }
+  if (filters.temperature && filters.temperature !== 'all') { values.push(filters.temperature); conditions.push(`l.temperature = $${values.length}`) }
+  if (filters.status && filters.status !== 'All Statuses') { values.push(filters.status); conditions.push(`l.status = $${values.length}`) }
+  if (filters.source && filters.source !== 'All Sources') { values.push(filters.source); conditions.push(`l.source = $${values.length}`) }
+  if (filters.subject && filters.subject !== 'All Subjects') { values.push(filters.subject); conditions.push(`l.subject = $${values.length}`) }
+  if (filters.campaign && filters.campaign !== 'All Campaigns') { values.push(filters.campaign); conditions.push(`l.campaign = $${values.length}`) }
+  if (filters.owner_id && filters.owner_id !== 'All Owners') { values.push(filters.owner_id); conditions.push(`l.owner_id = $${values.length}`) }
   if (filters.dateRange && filters.dateRange !== 'all') {
     const now = new Date()
-    if (filters.dateRange === '7d') {
-        const d = new Date(now.setDate(now.getDate() - 7))
-        query = query.gte('created_at', d.toISOString())
-    } else if (filters.dateRange === '30d') {
-        const d = new Date(now.setDate(now.getDate() - 30))
-        query = query.gte('created_at', d.toISOString())
-    } else if (filters.dateRange === '90d') {
-        const d = new Date(now.setDate(now.getDate() - 90))
-        query = query.gte('created_at', d.toISOString())
-    }
+    const days = filters.dateRange === '7d' ? 7 : filters.dateRange === '30d' ? 30 : 90
+    values.push(new Date(now.setDate(now.getDate() - days)).toISOString())
+    conditions.push(`l.created_at >= $${values.length}`)
+  }
+  if (filters.dateFrom) { values.push(filters.dateFrom); conditions.push(`l.created_at >= $${values.length}`) }
+  if (filters.dateTo) {
+    const toDate = new Date(filters.dateTo); toDate.setDate(toDate.getDate() + 1)
+    values.push(toDate.toISOString()); conditions.push(`l.created_at < $${values.length}`)
   }
 
-  if (filters.dateFrom) {
-    query = query.gte('created_at', filters.dateFrom)
-  }
-  if (filters.dateTo) {
-    const toDate = new Date(filters.dateTo)
-    toDate.setDate(toDate.getDate() + 1)
-    query = query.lt('created_at', toDate.toISOString())
-  }
-    
+  const where = `WHERE ${conditions.join(' AND ')}`
+  const countResult = await pool.query(`SELECT COUNT(*) FROM public.leads l ${where}`, values)
+  const count = parseInt(countResult.rows[0].count, 10)
+
+  let pagination = ''
   if (filters.page && filters.pageSize) {
-    const from = (filters.page - 1) * filters.pageSize
-    const to = from + filters.pageSize - 1
-    query = query.range(from, to)
+    const offset = (filters.page - 1) * filters.pageSize
+    values.push(filters.pageSize, offset)
+    pagination = `LIMIT $${values.length - 1} OFFSET $${values.length}`
   }
-    
-  const { data, count, error } = await query
-    
-  if (error) {
-    console.error('Error fetching leads:', error.message, error.details)
-    return { data: [], count: 0, debug: `supabase-error: ${error.message}` }
-  }
-  return { 
-    data: data || [], 
-    count: count || 0,
-    debug: `success-count-${data?.length}-total-${count}-isAdmin-${isAdmin}-user-${user?.id || 'mock'}` 
+
+  try {
+    const result = await pool.query(`
+      SELECT l.*,
+        COALESCE((SELECT json_agg(json_build_object('id', d.id, 'value', d.value, 'status', d.status))
+          FROM public.deals d WHERE d.lead_id = l.id), '[]'::json) AS deals,
+        COALESCE((SELECT json_agg(json_build_object('id', t.id, 'status', t.status))
+          FROM public.tasks t WHERE t.lead_id = l.id), '[]'::json) AS tasks
+      FROM public.leads l ${where} ORDER BY l.created_at DESC ${pagination}
+    `, values)
+    return {
+      data: result.rows, count,
+      debug: `success-count-${result.rows.length}-total-${count}-isAdmin-${isAdmin}-user-${userId || 'mock'}`
+    }
+  } catch (err: any) {
+    console.error('Error fetching leads:', err.message)
+    return { data: [], count: 0, debug: `pg-error: ${err.message}` }
   }
 }
+
+// ─── getDeals ─────────────────────────────────────────────────────────────────
 
 export async function getDeals(searchQuery?: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-  
+
   const cookieStore = await cookies()
   const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
+  const clerkUser = await getClerkUser()
 
-  let { data: { user } } = await supabase.auth.getUser()
-  
-  let isAdmin = false
+  let isAdmin = false; let userId: string | null = null
 
-  if (!user && isMockAuth) {
-    isAdmin = true
-  } else if (!user && !isMockAuth) {
-    return []
-  } else if (user) {
-    const { data: userData } = await supabase.from('users').select('role').eq('id', user.id).single()
-    isAdmin = userData?.role === 'admin' || userData?.role === 'super_admin'
+  if (!clerkUser && isMockAuth) { isAdmin = true }
+  else if (!clerkUser && !isMockAuth) { return [] }
+  else if (clerkUser) {
+    const r = await pool.query('SELECT id, role FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
+    userId = r.rows[0]?.id ?? null
+    isAdmin = r.rows[0]?.role === 'admin' || r.rows[0]?.role === 'super_admin'
   }
 
-  let query = supabase
-    .from('deals')
-    .select('*, leads!inner(name, contact_person, owner_id, location, created_at), assigned_user:users!deals_assigned_to_fkey(id, full_name)')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
+  const values: any[] = [orgId]
+  const conditions: string[] = ['d.organization_id = $1']
 
-  if (!isAdmin && user) {
-      // Non-admins see deals assigned to them, or deals on leads they own, or unassigned deals
-      query = query.or(`assigned_to.eq.${user.id},assigned_to.is.null,leads.owner_id.eq.${user.id}`)
-  }
+  if (!isAdmin && userId) { values.push(userId); conditions.push(`(d.assigned_to = $${values.length} OR d.assigned_to IS NULL)`) }
+  if (searchQuery) { values.push(`%${searchQuery}%`); conditions.push(`d.title ILIKE $${values.length}`) }
 
-  if (searchQuery) {
-    query = query.ilike('title', `%${searchQuery}%`)
-  }
-    
-  const { data, error } = await query
-    
-  if (error) {
-    console.error('Error fetching deals:', error)
-    return []
-  }
-  return data
+  try {
+    const result = await pool.query(`
+      SELECT d.*,
+        json_build_object('name', l.name, 'contact_person', l.contact_person, 'owner_id', l.owner_id, 'location', l.location, 'created_at', l.created_at) AS leads,
+        json_build_object('id', u.id, 'full_name', u.full_name) AS assigned_user
+      FROM public.deals d
+      LEFT JOIN public.leads l ON l.id = d.lead_id
+      LEFT JOIN public.users u ON u.id = d.assigned_to
+      WHERE ${conditions.join(' AND ')} ORDER BY d.created_at DESC
+    `, values)
+    return result.rows
+  } catch (err: any) { console.error('Error fetching deals:', err.message); return [] }
 }
 
-import { logLeadEvent } from '@/app/actions/lead-management'
-import {
-  createLeadRecord,
-  type PublicLeadPayload,
-} from '@/lib/create-lead-record'
+// ─── addLead ──────────────────────────────────────────────────────────────────
 
 export async function addLead(formData: FormData) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  
+  const orgId = await getDefaultOrgId()
+  if (!orgId) return { error: 'No organization found' }
+
   const cookieStore = await cookies()
   const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  
-  let { data: { user } } = await supabase.auth.getUser()
-  
-  if (!user && !isMockAuth) {
-    return { error: 'Not authenticated' }
-  }
+  const clerkUser = await getClerkUser()
+
+  if (!clerkUser && !isMockAuth) return { error: 'Not authenticated' }
 
   const payload: PublicLeadPayload = {
     company: (formData.get('company') as string) || '',
@@ -219,63 +254,48 @@ export async function addLead(formData: FormData) {
     phone: (formData.get('phone') as string) || '',
     location: (formData.get('location') as string) || '',
     temperature: (formData.get('temperature') as string) || 'cold',
-    source: ((formData.get('source') as string) || 'Direct'),
+    source: (formData.get('source') as string) || 'Direct',
     industry: (formData.get('industry') as string) || '',
     zip_code: (formData.get('zip_code') as string) || '',
     value: formData.get('value') as string | null
   }
 
-  const result = await createLeadRecord(supabase, orgId, payload, {
-    initialOwnerId: user?.id || null,
+  const result = await createLeadRecord(orgId, payload, {
+    initialOwnerId: clerkUser?.id || null,
     method: 'manual',
     defaultSource: 'Direct',
-    performedBy: user?.id || null
+    performedBy: clerkUser?.id || null
   })
 
-  if ('error' in result) {
-    return { error: result.error }
-  }
+  if ('error' in result) return { error: result.error }
 
-  await logActivity(
-    supabase,
-    orgId,
-    'created_lead',
-    `added a new lead: ${result.data.name}`,
-    result.data.id
-  )
+  await logActivity(orgId, 'created_lead', `added a new lead: ${result.data.name}`, result.data.id)
 
   if (result.data.owner_id) {
     const actor = await getMockableUser()
     if (actor?.id !== result.data.owner_id) {
       await createNotification({
-        user_id: result.data.owner_id,
-        actor_id: actor?.id,
-        type: 'assigned_lead',
-        title: 'New Lead Assigned',
-        content: `You have been assigned a new lead: ${result.data.name}`,
+        user_id: result.data.owner_id, actor_id: actor?.id, type: 'assigned_lead',
+        title: 'New Lead Assigned', content: `You have been assigned a new lead: ${result.data.name}`,
         link_url: `/leads/${result.data.id}`,
       })
     }
   }
 
-  revalidatePath('/leads')
-  revalidatePath('/')
-  
+  revalidatePath('/leads'); revalidatePath('/')
   executeAutomationFlows('lead_created', 'lead', result.data.id, result.data).catch(console.error)
-
   return { success: true }
 }
 
-export async function addLeads(leadsData: any[]) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+// ─── addLeads ─────────────────────────────────────────────────────────────────
 
+export async function addLeads(leadsData: any[]) {
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
 
-  // Normalize keys: lowercase, trim (supports CSV/Google Sheet headers)
   const normalize = (row: any) => {
     const out: any = {}
     for (const k of Object.keys(row || {})) {
@@ -288,7 +308,6 @@ export async function addLeads(leadsData: any[]) {
 
   const formattedLeads = leadsData.map(raw => {
     const lead = normalize(raw)
-    // Google Sheet / Multiple add Campaigns columns: Timestamp, Name, Email, Phone, UTM_Source, UTM_Campaign, UTM_Medium, Full_URL
     const name = lead.name || lead.contact_person || lead.company || ''
     const contactPerson = lead.contact_person || lead.name || lead.contact || ''
     const phone = lead.phone || lead.phone_number || ''
@@ -311,13 +330,10 @@ export async function addLeads(leadsData: any[]) {
     if (subject) utmMetadata.subject = subject
     if (campaign) utmMetadata.campaign = campaign
 
-    // Try to normalize demo date to YYYY-MM-DD if it parses cleanly
     let demoDate: string | null = null
     if (demoDateRaw) {
       const parsed = new Date(demoDateRaw)
-      if (!Number.isNaN(parsed.getTime())) {
-        demoDate = parsed.toISOString().slice(0, 10)
-      }
+      if (!Number.isNaN(parsed.getTime())) demoDate = parsed.toISOString().slice(0, 10)
     }
 
     return {
@@ -329,2464 +345,1733 @@ export async function addLeads(leadsData: any[]) {
       location: lead.location || lead.city || '',
       temperature: lead.temperature || 'cold',
       status: lead.status || 'New',
-      source,
-      subject: subject || null,
-      campaign: campaign || null,
-      grade_level: gradeLevel || null,
-      demo_date: demoDate,
+      source, subject: subject || null, campaign: campaign || null,
+      grade_level: gradeLevel || null, demo_date: demoDate,
       demo_time_slot: demoTimeSlot || null,
-      ...(Object.keys(utmMetadata).length > 0 && { utm_metadata: utmMetadata }),
+      ...(Object.keys(utmMetadata).length > 0 && { utm_metadata: JSON.stringify(utmMetadata) }),
     }
-  }).filter(l => l.phone_number) // require at least phone for CRM
+  }).filter(l => l.phone_number)
 
   if (formattedLeads.length === 0) {
-    return { error: 'No valid rows to import. Ensure columns include Name/Email/Phone (or Phone) and at least one row has a phone number.' }
+    return { error: 'No valid rows to import. Ensure columns include Name/Email/Phone and at least one row has a phone number.' }
   }
 
-  const { data: insertedData, error } = await supabase.from('leads').insert(formattedLeads).select()
+  const client = await pool.connect()
+  try {
+    const insertedRows: any[] = []
+    await client.query('BEGIN')
+    for (const lead of formattedLeads) {
+      const keys = Object.keys(lead).filter(k => (lead as any)[k] !== undefined)
+      const vals = keys.map(k => (lead as any)[k])
+      const ph = keys.map((_, i) => `$${i + 1}`).join(', ')
+      const res = await client.query(
+        `INSERT INTO public.leads (${keys.map(k => `"${k}"`).join(', ')}) VALUES (${ph}) RETURNING *`, vals)
+      insertedRows.push(res.rows[0])
+    }
+    await client.query('COMMIT')
 
-  if (error) {
-    console.error('Error adding bulk leads:', error)
-    return { error: error.message }
+    await logActivity(orgId, 'imported_leads', `imported ${formattedLeads.length} leads`)
+
+    const user = await getMockableUser()
+    const shim = createDbShim()
+    for (const lead of insertedRows) {
+      await logLeadEvent(shim, orgId, {
+        lead_id: lead.id, event_type: 'lead_created',
+        description: `Lead created via bulk import.`,
+        metadata: { source: lead.source, method: 'import' }, performed_by: user?.id
+      })
+    }
+
+    revalidatePath('/leads'); revalidatePath('/')
+    return { success: true, count: insertedRows.length }
+  } catch (err: any) {
+    await client.query('ROLLBACK')
+    console.error('Error adding bulk leads:', err.message)
+    return { error: err.message }
+  } finally {
+    client.release()
   }
-
-  await logActivity(supabase, orgId, 'imported_leads', `imported ${formattedLeads.length} leads`)
-
-  if (insertedData && insertedData.length > 0) {
-      const user = await getMockableUser()
-      for (const lead of insertedData) {
-          await logLeadEvent(supabase, orgId, {
-              lead_id: lead.id,
-              event_type: 'lead_created',
-              description: `Lead created via bulk import.`,
-              metadata: { source: lead.source, method: 'import' },
-              performed_by: user?.id
-          })
-      }
-  }
-
-  revalidatePath('/leads')
-  revalidatePath('/')
-  return { success: true, count: insertedData?.length ?? formattedLeads.length }
 }
+
+// ─── bulkDeleteLeads ──────────────────────────────────────────────────────────
 
 export async function bulkDeleteLeads(leadIds: string[]) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
 
-  const { error } = await supabase.from('leads').delete().in('id', leadIds)
+  try {
+    const ph = leadIds.map((_, i) => `$${i + 1}`).join(', ')
+    await pool.query(`DELETE FROM public.leads WHERE id IN (${ph})`, leadIds)
 
-  if (error) {
-    console.error('Error deleting bulk leads:', error)
-    return { error: error.message }
-  }
+    await logActivity(orgId, 'deleted_leads', `deleted ${leadIds.length} leads`)
 
-  await logActivity(supabase, orgId, 'deleted_leads', `deleted ${leadIds.length} leads`)
-
-  const user = await getMockableUser()
-  for (const leadId of leadIds) {
-      await logLeadEvent(supabase, orgId, {
-          lead_id: leadId,
-          event_type: 'lead_deleted',
-          description: `Lead deleted via bulk action.`,
-          performed_by: user?.id
+    const user = await getMockableUser()
+    const shim = createDbShim()
+    for (const leadId of leadIds) {
+      await logLeadEvent(shim, orgId, {
+        lead_id: leadId, event_type: 'lead_deleted',
+        description: `Lead deleted via bulk action.`, performed_by: user?.id
       })
-  }
+    }
 
-  revalidatePath('/leads')
-  revalidatePath('/')
-  return { success: true }
+    revalidatePath('/leads'); revalidatePath('/')
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── bulkUpdateLeadStatus ─────────────────────────────────────────────────────
 
 export async function bulkUpdateLeadStatus(leadIds: string[], status: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
 
-  const { error } = await supabase.from('leads').update({ status }).in('id', leadIds)
+  try {
+    const ph = leadIds.map((_, i) => `$${i + 2}`).join(', ')
+    await pool.query(`UPDATE public.leads SET status = $1 WHERE id IN (${ph})`, [status, ...leadIds])
 
-  if (error) {
-    console.error('Error updating bulk leads:', error)
-    return { error: error.message }
-  }
+    await logActivity(orgId, 'updated_leads', `updated status of ${leadIds.length} leads to ${status}`)
 
-  await logActivity(supabase, orgId, 'updated_leads', `updated status of ${leadIds.length} leads to ${status}`)
-
-  const user = await getMockableUser()
-  for (const leadId of leadIds) {
-      await logLeadEvent(supabase, orgId, {
-          lead_id: leadId,
-          event_type: 'status_changed',
-          description: `Status updated in bulk to ${status}.`,
-          metadata: { new_status: status },
-          performed_by: user?.id
+    const user = await getMockableUser()
+    const shim = createDbShim()
+    for (const leadId of leadIds) {
+      await logLeadEvent(shim, orgId, {
+        lead_id: leadId, event_type: 'status_changed',
+        description: `Status updated in bulk to ${status}.`,
+        metadata: { new_status: status }, performed_by: user?.id
       })
-  }
+    }
 
-  revalidatePath('/leads')
-  revalidatePath('/')
-
-  // Trigger Automation: status_changed for each lead
-  if (leadIds && leadIds.length > 0) {
-    leadIds.forEach(id => {
-        executeAutomationFlows('status_changed', 'lead', id, { status }).catch(console.error)
-    })
-  }
-
-  return { success: true }
+    revalidatePath('/leads'); revalidatePath('/')
+    if (leadIds.length > 0) leadIds.forEach(id => executeAutomationFlows('status_changed', 'lead', id, { status }).catch(console.error))
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── bulkAssignLeads ──────────────────────────────────────────────────────────
 
 export async function bulkAssignLeads(leadIds: string[], ownerId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
 
-  const { error } = await supabase
-    .from('leads')
-    .update({ owner_id: ownerId })
-    .in('id', leadIds)
+  try {
+    const ph = leadIds.map((_, i) => `$${i + 2}`).join(', ')
+    await pool.query(`UPDATE public.leads SET owner_id = $1 WHERE id IN (${ph})`, [ownerId, ...leadIds])
 
-  if (error) {
-    console.error('Error bulk assigning leads:', error)
-    return { error: error.message }
-  }
+    await logActivity(orgId, 'updated_leads', `assigned ${leadIds.length} leads to a rep`)
 
-  await logActivity(supabase, orgId, 'updated_leads', `assigned ${leadIds.length} leads to a rep`)
+    const actor = await getMockableUser()
+    const ownerResult = await pool.query('SELECT full_name FROM public.users WHERE id = $1', [ownerId])
+    const owner = ownerResult.rows[0]
+    const shim = createDbShim()
 
-  const actor = await getMockableUser()
-  const { data: owner } = await supabase.from('users').select('full_name').eq('id', ownerId).single()
+    for (const leadId of leadIds) {
+      await logLeadEvent(shim, orgId, {
+        lead_id: leadId, event_type: 'lead_updated',
+        description: `Lead assigned to ${owner?.full_name || 'a rep'} in bulk.`,
+        metadata: { owner_id: ownerId }, performed_by: actor?.id
+      })
+    }
 
-  for (const leadId of leadIds) {
-    await logLeadEvent(supabase, orgId, {
-      lead_id: leadId,
-      event_type: 'lead_updated',
-      description: `Lead assigned to ${owner?.full_name || 'a rep'} in bulk.`,
-      metadata: { owner_id: ownerId },
-      performed_by: actor?.id
-    })
-  }
+    if (actor?.id !== ownerId) {
+      await createNotification({
+        user_id: ownerId, actor_id: actor?.id, type: 'assigned_lead',
+        title: 'Leads Assigned to You',
+        content: `${leadIds.length} lead${leadIds.length > 1 ? 's have' : ' has'} been assigned to you.`,
+        link_url: '/leads'
+      })
+    }
 
-  if (actor?.id !== ownerId) {
-    await createNotification({
-      user_id: ownerId,
-      actor_id: actor?.id,
-      type: 'assigned_lead',
-      title: 'Leads Assigned to You',
-      content: `${leadIds.length} lead${leadIds.length > 1 ? 's have' : ' has'} been assigned to you.`,
-      link_url: '/leads'
-    })
-  }
-
-  revalidatePath('/leads')
-  revalidatePath('/')
-  return { success: true }
+    revalidatePath('/leads'); revalidatePath('/')
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+// ─── updateLeadField ──────────────────────────────────────────────────────────
 
 export async function updateLeadField(id: string, field: string, value: string | number) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  // Restrict fields that can be inline edited to prevent security issues
   const allowedFields = ['name', 'contact_person', 'phone_number', 'company', 'location', 'temperature', 'tags', 'health_score', 'owner_id', 'status']
-  if (!allowedFields.includes(field)) {
-      return { error: 'Invalid field' }
-  }
+  if (!allowedFields.includes(field)) return { error: 'Invalid field' }
 
-  const { error } = await supabase.from('leads').update({ [field]: value }).eq('id', id)
+  try {
+    await pool.query(`UPDATE public.leads SET "${field}" = $1 WHERE id = $2`, [value, id])
+    await logActivity(orgId, 'updated_lead', `updated ${field} for a lead`)
 
-  if (error) {
-    console.error(`Error updating lead ${field}:`, error)
-    return { error: error.message }
-  }
-
-  await logActivity(supabase, orgId, 'updated_lead', `updated ${field} for a lead`)
-  
-  const actor = await getMockableUser()
-  await logLeadEvent(supabase, orgId, {
+    const actor = await getMockableUser()
+    const shim = createDbShim()
+    await logLeadEvent(shim, orgId, {
       lead_id: id,
       event_type: field === 'status' ? 'status_changed' : 'lead_updated',
       description: `Updated field '${field}' to '${value}'.`,
       metadata: { field, new_value: value },
       performed_by: actor?.id
-  })
+    })
 
-  if (field === 'owner_id' && value) {
-      const { data: lead } = await supabase.from('leads').select('name').eq('id', id).single()
-      const actor = await getMockableUser()
-      if (actor?.id !== value) {
-          await createNotification({
-              user_id: String(value),
-              actor_id: actor?.id,
-              type: 'assigned_lead',
-              title: 'New Lead Assigned',
-              content: `You have been assigned a new lead: ${lead?.name}`,
-              link_url: `/leads/${id}`
-          })
+    if (field === 'owner_id' && value) {
+      const leadResult = await pool.query('SELECT name FROM public.leads WHERE id = $1', [id])
+      const lead = leadResult.rows[0]
+      const a = await getMockableUser()
+      if (a?.id !== value) {
+        await createNotification({
+          user_id: String(value), actor_id: a?.id, type: 'assigned_lead',
+          title: 'New Lead Assigned',
+          content: `You have been assigned a new lead: ${lead?.name}`,
+          link_url: `/leads/${id}`
+        })
       }
-  }
+    }
 
-  revalidatePath('/leads')
-  revalidatePath('/')
-
-  // Trigger Automation: status_changed or field_updated
-  if (field === 'status') {
-      executeAutomationFlows('status_changed', 'lead', id, { status: value }).catch(console.error)
-  }
-
-  return { success: true }
+    revalidatePath('/leads'); revalidatePath('/')
+    if (field === 'status') executeAutomationFlows('status_changed', 'lead', id, { status: value }).catch(console.error)
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── deleteLead ───────────────────────────────────────────────────────────────
 
 export async function deleteLead(id: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
 
-  // We should also delete associated tasks and deals, but for now just the lead. 
-  // RLS or cascading deletes in DB should ideally handle this.
-  const { error } = await supabase.from('leads').delete().eq('id', id)
+  try {
+    const result = await pool.query('DELETE FROM public.leads WHERE id = $1', [id])
+    if (result.rowCount === 0) return { error: 'Lead not found', notFound: true }
 
-  if (error) {
-    console.error('Error deleting lead:', error)
-    return { error: error.message }
-  }
+    await logActivity(orgId, 'deleted_lead', `deleted a lead`)
 
-  await logActivity(supabase, orgId, 'deleted_lead', `deleted a lead`)
-  
-  const user = await getMockableUser()
-  await logLeadEvent(supabase, orgId, {
-      lead_id: id,
-      event_type: 'lead_deleted',
-      description: `Lead deleted manually.`,
-      performed_by: user?.id
-  })
+    const user = await getMockableUser()
+    const shim = createDbShim()
+    await logLeadEvent(shim, orgId, {
+      lead_id: id, event_type: 'lead_deleted',
+      description: `Lead deleted manually.`, performed_by: user?.id
+    })
 
-  revalidatePath('/leads')
-  revalidatePath('/')
-  return { success: true }
+    revalidatePath('/leads'); revalidatePath('/')
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── addDeal ──────────────────────────────────────────────────────────────────
 
 export async function addDeal(formData: FormData) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  // Fetch dynamic default stage
-  const { data: stages } = await supabase.from('pipeline_stages')
-    .select('label')
-    .eq('organization_id', orgId)
-    .order('sort_order', { ascending: true })
-    .limit(1)
-  
-  const defaultStage = stages?.[0]?.label.toLowerCase() || 'lead'
+  try {
+    const stagesResult = await pool.query(
+      'SELECT label FROM public.pipeline_stages WHERE organization_id = $1 ORDER BY sort_order ASC LIMIT 1', [orgId])
+    const defaultStage = stagesResult.rows[0]?.label?.toLowerCase() || 'lead'
 
-  const data = {
-    organization_id: orgId,
-    lead_id: formData.get('lead') as string,
-    title: formData.get('title') as string,
-    value: parseFloat(formData.get('value') as string) || 0,
-    status: (formData.get('stage') as string)?.toLowerCase() || defaultStage
-  }
+    const data = {
+      organization_id: orgId,
+      lead_id: formData.get('lead') as string,
+      title: formData.get('title') as string,
+      value: parseFloat(formData.get('value') as string) || 0,
+      status: (formData.get('stage') as string)?.toLowerCase() || defaultStage
+    }
 
-  const { data: insertedData, error } = await supabase.from('deals').insert(data).select().single()
-  
-  if (error) {
-    console.error('Error adding deal:', error)
-    return { error: error.message }
-  }
+    const result = await pool.query(
+      'INSERT INTO public.deals (organization_id, lead_id, title, value, status) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+      [data.organization_id, data.lead_id, data.title, data.value, data.status])
+    const insertedData = result.rows[0]
 
-  await logActivity(supabase, orgId, 'created_deal', `created a new deal: ${data.title} for $${data.value}`, data.lead_id, insertedData.id)
-
-  revalidatePath('/deals')
-  revalidatePath('/')
-  return { success: true }
+    await logActivity(orgId, 'created_deal', `created a new deal: ${data.title} for $${data.value}`, data.lead_id, insertedData.id)
+    revalidatePath('/deals'); revalidatePath('/')
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── getLeadById ──────────────────────────────────────────────────────────────
 
 export async function getLeadById(id: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return null
-  
-  const { data, error } = await supabase
-    .from('leads')
-    .select('*, deals(*)')
-    .eq('organization_id', orgId)
-    .eq('id', id)
-    .single()
-    
-  if (error) {
-    console.error('Error fetching lead:', error)
-    return null
-  }
-  return data
+
+  try {
+    const result = await pool.query(`
+      SELECT l.*,
+        COALESCE((SELECT json_agg(d.*) FROM public.deals d WHERE d.lead_id = l.id), '[]'::json) AS deals
+      FROM public.leads l WHERE l.organization_id = $1 AND l.id = $2 LIMIT 1
+    `, [orgId, id])
+    return result.rows[0] || null
+  } catch (err: any) { console.error('Error fetching lead:', err.message); return null }
 }
 
-/** Distinct subject, campaign, and source values for the org (for dynamic filter dropdowns). */
+// ─── getLeadFilterOptions ─────────────────────────────────────────────────────
+
 export async function getLeadFilterOptions() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { subjects: [], campaigns: [], sources: [] }
 
-  const { data, error } = await supabase
-    .from('leads')
-    .select('subject, campaign, source')
-    .eq('organization_id', orgId)
-
-  if (error) return { subjects: [], campaigns: [], sources: [] }
-
-  const rows = (data || []) as Array<{
-    subject: string | null
-    campaign: string | null
-    source: string | null
-  }>
-
-  const subjects = [...new Set(rows.map(r => r.subject).filter(Boolean))].sort() as string[]
-  const campaigns = [...new Set(rows.map(r => r.campaign).filter(Boolean))].sort() as string[]
-  const sources = [...new Set(rows.map(r => r.source).filter(Boolean))].sort() as string[]
-
-  return { subjects, campaigns, sources }
+  try {
+    const result = await pool.query('SELECT subject, campaign, source FROM public.leads WHERE organization_id = $1', [orgId])
+    const rows = result.rows
+    const subjects = [...new Set(rows.map((r: any) => r.subject).filter(Boolean))].sort() as string[]
+    const campaigns = [...new Set(rows.map((r: any) => r.campaign).filter(Boolean))].sort() as string[]
+    const sources = [...new Set(rows.map((r: any) => r.source).filter(Boolean))].sort() as string[]
+    return { subjects, campaigns, sources }
+  } catch { return { subjects: [], campaigns: [], sources: [] } }
 }
+
+// ─── updateDealStage ──────────────────────────────────────────────────────────
 
 export async function updateDealStage(dealId: string, newStage: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { data: deal } = await supabase.from('deals').select('title, value').eq('id', dealId).single()
+  try {
+    const dealResult = await pool.query('SELECT title, value FROM public.deals WHERE id = $1', [dealId])
+    const deal = dealResult.rows[0]
 
-  const updatePayload: any = { status: newStage, last_activity_at: new Date().toISOString() }
-  if (newStage === 'won' || newStage === 'lost') {
-    updatePayload.probability = newStage === 'won' ? 100 : 0
-  }
+    const updates: any = { status: newStage, last_activity_at: new Date().toISOString() }
+    if (newStage === 'won' || newStage === 'lost') updates.probability = newStage === 'won' ? 100 : 0
 
-  const { error } = await supabase
-    .from('deals')
-    .update(updatePayload)
-    .eq('id', dealId)
-    .eq('organization_id', orgId)
-    
-  if (error) {
-    console.error('Error updating deal:', error)
-    return { error: error.message }
-  }
+    const keys = Object.keys(updates); const vals = Object.values(updates)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.deals SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+      [...vals, dealId, orgId])
 
-  await logActivity(supabase, orgId, 'updated_deal', `moved "${deal?.title || 'deal'}" to ${newStage}`, undefined, dealId)
+    await logActivity(orgId, 'updated_deal', `moved "${deal?.title || 'deal'}" to ${newStage}`, undefined, dealId)
 
-  if (newStage === 'won') {
-      const { data: adminUser } = await supabase.from('users').select('id').eq('role', 'admin').limit(1).single()
+    if (newStage === 'won') {
+      const adminResult = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin'])
+      const adminUser = adminResult.rows[0]
       if (adminUser) {
-          const actor = await getMockableUser()
-          await createNotification({
-              user_id: adminUser.id,
-              actor_id: actor?.id,
-              type: 'deal_won',
-              title: `Deal Won: ${deal?.title}`,
-              content: `This deal was just marked as Won! Value: $${deal?.value || 0}`,
-              link_url: '/deals'
-          })
+        const actor = await getMockableUser()
+        await createNotification({
+          user_id: adminUser.id, actor_id: actor?.id, type: 'deal_won',
+          title: `Deal Won: ${deal?.title}`,
+          content: `This deal was just marked as Won! Value: $${deal?.value || 0}`,
+          link_url: '/deals'
+        })
       }
-  }
+    }
 
-  
-  revalidatePath('/deals')
-  revalidatePath('/')
-
-  // Trigger Automation: deal_won / stage_changed
-  if (newStage.toLowerCase() === 'won') {
-      executeAutomationFlows('deal_won', 'deal', dealId, { status: newStage }).catch(console.error)
-  }
-  executeAutomationFlows('stage_changed', 'deal', dealId, { status: newStage }).catch(console.error)
-
-  return { success: true }
+    revalidatePath('/deals'); revalidatePath('/')
+    if (newStage.toLowerCase() === 'won') executeAutomationFlows('deal_won', 'deal', dealId, { status: newStage }).catch(console.error)
+    executeAutomationFlows('stage_changed', 'deal', dealId, { status: newStage }).catch(console.error)
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── updateDeal ───────────────────────────────────────────────────────────────
 
 export async function updateDeal(dealId: string, fields: {
-  title?: string
-  value?: number
-  notes?: string
-  close_date?: string
-  probability?: number
-  assigned_to?: string | null
-  status?: string
+  title?: string; value?: number; notes?: string; close_date?: string
+  probability?: number; assigned_to?: string | null; status?: string
 }) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { error } = await supabase
-    .from('deals')
-    .update({ ...fields, last_activity_at: new Date().toISOString() })
-    .eq('id', dealId)
-    .eq('organization_id', orgId)
+  try {
+    const updates = { ...fields, last_activity_at: new Date().toISOString() }
+    const keys = Object.keys(updates); const vals = Object.values(updates)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.deals SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+      [...vals, dealId, orgId])
 
-  if (error) {
-    console.error('Error updating deal fields:', error)
-    return { error: error.message }
-  }
+    await logActivity(orgId, 'updated_deal', `updated deal details`, undefined, dealId)
+    revalidatePath('/deals'); revalidatePath('/')
 
-  await logActivity(supabase, orgId, 'updated_deal', `updated deal details`, undefined, dealId)
-
-  revalidatePath('/deals')
-  revalidatePath('/')
-
-  // Trigger Automation: field_updated / status_changed
-  if (fields.status) {
-      if (fields.status.toLowerCase() === 'won') {
-          executeAutomationFlows('deal_won', 'deal', dealId, fields).catch(console.error)
-      }
+    if (fields.status) {
+      if (fields.status.toLowerCase() === 'won') executeAutomationFlows('deal_won', 'deal', dealId, fields).catch(console.error)
       executeAutomationFlows('stage_changed', 'deal', dealId, fields).catch(console.error)
-  }
-
-  return { success: true }
+    }
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── deleteDeal ───────────────────────────────────────────────────────────────
 
 export async function deleteDeal(dealId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
 
-  const { data: deal } = await supabase.from('deals').select('title').eq('id', dealId).single()
-
-  const { error } = await supabase
-    .from('deals')
-    .delete()
-    .eq('id', dealId)
-    .eq('organization_id', orgId)
-
-  if (error) {
-    console.error('Error deleting deal:', error)
-    return { error: error.message }
-  }
-
-  await logActivity(supabase, orgId, 'deleted_deal', `deleted deal: "${deal?.title || 'unknown'}"`)
-
-  revalidatePath('/deals')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    const dealResult = await pool.query('SELECT title FROM public.deals WHERE id = $1', [dealId])
+    const deal = dealResult.rows[0]
+    await pool.query('DELETE FROM public.deals WHERE id = $1 AND organization_id = $2', [dealId, orgId])
+    await logActivity(orgId, 'deleted_deal', `deleted deal: "${deal?.title || 'unknown'}"`)
+    revalidatePath('/deals'); revalidatePath('/')
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
+// ─── getTasks ─────────────────────────────────────────────────────────────────
 
 export async function getTasks(leadId?: string, repId?: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-  
+
   const user = await getMockableUser()
   let isAdmin = false
-
   if (user) {
-      const { data: userData } = await supabase.from('users').select('role').eq('id', user.id).single()
-      isAdmin = userData?.role === 'admin' || userData?.role === 'super_admin'
+    const r = await pool.query('SELECT role FROM public.users WHERE id = $1', [user.id])
+    isAdmin = r.rows[0]?.role === 'admin' || r.rows[0]?.role === 'super_admin'
   }
 
-  let query = supabase
-    .from('tasks')
-    .select('*, leads(id, name, owner_id), deals(title), users!tasks_assigned_to_fkey(id, full_name, role)')
-    .eq('organization_id', orgId)
-    .order('due_date', { ascending: true })
-    
-  if (leadId) {
-    query = query.eq('lead_id', leadId)
-  }
+  const values: any[] = [orgId]
+  const conditions: string[] = ['t.organization_id = $1']
 
-  // Role-based visibility logic
-  if (!isAdmin && user) {
-     const userId = user.id
-     // Reps see tasks assigned to them, or unassigned team tasks
-     query = query.or(`assigned_to.eq.${userId},assigned_to.is.null`)
-  } else if (isAdmin && repId) {
-     query = query.eq('assigned_to', repId)
-  }
+  if (leadId) { values.push(leadId); conditions.push(`t.lead_id = $${values.length}`) }
+  if (!isAdmin && user) { values.push(user.id); conditions.push(`(t.assigned_to = $${values.length} OR t.assigned_to IS NULL)`) }
+  else if (isAdmin && repId) { values.push(repId); conditions.push(`t.assigned_to = $${values.length}`) }
 
-  const { data, error } = await query
-    
-  if (error) {
-    console.error('Error fetching tasks:', error)
-    return []
-  }
-  return data || []
+  try {
+    const result = await pool.query(`
+      SELECT t.*,
+        json_build_object('id', l.id, 'name', l.name, 'owner_id', l.owner_id) AS leads,
+        json_build_object('title', d.title) AS deals,
+        json_build_object('id', u.id, 'full_name', u.full_name, 'role', u.role) AS users
+      FROM public.tasks t
+      LEFT JOIN public.leads l ON l.id = t.lead_id
+      LEFT JOIN public.deals d ON d.id = t.deal_id
+      LEFT JOIN public.users u ON u.id = t.assigned_to
+      WHERE ${conditions.join(' AND ')} ORDER BY t.due_date ASC
+    `, values)
+    return result.rows
+  } catch (err: any) { console.error('Error fetching tasks:', err.message); return [] }
 }
 
+// ─── getOrgMembers ────────────────────────────────────────────────────────────
+
 export async function getOrgMembers() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  const { data, error } = await supabase
-    .from('users')
-    .select('id, full_name, role')
-    .eq('organization_id', orgId)
-    .eq('is_active', true)
-    .order('full_name')
-
-  if (error) {
-    console.error('Error fetching members:', error)
-    return []
-  }
-  return data
+  try {
+    const result = await pool.query(
+      'SELECT id, full_name, role FROM public.users WHERE organization_id = $1 AND is_active = true ORDER BY full_name', [orgId])
+    return result.rows
+  } catch (err: any) { console.error('Error fetching members:', err.message); return [] }
 }
 
 type SearchParams = { q?: string }
 
-function logSupabaseError(context: string, error: unknown) {
-  // PostgrestError is not always serializable; log known fields safely.
+function logDbError(context: string, error: unknown) {
   const e = error as any
-  const summary = {
-    message: e?.message,
-    details: e?.details,
-    hint: e?.hint,
-    code: e?.code,
-    status: e?.status,
-  }
-  console.error(context, summary)
+  console.error(context, { message: e?.message, code: e?.code })
 }
 
 function isMissingRelation(error: unknown) {
   const e = error as any
-  // Postgres undefined_table
   return e?.code === '42P01' || (typeof e?.message === 'string' && e.message.toLowerCase().includes('does not exist'))
 }
 
+// ─── getCompanies ─────────────────────────────────────────────────────────────
+
 export async function getCompanies(params: SearchParams = {}) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  let query = supabase
-    .from('companies')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-
-  if (params.q) {
-    query = query.or(`name.ilike.%${params.q}%,email.ilike.%${params.q}%,phone.ilike.%${params.q}%`)
-  }
-
-  const { data, error } = await query
-  if (error) {
-    if (isMissingRelation(error)) {
-      // Likely the new migration hasn't been applied yet.
-      logSupabaseError('Companies table missing. Run latest Supabase migrations.', error)
-      return []
+  try {
+    const values: any[] = [orgId]
+    let where = 'WHERE organization_id = $1'
+    if (params.q) {
+      values.push(`%${params.q}%`); const n = values.length
+      where += ` AND (name ILIKE $${n} OR email ILIKE $${n} OR phone ILIKE $${n})`
     }
-    logSupabaseError('Error fetching companies:', error)
-    return []
+    const result = await pool.query(`SELECT * FROM public.companies ${where} ORDER BY created_at DESC`, values)
+    return result.rows
+  } catch (err: any) {
+    if (isMissingRelation(err)) { logDbError('Companies table missing.', err); return [] }
+    logDbError('Error fetching companies:', err); return []
   }
-  return data || []
 }
+
+// ─── createCompany ────────────────────────────────────────────────────────────
 
 export async function createCompany(formData: FormData) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const payload = {
-    organization_id: orgId,
-    name: String(formData.get('name') || '').trim(),
-    website: String(formData.get('website') || '').trim() || null,
-    industry: String(formData.get('industry') || '').trim() || null,
-    phone: String(formData.get('phone') || '').trim() || null,
-    email: String(formData.get('email') || '').trim() || null,
-    address: String(formData.get('address') || '').trim() || null,
-    notes: String(formData.get('notes') || '').trim() || null,
-    updated_at: new Date().toISOString(),
-  }
-
-  if (!payload.name) return { error: 'Company name is required' }
-
-  const { error } = await supabase.from('companies').insert(payload)
-  if (error) return { error: error.message }
-
-  revalidatePath('/companies')
-  revalidatePath('/')
-  return { success: true }
+  const name = String(formData.get('name') || '').trim()
+  if (!name) return { error: 'Company name is required' }
+  try {
+    await pool.query(
+      'INSERT INTO public.companies (organization_id, name, website, industry, phone, email, address, notes, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [orgId, name,
+        String(formData.get('website') || '').trim() || null,
+        String(formData.get('industry') || '').trim() || null,
+        String(formData.get('phone') || '').trim() || null,
+        String(formData.get('email') || '').trim() || null,
+        String(formData.get('address') || '').trim() || null,
+        String(formData.get('notes') || '').trim() || null,
+        new Date().toISOString()])
+    revalidatePath('/companies'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── updateCompany ────────────────────────────────────────────────────────────
 
 export async function updateCompany(companyId: string, updates: Record<string, unknown>) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase
-    .from('companies')
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq('id', companyId)
-    .eq('organization_id', orgId)
-
-  if (error) return { error: error.message }
-  revalidatePath('/companies')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    const payload = { ...updates, updated_at: new Date().toISOString() }
+    const keys = Object.keys(payload); const vals = Object.values(payload)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.companies SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+      [...vals, companyId, orgId])
+    revalidatePath('/companies'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── deleteCompany ────────────────────────────────────────────────────────────
 
 export async function deleteCompany(companyId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase.from('companies').delete().eq('id', companyId).eq('organization_id', orgId)
-  if (error) return { error: error.message }
-
-  revalidatePath('/companies')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('DELETE FROM public.companies WHERE id = $1 AND organization_id = $2', [companyId, orgId])
+    revalidatePath('/companies'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── getContacts ──────────────────────────────────────────────────────────────
 
 export async function getContacts(params: SearchParams = {}) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  let query = supabase
-    .from('contacts')
-    .select('*, companies(id, name)')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-
-  if (params.q) {
-    query = query.or(`name.ilike.%${params.q}%,email.ilike.%${params.q}%,phone.ilike.%${params.q}%`)
-  }
-
-  const { data, error } = await query
-  if (error) {
-    if (isMissingRelation(error)) {
-      logSupabaseError('Contacts table missing. Run latest Supabase migrations.', error)
-      return []
+  try {
+    const values: any[] = [orgId]
+    let where = 'WHERE c.organization_id = $1'
+    if (params.q) {
+      values.push(`%${params.q}%`); const n = values.length
+      where += ` AND (c.name ILIKE $${n} OR c.email ILIKE $${n} OR c.phone ILIKE $${n})`
     }
-    logSupabaseError('Error fetching contacts:', error)
-    return []
+    const result = await pool.query(`
+      SELECT c.*, json_build_object('id', co.id, 'name', co.name) AS companies
+      FROM public.contacts c LEFT JOIN public.companies co ON co.id = c.company_id
+      ${where} ORDER BY c.created_at DESC
+    `, values)
+    return result.rows
+  } catch (err: any) {
+    if (isMissingRelation(err)) { logDbError('Contacts table missing.', err); return [] }
+    logDbError('Error fetching contacts:', err); return []
   }
-  return data || []
 }
+
+// ─── createContact ────────────────────────────────────────────────────────────
 
 export async function createContact(formData: FormData) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const payload = {
-    organization_id: orgId,
-    company_id: String(formData.get('company_id') || '').trim() || null,
-    name: String(formData.get('name') || '').trim(),
-    email: String(formData.get('email') || '').trim() || null,
-    phone: String(formData.get('phone') || '').trim() || null,
-    title: String(formData.get('title') || '').trim() || null,
-    notes: String(formData.get('notes') || '').trim() || null,
-    updated_at: new Date().toISOString(),
-  }
-
-  if (!payload.name) return { error: 'Contact name is required' }
-
-  const { error } = await supabase.from('contacts').insert(payload)
-  if (error) return { error: error.message }
-
-  revalidatePath('/contacts')
-  revalidatePath('/')
-  return { success: true }
+  const name = String(formData.get('name') || '').trim()
+  if (!name) return { error: 'Contact name is required' }
+  try {
+    await pool.query(
+      'INSERT INTO public.contacts (organization_id, company_id, name, email, phone, title, notes, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [orgId,
+        String(formData.get('company_id') || '').trim() || null,
+        name,
+        String(formData.get('email') || '').trim() || null,
+        String(formData.get('phone') || '').trim() || null,
+        String(formData.get('title') || '').trim() || null,
+        String(formData.get('notes') || '').trim() || null,
+        new Date().toISOString()])
+    revalidatePath('/contacts'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+// ─── updateContact ────────────────────────────────────────────────────────────
 
 export async function updateContact(contactId: string, updates: Record<string, unknown>) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase
-    .from('contacts')
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq('id', contactId)
-    .eq('organization_id', orgId)
-
-  if (error) return { error: error.message }
-  revalidatePath('/contacts')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    const payload = { ...updates, updated_at: new Date().toISOString() }
+    const keys = Object.keys(payload); const vals = Object.values(payload)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.contacts SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+      [...vals, contactId, orgId])
+    revalidatePath('/contacts'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── deleteContact ────────────────────────────────────────────────────────────
 
 export async function deleteContact(contactId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase.from('contacts').delete().eq('id', contactId).eq('organization_id', orgId)
-  if (error) return { error: error.message }
-
-  revalidatePath('/contacts')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('DELETE FROM public.contacts WHERE id = $1 AND organization_id = $2', [contactId, orgId])
+    revalidatePath('/contacts'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── getCustomers ─────────────────────────────────────────────────────────────
 
 export async function getCustomers(params: SearchParams = {}) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  let query = supabase
-    .from('customers')
-    .select('*, companies(id, name), contacts(id, name, email, phone), leads(id, name)')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-
-  if (params.q) {
-    query = query.or(`status.ilike.%${params.q}%,notes.ilike.%${params.q}%`)
-  }
-
-  const { data, error } = await query
-  if (error) {
-    console.error('Error fetching customers:', error)
-    return []
-  }
-  return data || []
+  try {
+    const values: any[] = [orgId]
+    let where = 'WHERE cu.organization_id = $1'
+    if (params.q) {
+      values.push(`%${params.q}%`); const n = values.length
+      where += ` AND (cu.status ILIKE $${n} OR cu.notes ILIKE $${n})`
+    }
+    const result = await pool.query(`
+      SELECT cu.*,
+        json_build_object('id', co.id, 'name', co.name) AS companies,
+        json_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone) AS contacts,
+        json_build_object('id', l.id, 'name', l.name) AS leads
+      FROM public.customers cu
+      LEFT JOIN public.companies co ON co.id = cu.company_id
+      LEFT JOIN public.contacts c ON c.id = cu.contact_id
+      LEFT JOIN public.leads l ON l.id = cu.source_lead_id
+      ${where} ORDER BY cu.created_at DESC
+    `, values)
+    return result.rows
+  } catch (err: any) { console.error('Error fetching customers:', err.message); return [] }
 }
+
+// ─── createCustomer ───────────────────────────────────────────────────────────
 
 export async function createCustomer(formData: FormData) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const payload = {
-    organization_id: orgId,
-    company_id: String(formData.get('company_id') || '').trim() || null,
-    contact_id: String(formData.get('contact_id') || '').trim() || null,
-    source_lead_id: String(formData.get('source_lead_id') || '').trim() || null,
-    status: String(formData.get('status') || '').trim() || 'active',
-    notes: String(formData.get('notes') || '').trim() || null,
-    updated_at: new Date().toISOString(),
-  }
-
-  if (!payload.company_id && !payload.contact_id) {
-    return { error: 'Customer must have a company or contact' }
-  }
-
-  const { error } = await supabase.from('customers').insert(payload)
-  if (error) return { error: error.message }
-
-  revalidatePath('/customers')
-  revalidatePath('/')
-  return { success: true }
+  const company_id = String(formData.get('company_id') || '').trim() || null
+  const contact_id = String(formData.get('contact_id') || '').trim() || null
+  if (!company_id && !contact_id) return { error: 'Customer must have a company or contact' }
+  try {
+    await pool.query(
+      'INSERT INTO public.customers (organization_id, company_id, contact_id, source_lead_id, status, notes, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [orgId, company_id, contact_id,
+        String(formData.get('source_lead_id') || '').trim() || null,
+        String(formData.get('status') || '').trim() || 'active',
+        String(formData.get('notes') || '').trim() || null,
+        new Date().toISOString()])
+    revalidatePath('/customers'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── updateCustomer ───────────────────────────────────────────────────────────
 
 export async function updateCustomer(customerId: string, updates: Record<string, unknown>) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase
-    .from('customers')
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq('id', customerId)
-    .eq('organization_id', orgId)
-
-  if (error) return { error: error.message }
-  revalidatePath('/customers')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    const payload = { ...updates, updated_at: new Date().toISOString() }
+    const keys = Object.keys(payload); const vals = Object.values(payload)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.customers SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+      [...vals, customerId, orgId])
+    revalidatePath('/customers'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── deleteCustomer ───────────────────────────────────────────────────────────
 
 export async function deleteCustomer(customerId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase.from('customers').delete().eq('id', customerId).eq('organization_id', orgId)
-  if (error) return { error: error.message }
-
-  revalidatePath('/customers')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('DELETE FROM public.customers WHERE id = $1 AND organization_id = $2', [customerId, orgId])
+    revalidatePath('/customers'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── getLists ─────────────────────────────────────────────────────────────────
 
 export async function getLists() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  const { data, error } = await supabase
-    .from('lists')
-    .select('*, list_members(count)')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-
-  if (error) {
-    console.error('Error fetching lists:', error)
-    return []
-  }
-  return data || []
+  try {
+    const result = await pool.query(`
+      SELECT l.*, COUNT(lm.id) AS list_members_count
+      FROM public.lists l
+      LEFT JOIN public.list_members lm ON lm.list_id = l.id
+      WHERE l.organization_id = $1
+      GROUP BY l.id ORDER BY l.created_at DESC
+    `, [orgId])
+    return result.rows
+  } catch (err: any) { console.error('Error fetching lists:', err.message); return [] }
 }
+
+// ─── createList ───────────────────────────────────────────────────────────────
 
 export async function createList(formData: FormData) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
   const name = String(formData.get('name') || '').trim()
   if (!name) return { error: 'List name is required' }
-
-  const { error } = await supabase.from('lists').insert({
-    organization_id: orgId,
-    name,
-    description: String(formData.get('description') || '').trim() || null,
-    updated_at: new Date().toISOString(),
-  })
-  if (error) return { error: error.message }
-
-  revalidatePath('/lists')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query(
+      'INSERT INTO public.lists (organization_id, name, description, updated_at) VALUES ($1,$2,$3,$4)',
+      [orgId, name, String(formData.get('description') || '').trim() || null, new Date().toISOString()])
+    revalidatePath('/lists'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── updateList ───────────────────────────────────────────────────────────────
 
 export async function updateList(listId: string, updates: Record<string, unknown>) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase
-    .from('lists')
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq('id', listId)
-    .eq('organization_id', orgId)
-  if (error) return { error: error.message }
-
-  revalidatePath('/lists')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    const payload = { ...updates, updated_at: new Date().toISOString() }
+    const keys = Object.keys(payload); const vals = Object.values(payload)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.lists SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+      [...vals, listId, orgId])
+    revalidatePath('/lists'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── deleteList ───────────────────────────────────────────────────────────────
 
 export async function deleteList(listId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase.from('lists').delete().eq('id', listId).eq('organization_id', orgId)
-  if (error) return { error: error.message }
-
-  revalidatePath('/lists')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('DELETE FROM public.lists WHERE id = $1 AND organization_id = $2', [listId, orgId])
+    revalidatePath('/lists'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── getListMembers ───────────────────────────────────────────────────────────
 
 export async function getListMembers(listId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  const { data, error } = await supabase
-    .from('list_members')
-    .select('*')
-    .eq('organization_id', orgId)
-    .eq('list_id', listId)
-    .order('created_at', { ascending: false })
-
-  if (error) {
-    console.error('Error fetching list members:', error)
-    return []
-  }
-  return data || []
+  try {
+    const result = await pool.query(
+      'SELECT * FROM public.list_members WHERE organization_id = $1 AND list_id = $2 ORDER BY created_at DESC',
+      [orgId, listId])
+    return result.rows
+  } catch (err: any) { console.error('Error fetching list members:', err.message); return [] }
 }
 
-export async function addListMember(formData: FormData) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) return { error: 'No organization found' }
+// ─── addListMember ────────────────────────────────────────────────────────────
 
+export async function addListMember(formData: FormData) {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) return { error: 'No organization found' }
   const listId = String(formData.get('list_id') || '').trim()
   const memberType = String(formData.get('member_type') || '').trim()
   const memberId = String(formData.get('member_id') || '').trim()
   if (!listId || !memberType || !memberId) return { error: 'list_id, member_type and member_id are required' }
-
-  const { error } = await supabase.from('list_members').insert({
-    organization_id: orgId,
-    list_id: listId,
-    member_type: memberType,
-    member_id: memberId,
-  })
-  if (error) return { error: error.message }
-
-  revalidatePath('/lists')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query(
+      'INSERT INTO public.list_members (organization_id, list_id, member_type, member_id) VALUES ($1,$2,$3,$4)',
+      [orgId, listId, memberType, memberId])
+    revalidatePath('/lists'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── removeListMember ─────────────────────────────────────────────────────────
 
 export async function removeListMember(memberId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase.from('list_members').delete().eq('id', memberId).eq('organization_id', orgId)
-  if (error) return { error: error.message }
-
-  revalidatePath('/lists')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('DELETE FROM public.list_members WHERE id = $1 AND organization_id = $2', [memberId, orgId])
+    revalidatePath('/lists'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── backfillContactsAndCompaniesFromLeads ────────────────────────────────────
 
 export async function backfillContactsAndCompaniesFromLeads() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
 
-  const { data: leads, error: leadsError } = await supabase
-    .from('leads')
-    .select('id, organization_id, name, company, contact_person, email, phone_number, company_id, contact_id')
-    .eq('organization_id', orgId)
-    .or('company_id.is.null,contact_id.is.null')
-    .order('created_at', { ascending: false })
+  try {
+    const leadsResult = await pool.query(
+      `SELECT id, organization_id, name, company, contact_person, email, phone_number, company_id, contact_id
+       FROM public.leads WHERE organization_id = $1 AND (company_id IS NULL OR contact_id IS NULL)
+       ORDER BY created_at DESC`, [orgId])
+    const leads = leadsResult.rows
+    if (leads.length === 0) return { success: true, updatedLeads: 0, createdCompanies: 0, createdContacts: 0 }
 
-  if (leadsError) return { error: leadsError.message }
-  if (!leads || leads.length === 0) return { success: true, updatedLeads: 0, createdCompanies: 0, createdContacts: 0 }
+    const companyMap = new Map<string, string>()
+    const contactMap = new Map<string, string>()
+    let createdCompanies = 0, createdContacts = 0, updatedLeads = 0
 
-  const companyMap = new Map<string, string>()
-  const contactMap = new Map<string, string>()
-  let createdCompanies = 0
-  let createdContacts = 0
-  let updatedLeads = 0
+    for (const lead of leads) {
+      let companyId = lead.company_id as string | null
+      let contactId = lead.contact_id as string | null
+      const companyName = String(lead.company || lead.name || '').trim()
+      const contactName = String(lead.contact_person || lead.name || '').trim()
+      const email = String(lead.email || '').trim()
+      const phone = String(lead.phone_number || '').trim()
 
-  for (const lead of leads) {
-    let companyId = lead.company_id as string | null
-    let contactId = lead.contact_id as string | null
-    const companyName = String(lead.company || lead.name || '').trim()
-    const contactName = String(lead.contact_person || lead.name || '').trim()
-    const email = String(lead.email || '').trim()
-    const phone = String(lead.phone_number || '').trim()
-
-    if (!companyId && companyName) {
-      const key = companyName.toLowerCase()
-      if (companyMap.has(key)) {
-        companyId = companyMap.get(key) || null
-      } else {
-        const { data: existingCompany } = await supabase
-          .from('companies')
-          .select('id')
-          .eq('organization_id', orgId)
-          .ilike('name', companyName)
-          .limit(1)
-          .maybeSingle()
-
-        if (existingCompany?.id) {
-          companyId = existingCompany.id
-          companyMap.set(key, existingCompany.id)
-        } else {
-          const { data: newCompany, error: newCompanyErr } = await supabase
-            .from('companies')
-            .insert({
-              organization_id: orgId,
-              name: companyName,
-              phone: phone || null,
-              email: email || null,
-              updated_at: new Date().toISOString(),
-            })
-            .select('id')
-            .single()
-          if (!newCompanyErr && newCompany?.id) {
-            companyId = newCompany.id
-            companyMap.set(key, newCompany.id)
-            createdCompanies += 1
+      if (!companyId && companyName) {
+        const key = companyName.toLowerCase()
+        if (companyMap.has(key)) { companyId = companyMap.get(key) || null }
+        else {
+          const ex = await pool.query(
+            'SELECT id FROM public.companies WHERE organization_id = $1 AND name ILIKE $2 LIMIT 1', [orgId, companyName])
+          if (ex.rows[0]?.id) { companyId = ex.rows[0].id; companyMap.set(key, ex.rows[0].id) }
+          else {
+            const ins = await pool.query(
+              'INSERT INTO public.companies (organization_id, name, phone, email, updated_at) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+              [orgId, companyName, phone || null, email || null, new Date().toISOString()])
+            if (ins.rows[0]?.id) { companyId = ins.rows[0].id; companyMap.set(key, ins.rows[0].id); createdCompanies++ }
           }
         }
       }
-    }
 
-    if (!contactId && (contactName || email || phone)) {
-      const key = `${contactName.toLowerCase()}|${email.toLowerCase()}|${phone}`
-      if (contactMap.has(key)) {
-        contactId = contactMap.get(key) || null
-      } else {
-        let existingContact: { id: string } | null = null
-        if (email) {
-          const { data } = await supabase
-            .from('contacts')
-            .select('id')
-            .eq('organization_id', orgId)
-            .eq('email', email)
-            .limit(1)
-            .maybeSingle()
-          existingContact = data
-        }
-        if (!existingContact && phone) {
-          const { data } = await supabase
-            .from('contacts')
-            .select('id')
-            .eq('organization_id', orgId)
-            .eq('phone', phone)
-            .limit(1)
-            .maybeSingle()
-          existingContact = data
-        }
-        if (!existingContact && contactName) {
-          const { data } = await supabase
-            .from('contacts')
-            .select('id')
-            .eq('organization_id', orgId)
-            .ilike('name', contactName)
-            .limit(1)
-            .maybeSingle()
-          existingContact = data
-        }
+      if (!contactId && (contactName || email || phone)) {
+        const key = `${contactName.toLowerCase()}|${email.toLowerCase()}|${phone}`
+        if (contactMap.has(key)) { contactId = contactMap.get(key) || null }
+        else {
+          let existingContact: string | null = null
+          if (email) { const r = await pool.query('SELECT id FROM public.contacts WHERE organization_id = $1 AND email = $2 LIMIT 1', [orgId, email]); existingContact = r.rows[0]?.id }
+          if (!existingContact && phone) { const r = await pool.query('SELECT id FROM public.contacts WHERE organization_id = $1 AND phone = $2 LIMIT 1', [orgId, phone]); existingContact = r.rows[0]?.id }
+          if (!existingContact && contactName) { const r = await pool.query('SELECT id FROM public.contacts WHERE organization_id = $1 AND name ILIKE $2 LIMIT 1', [orgId, contactName]); existingContact = r.rows[0]?.id }
 
-        if (existingContact?.id) {
-          contactId = existingContact.id
-          contactMap.set(key, existingContact.id)
-        } else {
-          const { data: newContact, error: newContactErr } = await supabase
-            .from('contacts')
-            .insert({
-              organization_id: orgId,
-              company_id: companyId,
-              name: contactName || companyName || 'Unknown Contact',
-              email: email || null,
-              phone: phone || null,
-              updated_at: new Date().toISOString(),
-            })
-            .select('id')
-            .single()
-          if (!newContactErr && newContact?.id) {
-            contactId = newContact.id
-            contactMap.set(key, newContact.id)
-            createdContacts += 1
+          if (existingContact) { contactId = existingContact; contactMap.set(key, existingContact) }
+          else {
+            const ins = await pool.query(
+              'INSERT INTO public.contacts (organization_id, company_id, name, email, phone, updated_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+              [orgId, companyId, contactName || companyName || 'Unknown Contact', email || null, phone || null, new Date().toISOString()])
+            if (ins.rows[0]?.id) { contactId = ins.rows[0].id; contactMap.set(key, ins.rows[0].id); createdContacts++ }
           }
         }
       }
+
+      if (companyId || contactId) {
+        const updateFields: any = {}
+        if (companyId) updateFields.company_id = companyId
+        if (contactId) updateFields.contact_id = contactId
+        const keys = Object.keys(updateFields); const vals = Object.values(updateFields)
+        const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+        await pool.query(
+          `UPDATE public.leads SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+          [...vals, lead.id, orgId])
+        updatedLeads++
+      }
     }
 
-    if (companyId || contactId) {
-      const { error: updateError } = await supabase
-        .from('leads')
-        .update({
-          ...(companyId ? { company_id: companyId } : {}),
-          ...(contactId ? { contact_id: contactId } : {}),
-        })
-        .eq('id', lead.id)
-        .eq('organization_id', orgId)
-
-      if (!updateError) updatedLeads += 1
-    }
-  }
-
-  revalidatePath('/leads')
-  revalidatePath('/contacts')
-  revalidatePath('/companies')
-  revalidatePath('/')
-  return { success: true, updatedLeads, createdCompanies, createdContacts }
+    revalidatePath('/leads'); revalidatePath('/contacts'); revalidatePath('/companies'); revalidatePath('/')
+    return { success: true, updatedLeads, createdCompanies, createdContacts }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── addTask ──────────────────────────────────────────────────────────────────
 
 export async function addTask(formData: FormData) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const leadId = formData.get('lead_id') as string;
-  const dealId = formData.get('deal_id') as string;
+  const leadId = formData.get('lead_id') as string
+  const dealId = formData.get('deal_id') as string
+  const assigned_to = (formData.get('assigned_to') as string) || null
+  const title = formData.get('title') as string
 
-  const data = {
-    organization_id: orgId,
-    title: formData.get('title') as string,
-    description: formData.get('description') as string || '',
-    status: 'pending',
-    priority: formData.get('priority') as string || 'normal',
-    due_date: formData.get('due_date') ? new Date(formData.get('due_date') as string).toISOString() : null,
-    lead_id: leadId && leadId !== 'none' ? leadId : null,
-    deal_id: dealId && dealId !== 'none' ? dealId : null,
-    assigned_to: (formData.get('assigned_to') as string) || null,
-  }
+  try {
+    await pool.query(
+      'INSERT INTO public.tasks (organization_id, title, description, status, priority, due_date, lead_id, deal_id, assigned_to) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [orgId, title, (formData.get('description') as string) || '', 'pending',
+        (formData.get('priority') as string) || 'normal',
+        formData.get('due_date') ? new Date(formData.get('due_date') as string).toISOString() : null,
+        leadId && leadId !== 'none' ? leadId : null,
+        dealId && dealId !== 'none' ? dealId : null,
+        assigned_to])
 
-  const { error } = await supabase.from('tasks').insert(data)
-  
-  if (error) {
-    console.error('Error adding task:', error)
-    return { error: error.message }
-  }
-
-  if (data.assigned_to) {
+    if (assigned_to) {
       const actor = await getMockableUser()
-      if (actor?.id !== data.assigned_to) {
-          await createNotification({
-              user_id: data.assigned_to,
-              actor_id: actor?.id,
-              type: 'task_reminder',
-              title: `New Task Assigned`,
-              content: `You were assigned a task: ${data.title}`,
-              link_url: '/tasks'
-          })
+      if (actor?.id !== assigned_to) {
+        await createNotification({
+          user_id: assigned_to, actor_id: actor?.id, type: 'task_reminder',
+          title: 'New Task Assigned', content: `You were assigned a task: ${title}`,
+          link_url: '/tasks'
+        })
       }
-  }
+    }
 
-  revalidatePath('/tasks')
-  revalidatePath('/')
-  return { success: true }
+    revalidatePath('/tasks'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── toggleTaskCompletion ─────────────────────────────────────────────────────
 
 export async function toggleTaskCompletion(taskId: string, isCompleted: boolean) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase
-    .from('tasks')
-    .update({ status: isCompleted ? 'completed' : 'pending' })
-    .eq('id', taskId)
-    .eq('organization_id', orgId)
-
-  if (error) {
-    console.error('Error toggling task:', error)
-    return { error: error.message }
-  }
-
-  revalidatePath('/tasks')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query(
+      'UPDATE public.tasks SET status = $1 WHERE id = $2 AND organization_id = $3',
+      [isCompleted ? 'completed' : 'pending', taskId, orgId])
+    revalidatePath('/tasks'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── updateTask ───────────────────────────────────────────────────────────────
 
 export async function updateTask(taskId: string, updates: Record<string, unknown>) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { error } = await supabase
-    .from('tasks')
-    .update(updates)
-    .eq('id', taskId)
-    .eq('organization_id', orgId)
-
-  if (error) {
-    console.error('Error updating task:', error)
-    return { error: error.message }
-  }
-
-  revalidatePath('/tasks')
-  revalidatePath('/follow-ups')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    const keys = Object.keys(updates); const vals = Object.values(updates)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(
+      `UPDATE public.tasks SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
+      [...vals, taskId, orgId])
+    revalidatePath('/tasks'); revalidatePath('/follow-ups'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── deleteTask ───────────────────────────────────────────────────────────────
 
 export async function deleteTask(taskId: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
+  try {
+    await pool.query('DELETE FROM public.tasks WHERE id = $1 AND organization_id = $2', [taskId, orgId])
+    revalidatePath('/tasks'); revalidatePath('/follow-ups'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
+}
+// ─── logActivity ──────────────────────────────────────────────────────────────
+// NOTE: signature changed — removed supabase param. Update any callers.
 
-  const { error } = await supabase
-    .from('tasks')
-    .delete()
-    .eq('id', taskId)
-    .eq('organization_id', orgId)
-
-  if (error) {
-    console.error('Error deleting task:', error)
-    return { error: error.message }
-  }
-
-  revalidatePath('/tasks')
-  revalidatePath('/follow-ups')
-  revalidatePath('/')
-  return { success: true }
+export async function logActivity(orgId: string, action: string, details: string, leadId?: string, dealId?: string) {
+  try {
+    await pool.query(
+      'INSERT INTO public.activity_logs (organization_id, action, details, lead_id, deal_id) VALUES ($1,$2,$3,$4,$5)',
+      [orgId, action, `A team member ${details}`, leadId || null, dealId || null])
+  } catch (err: any) { console.error('Failed to log activity:', err.message) }
 }
 
-export async function logActivity(supabase: any, orgId: string, action: string, details: string, leadId?: string, dealId?: string) {
-  // Use a default user since we are bypassing Auth
-  const userText = "A team member" 
-  
-  const { error } = await supabase.from('activity_logs').insert({
-    organization_id: orgId,
-    action,
-    details: `${userText} ${details}`,
-    lead_id: leadId || null,
-    deal_id: dealId || null,
-  })
-
-  if (error) {
-    console.error("Failed to log activity:", error)
-  }
-}
+// ─── getActivities ────────────────────────────────────────────────────────────
 
 export async function getActivities(limit = 10, leadId?: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  let query = supabase
-    .from('activity_logs')
-    .select('id, action, details, created_at, leads(name), deals(title)')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  if (leadId) {
-    query = query.eq('lead_id', leadId)
-  }
-
-  const { data, error } = await query
-  
-  if (error) {
-    console.error('Error fetching activities:', error)
-    return []
-  }
-  return data || []
+  try {
+    const values: any[] = [orgId, limit]
+    let where = 'WHERE al.organization_id = $1'
+    if (leadId) { values.push(leadId); where += ` AND al.lead_id = $${values.length}` }
+    const result = await pool.query(`
+      SELECT al.id, al.action, al.details, al.created_at,
+        json_build_object('name', l.name) AS leads,
+        json_build_object('title', d.title) AS deals
+      FROM public.activity_logs al
+      LEFT JOIN public.leads l ON l.id = al.lead_id
+      LEFT JOIN public.deals d ON d.id = al.deal_id
+      ${where} ORDER BY al.created_at DESC LIMIT $2
+    `, values)
+    return result.rows
+  } catch (err: any) { console.error('Error fetching activities:', err.message); return [] }
 }
+
+// ─── getGlobalActivities ──────────────────────────────────────────────────────
 
 export async function getGlobalActivities(params: {
-  limit?: number
-  offset?: number
-  type?: string
-  userId?: string
-  search?: string
-  dateFrom?: string
-  dateTo?: string
-  leadId?: string
-  dealId?: string
+  limit?: number; offset?: number; type?: string; userId?: string
+  search?: string; dateFrom?: string; dateTo?: string; leadId?: string; dealId?: string
 } = {}) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { data: [], total: 0 }
 
-  let query = supabase
-    .from('activity_logs')
-    .select('*, leads(name), deals(title), users(full_name, role)', { count: 'exact' })
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
+  try {
+    const values: any[] = [orgId]
+    const conditions: string[] = ['al.organization_id = $1']
 
-  if (params.limit) query = query.limit(params.limit)
-  if (params.offset) query = query.range(params.offset, params.offset + (params.limit || 50) - 1)
-  if (params.type && params.type !== 'all') query = query.eq('action', params.type)
-  if (params.userId && params.userId !== 'all') query = query.eq('actor_id', params.userId)
-  if (params.search) query = query.ilike('details', `%${params.search}%`)
-  if (params.leadId && params.leadId !== 'all') query = query.eq('lead_id', params.leadId)
-  if (params.dealId && params.dealId !== 'all') query = query.eq('deal_id', params.dealId)
-  
-  if (params.dateFrom) query = query.gte('created_at', params.dateFrom)
-  if (params.dateTo) query = query.lte('created_at', params.dateTo)
+    if (params.type && params.type !== 'all') { values.push(params.type); conditions.push(`al.action = $${values.length}`) }
+    if (params.userId && params.userId !== 'all') { values.push(params.userId); conditions.push(`al.user_id = $${values.length}`) }
+    if (params.search) { values.push(`%${params.search}%`); conditions.push(`al.details ILIKE $${values.length}`) }
+    if (params.leadId && params.leadId !== 'all') { values.push(params.leadId); conditions.push(`al.lead_id = $${values.length}`) }
+    if (params.dealId && params.dealId !== 'all') { values.push(params.dealId); conditions.push(`al.deal_id = $${values.length}`) }
+    if (params.dateFrom) { values.push(params.dateFrom); conditions.push(`al.created_at >= $${values.length}`) }
+    if (params.dateTo) { values.push(params.dateTo); conditions.push(`al.created_at <= $${values.length}`) }
 
-  const { data, error, count } = await query
+    const where = `WHERE ${conditions.join(' AND ')}`
+    const countResult = await pool.query(`SELECT COUNT(*) FROM public.activity_logs al ${where}`, values)
+    const total = parseInt(countResult.rows[0].count, 10)
 
-  if (error) {
-    console.error('Error fetching global activities:', error)
-    return { data: [], total: 0 }
-  }
+    const limitVal = params.limit || 50; const offsetVal = params.offset || 0
+    values.push(limitVal, offsetVal)
 
-  // Normalize details (some might be objects from old bugs or specific actions)
-  const normalizedData = (data || []).map(activity => {
-    let details = activity.details
-    if (details && typeof details === 'object') {
-       if (activity.action === 'lead_forwarded') {
+    const result = await pool.query(`
+      SELECT al.*,
+        json_build_object('name', l.name) AS leads,
+        json_build_object('title', d.title) AS deals,
+        json_build_object('full_name', u.full_name, 'role', u.role) AS users
+      FROM public.activity_logs al
+      LEFT JOIN public.leads l ON l.id = al.lead_id
+      LEFT JOIN public.deals d ON d.id = al.deal_id
+      LEFT JOIN public.users u ON u.id = al.user_id
+      ${where} ORDER BY al.created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}
+    `, values)
+
+    const normalizedData = result.rows.map(activity => {
+      let details = activity.details
+      if (details && typeof details === 'object') {
+        if (activity.action === 'lead_forwarded') {
           const { lead_name, forwarded_to, note } = details as any
           details = `Forwarded "${lead_name || 'Lead'}" to ${forwarded_to || 'Unknown'}${note ? ` (Note: ${note})` : ''}`
-       } else {
-          details = JSON.stringify(details)
-       }
-    }
-    return { ...activity, details: details || '' }
-  })
+        } else { details = JSON.stringify(details) }
+      }
+      return { ...activity, details: details || '' }
+    })
 
-  return { data: normalizedData, total: count || 0 }
+    return { data: normalizedData, total }
+  } catch (err: any) { console.error('Error fetching global activities:', err.message); return { data: [], total: 0 } }
 }
 
+// ─── logLeadInteraction ───────────────────────────────────────────────────────
+
 export async function logLeadInteraction(leadId: string, type: string, content: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  await logActivity(supabase, orgId, type, content, leadId)
-  
+  await logActivity(orgId, type, content, leadId)
+
   const user = await getMockableUser()
-  await logLeadEvent(supabase, orgId, {
-      lead_id: leadId,
-      event_type: 'interaction_logged',
-      description: `Interaction logged: ${type.replace('_', ' ')}`,
-      metadata: { type, content },
-      performed_by: user?.id
+  const shim = createDbShim()
+  await logLeadEvent(shim, orgId, {
+    lead_id: leadId, event_type: 'interaction_logged',
+    description: `Interaction logged: ${type.replace('_', ' ')}`,
+    metadata: { type, content }, performed_by: user?.id
   })
 
   revalidatePath(`/leads/${leadId}`)
   return { success: true }
 }
 
+// ─── getAnalytics ─────────────────────────────────────────────────────────────
+
 export async function getAnalytics(days: number = 30) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return null
 
   const cookieStore = await cookies()
   const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  let { data: { user } } = await supabase.auth.getUser()
-  
-  let isAdmin = false
-  if (!user && isMockAuth) {
-    isAdmin = true
-  } else if (user) {
-    const { data: userData } = await supabase.from('users').select('role').eq('id', user.id).single()
-    isAdmin = userData?.role === 'admin' || userData?.role === 'super_admin'
+  const clerkUser = await getClerkUser()
+
+  let isAdmin = false; let userId: string | null = null
+  if (!clerkUser && isMockAuth) { isAdmin = true }
+  else if (clerkUser) {
+    const r = await pool.query('SELECT id, role FROM public.users WHERE clerk_id = $1', [clerkUser.id])
+    userId = r.rows[0]?.id ?? null
+    isAdmin = r.rows[0]?.role === 'admin' || r.rows[0]?.role === 'super_admin'
   }
 
-  const startDate = new Date()
-  startDate.setDate(startDate.getDate() - days)
-  const startDateStr = startDate.toISOString()
+  const startDate = new Date(); startDate.setDate(startDate.getDate() - days)
 
-  let leadsQuery = supabase.from('leads').select('*').eq('organization_id', orgId)
-  let dealsQuery = supabase.from('deals').select('*, leads!inner(name, contact_person, owner_id)').eq('organization_id', orgId)
-  let tasksQuery = supabase.from('tasks').select('*').eq('organization_id', orgId)
+  try {
+    const leadsValues: any[] = [orgId]; let leadsWhere = 'WHERE organization_id = $1'
+    const dealsValues: any[] = [orgId]; let dealsWhere = 'WHERE organization_id = $1'
+    const tasksValues: any[] = [orgId]; let tasksWhere = 'WHERE organization_id = $1'
 
-  // Apply Role-based filtering
-  if (!isAdmin && user) {
-    leadsQuery = leadsQuery.or(`owner_id.eq.${user.id},owner_id.is.null`)
-    dealsQuery = dealsQuery.or(`assigned_to.eq.${user.id},assigned_to.is.null,leads.owner_id.eq.${user.id}`)
-    tasksQuery = tasksQuery.or(`assigned_to.eq.${user.id},assigned_to.is.null`)
-  }
-
-  const [leadsRes, dealsRes, tasksRes] = await Promise.all([
-    leadsQuery,
-    dealsQuery,
-    tasksQuery
-  ])
-
-  const leads = leadsRes.data || []
-  const deals = dealsRes.data || []
-  const tasks = tasksRes.data || []
-
-  // 1. Financials
-  const wonDeals = deals.filter(d => d.status.toLowerCase() === 'won')
-  const totalRevenue = wonDeals.reduce((sum, d) => sum + Number(d.value || 0), 0)
-  const winRate = deals.length > 0 ? (wonDeals.length / deals.length) * 100 : 0
-  const avgDealSize = wonDeals.length > 0 ? totalRevenue / wonDeals.length : 0
-
-  // 2. Pipeline Snapshot (Deals by Stage)
-  const pipelineStates = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost']
-  const pipelineData = pipelineStates.map(state => ({
-    name: state.charAt(0).toUpperCase() + state.slice(1),
-    value: deals.filter(d => d.status.toLowerCase() === state).length
-  }))
-
-  // 3. Marketing Insights (Leads by Source)
-  const sourceGroups = leads.reduce((acc: any, lead) => {
-    const src = lead.source || 'Website'
-    acc[src] = (acc[src] || 0) + 1
-    return acc
-  }, {})
-  const leadsBySource = Object.entries(sourceGroups).map(([name, value]) => ({ name, value }))
-
-  // 4. Operational Pulse
-  const now = new Date()
-  const operationalPulse = {
-    completed: tasks.filter(t => t.status === 'completed').length,
-    overdue: tasks.filter(t => t.status !== 'completed' && t.due_date && new Date(t.due_date) < now).length,
-    pending: tasks.filter(t => t.status !== 'completed').length,
-    followups: tasks.filter(t => t.lead_id).length
-  }
-
-  // 5. New Leads (Recent)
-  const newLeadsCount = leads.filter(l => new Date(l.created_at) >= startDate).length
-
-  return {
-    financials: {
-      totalRevenue,
-      winRate: Math.round(winRate),
-      avgDealSize: Math.round(avgDealSize),
-      newLeadsCount
-    },
-    pipelineData,
-    leadsBySource,
-    operationalPulse,
-    summary: {
-      isStrong: winRate > 20,
-      leadIncrease: 15, // Mocked for now
-      bottlenecks: deals.filter(d => d.status.toLowerCase() === 'proposal').length
+    if (!isAdmin && userId) {
+      leadsValues.push(userId); leadsWhere += ` AND (owner_id = $${leadsValues.length} OR owner_id IS NULL)`
+      dealsValues.push(userId); dealsWhere += ` AND (assigned_to = $${dealsValues.length} OR assigned_to IS NULL)`
+      tasksValues.push(userId); tasksWhere += ` AND (assigned_to = $${tasksValues.length} OR assigned_to IS NULL)`
     }
-  }
+
+    const [leadsRes, dealsRes, tasksRes] = await Promise.all([
+      pool.query(`SELECT * FROM public.leads ${leadsWhere}`, leadsValues),
+      pool.query(`SELECT * FROM public.deals ${dealsWhere}`, dealsValues),
+      pool.query(`SELECT * FROM public.tasks ${tasksWhere}`, tasksValues)
+    ])
+
+    const leads = leadsRes.rows; const deals = dealsRes.rows; const tasks = tasksRes.rows
+    const wonDeals = deals.filter(d => d.status?.toLowerCase() === 'won')
+    const totalRevenue = wonDeals.reduce((sum, d) => sum + Number(d.value || 0), 0)
+    const winRate = deals.length > 0 ? (wonDeals.length / deals.length) * 100 : 0
+    const avgDealSize = wonDeals.length > 0 ? totalRevenue / wonDeals.length : 0
+
+    const pipelineStates = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost']
+    const pipelineData = pipelineStates.map(state => ({
+      name: state.charAt(0).toUpperCase() + state.slice(1),
+      value: deals.filter(d => d.status?.toLowerCase() === state).length
+    }))
+
+    const sourceGroups = leads.reduce((acc: any, lead) => {
+      const src = lead.source || 'Website'; acc[src] = (acc[src] || 0) + 1; return acc
+    }, {})
+    const leadsBySource = Object.entries(sourceGroups).map(([name, value]) => ({ name, value }))
+
+    const now = new Date()
+    const operationalPulse = {
+      completed: tasks.filter(t => t.status === 'completed').length,
+      overdue: tasks.filter(t => t.status !== 'completed' && t.due_date && new Date(t.due_date) < now).length,
+      pending: tasks.filter(t => t.status !== 'completed').length,
+      followups: tasks.filter(t => t.lead_id).length
+    }
+
+    return {
+      financials: { totalRevenue, winRate: Math.round(winRate), avgDealSize: Math.round(avgDealSize), newLeadsCount: leads.filter(l => new Date(l.created_at) >= startDate).length },
+      pipelineData, leadsBySource, operationalPulse,
+      summary: { isStrong: winRate > 20, leadIncrease: 15, bottlenecks: deals.filter(d => d.status?.toLowerCase() === 'proposal').length }
+    }
+  } catch (err: any) { console.error('Error fetching analytics:', err.message); return null }
 }
+
+// ─── getNotifications ─────────────────────────────────────────────────────────
 
 export async function getNotifications(limit = 10) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  const { data, error } = await supabase
-    .from('notifications')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  if (error) {
-    console.error('Error fetching notifications:', error)
-    return []
-  }
-  return data
+  try {
+    const result = await pool.query(
+      'SELECT * FROM public.notifications WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2', [orgId, limit])
+    return result.rows
+  } catch (err: any) { console.error('Error fetching notifications:', err.message); return [] }
 }
+
+// ─── markNotificationRead ─────────────────────────────────────────────────────
 
 export async function markNotificationRead(id: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No org found' }
-
-  await supabase.from('notifications').update({ is_read: true }).eq('id', id).eq('organization_id', orgId)
-  revalidatePath('/notifications')
-  return { success: true }
+  try {
+    await pool.query('UPDATE public.notifications SET is_read = true WHERE id = $1 AND organization_id = $2', [id, orgId])
+    revalidatePath('/notifications'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── getAttendance ────────────────────────────────────────────────────────────
 
 export async function getAttendance() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  const { data, error } = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('check_in_time', { ascending: false })
-    .limit(10)
-
-  if (error) {
-    console.error('Error fetching attendance:', error)
-    return []
-  }
-  return data
+  try {
+    const result = await pool.query(
+      'SELECT * FROM public.attendance WHERE organization_id = $1 ORDER BY check_in_time DESC LIMIT 10', [orgId])
+    return result.rows
+  } catch (err: any) { console.error('Error fetching attendance:', err.message); return [] }
 }
+
+// ─── clockIn ──────────────────────────────────────────────────────────────────
 
 export async function clockIn() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No org' }
-
-  const { error } = await supabase.from('attendance').insert({
-    organization_id: orgId,
-    status: 'present'
-  })
-
-  if (error) {
-    console.error('Error clocking in:', error)
-    return { error: error.message }
-  }
-  revalidatePath('/attendance')
-  return { success: true }
+  try {
+    await pool.query('INSERT INTO public.attendance (organization_id, status) VALUES ($1,$2)', [orgId, 'present'])
+    revalidatePath('/attendance'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FORWARDED LEADS
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── forwardLead ──────────────────────────────────────────────────────────────
 
 export async function forwardLead(leadId: string, toUserId: string, note?: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
+  try {
+    const fromUserResult = await pool.query('SELECT id, full_name FROM public.users WHERE organization_id = $1 LIMIT 1', [orgId])
+    const fromUser = fromUserResult.rows[0]
+    const toUserResult = await pool.query('SELECT full_name FROM public.users WHERE id = $1', [toUserId])
+    const toUser = toUserResult.rows[0]
+    const leadResult = await pool.query('SELECT name FROM public.leads WHERE id = $1', [leadId])
+    const lead = leadResult.rows[0]
 
-  // Get the first user in org to use as "from" (fallback for mock auth)
-  const { data: fromUser } = await supabase
-    .from('users')
-    .select('id, full_name')
-    .eq('organization_id', orgId)
-    .limit(1)
-    .single()
+    await pool.query(
+      'INSERT INTO public.forwarded_leads (organization_id, lead_id, from_user_id, to_user_id, status, note) VALUES ($1,$2,$3,$4,$5,$6)',
+      [orgId, leadId, fromUser?.id || null, toUserId, 'sent', note || null])
 
-  const { data: toUser } = await supabase
-    .from('users')
-    .select('full_name')
-    .eq('id', toUserId)
-    .single()
+    await pool.query(
+      'INSERT INTO public.activity_logs (organization_id, user_id, lead_id, action, details) VALUES ($1,$2,$3,$4,$5)',
+      [orgId, fromUser?.id || null, leadId, 'lead_forwarded',
+        `Forwarded "${lead?.name || 'Lead'}" to ${toUser?.full_name || toUserId}${note ? ` (Note: ${note})` : ''}`])
 
-  const { data: lead } = await supabase
-    .from('leads')
-    .select('name')
-    .eq('id', leadId)
-    .single()
-
-  const { error } = await supabase.from('forwarded_leads').insert({
-    organization_id: orgId,
-    lead_id: leadId,
-    from_user_id: fromUser?.id || null,
-    to_user_id: toUserId,
-    status: 'sent',
-    note: note || null,
-  })
-
-  if (error) {
-    console.error('Error forwarding lead:', error)
-    return { error: error.message }
-  }
-
-  // Log activity
-  await supabase.from('activity_logs').insert({
-    organization_id: orgId,
-    user_id: fromUser?.id || null,
-    lead_id: leadId,
-    action: 'lead_forwarded',
-    details: `Forwarded "${lead?.name || 'Lead'}" to ${toUser?.full_name || toUserId}${note ? ` (Note: ${note})` : ''}`,
-  })
-  
-  await logLeadEvent(supabase, orgId, {
-      lead_id: leadId,
-      event_type: 'lead_forwarded',
+    const shim = createDbShim()
+    await logLeadEvent(shim, orgId, {
+      lead_id: leadId, event_type: 'lead_forwarded',
       description: `Forwarded lead to ${toUser?.full_name || toUserId}.`,
-      metadata: { to_user_id: toUserId, note },
-      performed_by: fromUser?.id
-  })
+      metadata: { to_user_id: toUserId, note }, performed_by: fromUser?.id
+    })
 
-  // Create notification for recipient
-  await createNotification({
-    user_id: toUserId,
-    actor_id: fromUser?.id,
-    type: 'mentions', 
-    title: 'New Lead Forwarded',
-    content: `${fromUser?.full_name || 'A team member'} forwarded "${lead?.name}" to you.${note ? ` Note: ${note}` : ''}`,
-    link_url: '/forwarded'
-  })
+    await createNotification({
+      user_id: toUserId, actor_id: fromUser?.id, type: 'mentions', title: 'New Lead Forwarded',
+      content: `${fromUser?.full_name || 'A team member'} forwarded "${lead?.name}" to you.${note ? ` Note: ${note}` : ''}`,
+      link_url: '/forwarded'
+    })
 
-  revalidatePath('/forwarded')
-  revalidatePath('/leads')
-  revalidatePath('/activity-log')
-  revalidatePath('/notifications')
-  return { success: true }
+    revalidatePath('/forwarded'); revalidatePath('/leads'); revalidatePath('/activity-log'); revalidatePath('/notifications')
+    return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── getForwardedLeads ────────────────────────────────────────────────────────
 
 export async function getForwardedLeads() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { received: [], sent: [] }
+  try {
+    const currentUserResult = await pool.query('SELECT id, full_name, role FROM public.users WHERE organization_id = $1 LIMIT 1', [orgId])
+    const currentUser = currentUserResult.rows[0]
+    if (!currentUser) return { received: [], sent: [] }
 
-  // Get the first user as "current user" for mock auth
-  const { data: currentUser } = await supabase
-    .from('users')
-    .select('id, full_name, role')
-    .eq('organization_id', orgId)
-    .limit(1)
-    .single()
+    const [receivedResult, sentResult] = await Promise.all([
+      pool.query(`
+        SELECT fl.*,
+          json_build_object('id', l.id, 'name', l.name, 'phone_number', l.phone_number, 'status', l.status, 'temperature', l.temperature, 'location', l.location, 'contact_person', l.contact_person) AS leads,
+          json_build_object('id', u.id, 'full_name', u.full_name, 'role', u.role) AS from_user
+        FROM public.forwarded_leads fl
+        LEFT JOIN public.leads l ON l.id = fl.lead_id
+        LEFT JOIN public.users u ON u.id = fl.from_user_id
+        WHERE fl.organization_id = $1 AND fl.to_user_id = $2 ORDER BY fl.created_at DESC
+      `, [orgId, currentUser.id]),
+      pool.query(`
+        SELECT fl.*,
+          json_build_object('id', l.id, 'name', l.name, 'phone_number', l.phone_number, 'status', l.status, 'temperature', l.temperature, 'location', l.location, 'contact_person', l.contact_person) AS leads,
+          json_build_object('id', u.id, 'full_name', u.full_name, 'role', u.role) AS to_user
+        FROM public.forwarded_leads fl
+        LEFT JOIN public.leads l ON l.id = fl.lead_id
+        LEFT JOIN public.users u ON u.id = fl.to_user_id
+        WHERE fl.organization_id = $1 AND fl.from_user_id = $2 ORDER BY fl.created_at DESC
+      `, [orgId, currentUser.id])
+    ])
 
-  if (!currentUser) return { received: [], sent: [] }
-
-  const [receivedRes, sentRes] = await Promise.all([
-    // Leads forwarded TO me
-    supabase
-      .from('forwarded_leads')
-      .select('*, leads(id, name, phone_number, status, temperature, location, contact_person), from_user:users!forwarded_leads_from_user_id_fkey(id, full_name, role)')
-      .eq('organization_id', orgId)
-      .eq('to_user_id', currentUser.id)
-      .order('created_at', { ascending: false }),
-    // Leads forwarded BY me
-    supabase
-      .from('forwarded_leads')
-      .select('*, leads(id, name, phone_number, status, temperature, location, contact_person), to_user:users!forwarded_leads_to_user_id_fkey(id, full_name, role)')
-      .eq('organization_id', orgId)
-      .eq('from_user_id', currentUser.id)
-      .order('created_at', { ascending: false }),
-  ])
-
-  return {
-    received: receivedRes.data || [],
-    sent: sentRes.data || [],
-    currentUserId: currentUser.id,
-  }
+    return { received: receivedResult.rows, sent: sentResult.rows, currentUserId: currentUser.id }
+  } catch (err: any) { console.error('Error fetching forwarded leads:', err.message); return { received: [], sent: [] } }
 }
+
+// ─── updateForwardedLeadStatus ────────────────────────────────────────────────
 
 export async function updateForwardedLeadStatus(forwardId: string, status: 'accepted' | 'rejected') {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No org' }
-
-  const { error } = await supabase
-    .from('forwarded_leads')
-    .update({ status })
-    .eq('id', forwardId)
-    .eq('organization_id', orgId)
-
-  if (error) return { error: error.message }
-
-  revalidatePath('/forwarded')
-  return { success: true }
+  try {
+    await pool.query('UPDATE public.forwarded_leads SET status = $1 WHERE id = $2 AND organization_id = $3', [status, forwardId, orgId])
+    revalidatePath('/forwarded'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
-export async function checkIn(location?: { lat: number, lng: number, address?: string }) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) return { error: 'No org' }
+// ─── checkIn ──────────────────────────────────────────────────────────────────
 
+export async function checkIn(location?: { lat: number; lng: number; address?: string }) {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) return { error: 'No org' }
   const user = await getMockableUser()
   if (!user) return { error: 'No user' }
-
-  const { error } = await supabase.from('attendance').insert({
-    organization_id: orgId,
-    user_id: user.id,
-    check_in_time: new Date().toISOString(),
-    status: 'present',
-    location: location || null
-  })
-
-  if (error) return { error: error.message }
-  
-  revalidatePath('/attendance')
-  return { success: true }
+  try {
+    await pool.query(
+      'INSERT INTO public.attendance (organization_id, user_id, check_in_time, status, location) VALUES ($1,$2,$3,$4,$5)',
+      [orgId, user.id, new Date().toISOString(), 'present', location ? JSON.stringify(location) : null])
+    revalidatePath('/attendance'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── checkOut ─────────────────────────────────────────────────────────────────
 
 export async function checkOut() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No org' }
-
   const user = await getMockableUser()
   if (!user) return { error: 'No user' }
-
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-
-  const { error } = await supabase
-    .from('attendance')
-    .update({ check_out_time: new Date().toISOString() })
-    .eq('user_id', user.id)
-    .eq('organization_id', orgId)
-    .is('check_out_time', null)
-    .gte('check_in_time', today.toISOString())
-
-  if (error) return { error: error.message }
-  
-  revalidatePath('/attendance')
-  return { success: true }
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  try {
+    await pool.query(
+      `UPDATE public.attendance SET check_out_time = $1 WHERE user_id = $2 AND organization_id = $3 AND check_out_time IS NULL AND check_in_time >= $4`,
+      [new Date().toISOString(), user.id, orgId, today.toISOString()])
+    revalidatePath('/attendance'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── getAttendanceStatus ──────────────────────────────────────────────────────
 
 export async function getAttendanceStatus() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return null
-
   const user = await getMockableUser()
   if (!user) return null
-
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-
-  const { data: att } = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('user_id', user.id)
-    .eq('organization_id', orgId)
-    .gte('check_in_time', today.toISOString())
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  const { data: history } = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('user_id', user.id)
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false })
-    .limit(10)
-
-  return { 
-    current: att, 
-    user: { id: user.id, full_name: user.full_name, role: user.role },
-    history: history || []
-  }
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  try {
+    const attResult = await pool.query(
+      'SELECT * FROM public.attendance WHERE user_id = $1 AND organization_id = $2 AND check_in_time >= $3 ORDER BY created_at DESC LIMIT 1',
+      [user.id, orgId, today.toISOString()])
+    const historyResult = await pool.query(
+      'SELECT * FROM public.attendance WHERE user_id = $1 AND organization_id = $2 ORDER BY created_at DESC LIMIT 10', [user.id, orgId])
+    return { current: attResult.rows[0] || null, user: { id: user.id, full_name: user.full_name, role: user.role }, history: historyResult.rows }
+  } catch (err: any) { console.error('Error fetching attendance status:', err.message); return null }
 }
+
+// ─── getTeamPerformance ───────────────────────────────────────────────────────
 
 export async function getTeamPerformance() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return null
-
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-
-  const [usersRes, attendanceRes, leadsRes, dealsRes, tasksRes] = await Promise.all([
-    supabase.from('users').select('*').eq('organization_id', orgId).eq('is_active', true),
-    supabase.from('attendance').select('*, users(full_name)').eq('organization_id', orgId).gte('check_in_time', today.toISOString()),
-    supabase.from('leads').select('*').eq('organization_id', orgId).gte('created_at', today.toISOString()),
-    supabase.from('deals').select('*').eq('organization_id', orgId).gte('updated_at', today.toISOString()),
-    supabase.from('tasks').select('*').eq('organization_id', orgId).gte('updated_at', today.toISOString()).eq('status', 'completed')
-  ])
-
-  const users = usersRes.data || []
-  const attendance = attendanceRes.data || []
-  const leads = leadsRes.data || []
-  const deals = dealsRes.data || []
-  const tasks = tasksRes.data || []
-
-  const teamData = users.map(user => {
-    const userAtt = attendance.find(a => a.user_id === user.id)
-    return {
-      id: user.id,
-      name: user.full_name,
-      role: user.role,
-      status: userAtt ? (userAtt.check_out_time ? 'Checked Out' : 'Online') : 'Offline',
-      checkIn: userAtt?.check_in_time,
-      checkOut: userAtt?.check_out_time,
-      KPIs: {
-        leads: leads.filter(l => l.owner_id === user.id).length,
-        deals: deals.filter(d => d.status === 'won').length,
-        tasks: tasks.filter(t => t.assigned_to === user.id).length
-      }
-    }
-  })
-
-  return teamData
-}
-
-export async function getFullAttendanceLogs() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) return []
-
-  const { data, error } = await supabase
-    .from('attendance')
-    .select('*, users(full_name, role)')
-    .eq('organization_id', orgId)
-    .order('check_in_time', { ascending: false })
-    .limit(100)
-
-  if (error) {
-    console.error('Error fetching full logs:', error)
-    return []
-  }
-
-  return data || []
-}
-
-export async function getHistoricalAttendance(filter: 'weekly' | 'monthly' | 'yearly' | 'all' = 'all', userId?: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) return []
-
-  let query = supabase
-    .from('attendance')
-    .select('*, users(full_name, role)')
-    .eq('organization_id', orgId)
-    .order('check_in_time', { ascending: false })
-
-  if (userId && userId !== 'all') {
-    query = query.eq('user_id', userId)
-  }
-
-  const now = new Date()
-  if (filter === 'weekly') {
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-    query = query.gte('check_in_time', weekAgo.toISOString())
-  } else if (filter === 'monthly') {
-    const monthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-    query = query.gte('check_in_time', monthAgo.toISOString())
-  } else if (filter === 'yearly') {
-    const yearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate())
-    query = query.gte('check_in_time', yearAgo.toISOString())
-  }
-
-  const { data, error } = await query
-
-  if (error) {
-    console.error('Error fetching historical logs:', error)
-    return []
-  }
-
-  return data || []
-}
-
-export async function getRepPerformanceData() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) return []
-
-  const monthYear = new Date().toISOString().substring(0, 7) // 'YYYY-MM'
-
-  // Fetch all members (active only), leads, deals, tasks and targets in parallel for efficiency
-  const [membersRes, leadsRes, dealsRes, tasksRes, targetsRes] = await Promise.all([
-    supabase.from('users').select('id, full_name, role').eq('organization_id', orgId).eq('is_active', true),
-    supabase.from('leads').select('id, owner_id, status, created_at').eq('organization_id', orgId),
-    supabase.from('deals').select('id, user_id, status, value').eq('organization_id', orgId),
-    supabase.from('tasks').select('id, assigned_to, status, due_date').eq('organization_id', orgId),
-    supabase.from('user_targets').select('*').eq('organization_id', orgId).eq('month_year', monthYear)
-  ])
-
-  if (membersRes.error) {
-    console.error('Error fetching rep data:', membersRes.error)
-    return []
-  }
-
-  const members = membersRes.data || []
-  const allLeads = leadsRes.data || []
-  const allDeals = dealsRes.data || []
-  const allTasks = tasksRes.data || []
-  const allTargets = targetsRes.data || []
-
-  const now = new Date()
-  const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000)
-
-  return members.map(user => {
-    const userLeads = allLeads.filter(l => l.owner_id === user.id)
-    const userDeals = allDeals.filter(d => d.user_id === user.id)
-    const userTasks = allTasks.filter(t => t.assigned_to === user.id)
-    const userTarget = allTargets.find(t => t.user_id === user.id)
-
-    const revenueWon = userDeals
-      .filter(d => d.status === 'won')
-      .reduce((sum, d) => sum + (Number(d.value) || 0), 0)
-
-    const tasksCompleted = userTasks.filter(t => t.status === 'completed').length
-    const tasksTotal = userTasks.length
-    
-    // Barrier Logic: Overdue tasks or leads with no activity (mocked by created_at for now)
-    const overdueTasks = userTasks.filter(t => 
-      t.status === 'pending' && t.due_date && new Date(t.due_date) < now
-    ).length
-
-    const staleLeads = userLeads.filter(l => 
-      l.status !== 'converted' && new Date(l.created_at) < threeDaysAgo
-    ).length
-
-    return {
-      id: user.id,
-      name: user.full_name,
-      role: user.role,
-      leads: {
-        total: userLeads.length,
-        new: userLeads.filter(l => new Date(l.created_at) > new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)).length
-      },
-      workload: {
-        activeDeals: userDeals.filter(d => d.status === 'open' || d.status === 'negotiation').length,
-        pendingTasks: userTasks.filter(t => t.status === 'pending').length
-      },
-      performance: {
-        revenue: revenueWon,
-        conversionRate: userLeads.length > 0 ? (userDeals.filter(d => d.status === 'won').length / userLeads.length) * 100 : 0,
-        taskCompletionRate: tasksTotal > 0 ? (tasksCompleted / tasksTotal) * 100 : 0
-      },
-      targets: {
-        revenue: userTarget?.revenue_target || 0,
-        leads: userTarget?.leads_target || 0,
-        tasks: userTarget?.tasks_target || 0
-      },
-      barriers: {
-        overdueTasks,
-        staleLeads,
-        count: overdueTasks + staleLeads
-      }
-    }
-  })
-}
-
-export async function setUserTarget(userId: string, targets: { revenue: number, leads: number, tasks: number }) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) throw new Error('No organization found')
-
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
-  if (!isAdmin) throw new Error(authError || 'Unauthorized')
-
-  const monthYear = new Date().toISOString().substring(0, 7)
-
-  const { error } = await supabase
-    .from('user_targets')
-    .upsert({
-      organization_id: orgId,
-      user_id: userId,
-      month_year: monthYear,
-      revenue_target: targets.revenue,
-      leads_target: targets.leads,
-      tasks_target: targets.tasks
-    }, { onConflict: 'user_id,month_year' })
-
-  if (error) throw error
-  return true
-}
-
-export async function getOrganizationDetails() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) return null
-
-  const { data, error } = await supabase
-    .from('organizations')
-    .select('*')
-    .eq('id', orgId)
-    .single()
-
-  if (error) {
-    console.error('Error fetching org details:', error)
-    return null
-  }
-
-  return data
-}
-
-export async function updateOrganization(data: { name?: string, logo_url?: string, timezone?: string, currency?: string, branding?: any }) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) throw new Error('No organization found')
-
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
-  if (!isAdmin) throw new Error(authError || 'Unauthorized')
-
-  const { error } = await supabase
-    .from('organizations')
-    .update(data)
-    .eq('id', orgId)
-
-  if (error) throw error
-
-  revalidatePath('/', 'layout')
-  return true
-}
-
-export async function manageTeamMember(userId: string, data: { role?: string, active?: boolean }) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) throw new Error('No organization found')
-
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
-  if (!isAdmin) throw new Error(authError || 'Unauthorized')
-
-  const { error } = await supabase
-    .from('users')
-    .update(data)
-    .eq('id', userId)
-    .eq('organization_id', orgId)
-
-  if (error) throw error
-  return true
-}
-
-export async function getIntegrations() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) return []
-
-  const { data, error } = await supabase
-    .from('integrations')
-    .select('*')
-    .eq('organization_id', orgId)
-
-  if (error) {
-    console.error('Error fetching integrations:', error.message, error.details, error.hint)
-    return []
-  }
-
-  return data || []
-}
-
-export async function saveIntegration(provider: string, config: any, isActive: boolean = true) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) throw new Error('No organization found')
-
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
-  if (!isAdmin) throw new Error(authError || 'Unauthorized')
-
-  const { error } = await supabase
-    .from('integrations')
-    .upsert({
-      organization_id: orgId,
-      provider,
-      config,
-      is_active: isActive,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'organization_id,provider' })
-
-  if (error) throw error
-  return true
-}
-
-export async function getCurrentUser() {
-  const supabase = await createClient()
-  if (!supabase) return null
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    const cookieStore = await cookies()
-    if (cookieStore.get('sb-mock-auth')?.value === 'true') {
-      // Mock auth: get any active user (admin or super admin) so dashboard always loads
-      const { data } = await supabase.from('users').select('*').eq('is_active', true).limit(1).single()
-      if (data) {
-        const { data: roleData } = await supabase
-            .from('organization_roles')
-            .select('permissions')
-            .eq('organization_id', data.organization_id)
-            .eq('name', data.role)
-            .single()
-        return { ...data, permissions: roleData?.permissions || null }
-      }
-      const fallback = await supabase.from('users').select('*').limit(1).single()
-      if (fallback.data) {
-        const { data: roleData } = await supabase
-            .from('organization_roles')
-            .select('permissions')
-            .eq('organization_id', fallback.data.organization_id)
-            .eq('name', fallback.data.role)
-            .single()
-        return { ...fallback.data, permissions: roleData?.permissions || null }
-      }
-      return fallback.data
-    }
-    return null
-  }
-
-  let { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('id', user.id)
-    .single()
-
-  if (error) return null
-
-  // For the current user, always keep full_name in sync with sign-in email
-  // (derive from email prefix and update if we have an email).
-  if (user.email) {
-    try {
-      const emailPrefix = user.email.split('@')[0] || ''
-      const derivedName = emailPrefix
-        .replace(/[._-]+/g, ' ')
-        .split(' ')
-        .filter(Boolean)
-        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ')
-
-      if (derivedName) {
-        const { data: updated, error: updateErr } = await supabase
-          .from('users')
-          .update({ full_name: derivedName })
-          .eq('id', user.id)
-          .select('*')
-          .single()
-
-        if (!updateErr && updated) {
-          data = updated
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  try {
+    const [usersRes, attendanceRes, leadsRes, dealsRes, tasksRes] = await Promise.all([
+      pool.query('SELECT * FROM public.users WHERE organization_id = $1 AND is_active = true', [orgId]),
+      pool.query('SELECT a.*, u.full_name FROM public.attendance a LEFT JOIN public.users u ON u.id = a.user_id WHERE a.organization_id = $1 AND a.check_in_time >= $2', [orgId, today.toISOString()]),
+      pool.query('SELECT * FROM public.leads WHERE organization_id = $1 AND created_at >= $2', [orgId, today.toISOString()]),
+      pool.query('SELECT * FROM public.deals WHERE organization_id = $1', [orgId]),
+      pool.query("SELECT * FROM public.tasks WHERE organization_id = $1 AND status = 'completed'", [orgId])
+    ])
+    return usersRes.rows.map(user => {
+      const userAtt = attendanceRes.rows.find(a => a.user_id === user.id)
+      return {
+        id: user.id, name: user.full_name, role: user.role,
+        status: userAtt ? (userAtt.check_out_time ? 'Checked Out' : 'Online') : 'Offline',
+        checkIn: userAtt?.check_in_time, checkOut: userAtt?.check_out_time,
+        KPIs: {
+          leads: leadsRes.rows.filter(l => l.owner_id === user.id).length,
+          deals: dealsRes.rows.filter(d => d.status === 'won').length,
+          tasks: tasksRes.rows.filter(t => t.assigned_to === user.id).length
         }
       }
-    } catch (e) {
-      console.error('Failed to derive full_name from email', e)
+    })
+  } catch (err: any) { console.error('Error fetching team performance:', err.message); return null }
+}
+
+// ─── getFullAttendanceLogs ────────────────────────────────────────────────────
+
+export async function getFullAttendanceLogs() {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) return []
+  try {
+    const result = await pool.query(`
+      SELECT a.*, json_build_object('full_name', u.full_name, 'role', u.role) AS users
+      FROM public.attendance a LEFT JOIN public.users u ON u.id = a.user_id
+      WHERE a.organization_id = $1 ORDER BY a.check_in_time DESC LIMIT 100
+    `, [orgId])
+    return result.rows
+  } catch (err: any) { console.error('Error fetching full logs:', err.message); return [] }
+}
+
+// ─── getHistoricalAttendance ──────────────────────────────────────────────────
+
+export async function getHistoricalAttendance(filter: 'weekly' | 'monthly' | 'yearly' | 'all' = 'all', userId?: string) {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) return []
+  try {
+    const values: any[] = [orgId]
+    const conditions: string[] = ['a.organization_id = $1']
+    if (userId && userId !== 'all') { values.push(userId); conditions.push(`a.user_id = $${values.length}`) }
+    const now = new Date()
+    if (filter === 'weekly') { values.push(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()); conditions.push(`a.check_in_time >= $${values.length}`) }
+    else if (filter === 'monthly') { values.push(new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()).toISOString()); conditions.push(`a.check_in_time >= $${values.length}`) }
+    else if (filter === 'yearly') { values.push(new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()).toISOString()); conditions.push(`a.check_in_time >= $${values.length}`) }
+
+    const result = await pool.query(`
+      SELECT a.*, json_build_object('full_name', u.full_name, 'role', u.role) AS users
+      FROM public.attendance a LEFT JOIN public.users u ON u.id = a.user_id
+      WHERE ${conditions.join(' AND ')} ORDER BY a.check_in_time DESC
+    `, values)
+    return result.rows
+  } catch (err: any) { console.error('Error fetching historical logs:', err.message); return [] }
+}
+
+// ─── getRepPerformanceData ────────────────────────────────────────────────────
+
+export async function getRepPerformanceData() {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) return []
+  const monthYear = new Date().toISOString().substring(0, 7)
+  try {
+    const [membersRes, leadsRes, dealsRes, tasksRes, targetsRes] = await Promise.all([
+      pool.query('SELECT id, full_name, role FROM public.users WHERE organization_id = $1 AND is_active = true', [orgId]),
+      pool.query('SELECT id, owner_id, status, created_at FROM public.leads WHERE organization_id = $1', [orgId]),
+      pool.query('SELECT id, user_id, status, value FROM public.deals WHERE organization_id = $1', [orgId]),
+      pool.query('SELECT id, assigned_to, status, due_date FROM public.tasks WHERE organization_id = $1', [orgId]),
+      pool.query('SELECT * FROM public.user_targets WHERE organization_id = $1 AND month_year = $2', [orgId, monthYear])
+    ])
+
+    const now = new Date(); const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000)
+
+    return membersRes.rows.map(user => {
+      const userLeads = leadsRes.rows.filter(l => l.owner_id === user.id)
+      const userDeals = dealsRes.rows.filter(d => d.user_id === user.id)
+      const userTasks = tasksRes.rows.filter(t => t.assigned_to === user.id)
+      const userTarget = targetsRes.rows.find(t => t.user_id === user.id)
+      const revenueWon = userDeals.filter(d => d.status === 'won').reduce((sum, d) => sum + (Number(d.value) || 0), 0)
+      const tasksCompleted = userTasks.filter(t => t.status === 'completed').length
+      const tasksTotal = userTasks.length
+      const overdueTasks = userTasks.filter(t => t.status === 'pending' && t.due_date && new Date(t.due_date) < now).length
+      const staleLeads = userLeads.filter(l => l.status !== 'converted' && new Date(l.created_at) < threeDaysAgo).length
+
+      return {
+        id: user.id, name: user.full_name, role: user.role,
+        leads: { total: userLeads.length, new: userLeads.filter(l => new Date(l.created_at) > new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)).length },
+        workload: { activeDeals: userDeals.filter(d => d.status === 'open' || d.status === 'negotiation').length, pendingTasks: userTasks.filter(t => t.status === 'pending').length },
+        performance: {
+          revenue: revenueWon,
+          conversionRate: userLeads.length > 0 ? (userDeals.filter(d => d.status === 'won').length / userLeads.length) * 100 : 0,
+          taskCompletionRate: tasksTotal > 0 ? (tasksCompleted / tasksTotal) * 100 : 0
+        },
+        targets: { revenue: userTarget?.revenue_target || 0, leads: userTarget?.leads_target || 0, tasks: userTarget?.tasks_target || 0 },
+        barriers: { overdueTasks, staleLeads, count: overdueTasks + staleLeads }
+      }
+    })
+  } catch (err: any) { console.error('Error fetching rep data:', err.message); return [] }
+}
+
+// ─── setUserTarget ────────────────────────────────────────────────────────────
+
+export async function setUserTarget(userId: string, targets: { revenue: number; leads: number; tasks: number }) {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) throw new Error('No organization found')
+  const { isAdmin, error: authError } = await requireAdmin()
+  if (!isAdmin) throw new Error(authError || 'Unauthorized')
+  const monthYear = new Date().toISOString().substring(0, 7)
+  try {
+    await pool.query(
+      `INSERT INTO public.user_targets (organization_id, user_id, month_year, revenue_target, leads_target, tasks_target)
+       VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id, month_year) DO UPDATE SET
+         revenue_target = EXCLUDED.revenue_target, leads_target = EXCLUDED.leads_target, tasks_target = EXCLUDED.tasks_target`,
+      [orgId, userId, monthYear, targets.revenue, targets.leads, targets.tasks])
+    return true
+  } catch (err: any) { throw new Error(err.message) }
+}
+
+// ─── getOrganizationDetails ───────────────────────────────────────────────────
+
+export async function getOrganizationDetails() {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) return null
+  try {
+    const result = await pool.query('SELECT * FROM public.organizations WHERE id = $1', [orgId])
+    return result.rows[0] || null
+  } catch (err: any) { console.error('Error fetching org details:', err.message); return null }
+}
+
+// ─── updateOrganization ───────────────────────────────────────────────────────
+
+export async function updateOrganization(data: { name?: string; logo_url?: string; timezone?: string; currency?: string; branding?: any }) {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) throw new Error('No organization found')
+  const { isAdmin, error: authError } = await requireAdmin()
+  if (!isAdmin) throw new Error(authError || 'Unauthorized')
+  try {
+    const keys = Object.keys(data); const vals = Object.values(data)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(`UPDATE public.organizations SET ${sets} WHERE id = $${keys.length + 1}`, [...vals, orgId])
+    revalidatePath('/', 'layout'); return true
+  } catch (err: any) { throw new Error(err.message) }
+}
+
+// ─── manageTeamMember ─────────────────────────────────────────────────────────
+
+export async function manageTeamMember(userId: string, data: { role?: string; active?: boolean }) {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) throw new Error('No organization found')
+  const { isAdmin, error: authError } = await requireAdmin()
+  if (!isAdmin) throw new Error(authError || 'Unauthorized')
+  try {
+    const keys = Object.keys(data); const vals = Object.values(data)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(`UPDATE public.users SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`, [...vals, userId, orgId])
+    return true
+  } catch (err: any) { throw new Error(err.message) }
+}
+
+// ─── getIntegrations ──────────────────────────────────────────────────────────
+
+export async function getIntegrations() {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) return []
+  try {
+    const result = await pool.query('SELECT * FROM public.integrations WHERE organization_id = $1', [orgId])
+    return result.rows
+  } catch (err: any) { console.error('Error fetching integrations:', err.message); return [] }
+}
+
+// ─── saveIntegration ──────────────────────────────────────────────────────────
+
+export async function saveIntegration(provider: string, config: any, isActive: boolean = true) {
+  const orgId = await getDefaultOrgId()
+  if (!orgId) throw new Error('No organization found')
+  const { isAdmin, error: authError } = await requireAdmin()
+  if (!isAdmin) throw new Error(authError || 'Unauthorized')
+  try {
+    await pool.query(
+      `INSERT INTO public.integrations (organization_id, provider, config, is_active, updated_at) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (organization_id, provider) DO UPDATE SET config = EXCLUDED.config, is_active = EXCLUDED.is_active, updated_at = EXCLUDED.updated_at`,
+      [orgId, provider, JSON.stringify(config), isActive, new Date().toISOString()])
+    return true
+  } catch (err: any) { throw new Error(err.message) }
+}
+
+// ─── getCurrentUser ───────────────────────────────────────────────────────────
+
+export async function getCurrentUser() {
+  try {
+    const clerkUser = await getClerkUser()
+    const cookieStore = await cookies()
+    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
+
+    if (!clerkUser) {
+      if (isMockAuth) {
+        const r = await pool.query('SELECT * FROM public.users WHERE is_active = true LIMIT 1')
+        const user = r.rows[0]
+        if (user) {
+          const roleData = await pool.query('SELECT permissions FROM public.organization_roles WHERE organization_id = $1 AND name = $2 LIMIT 1', [user.organization_id, user.role])
+          return { ...user, permissions: roleData.rows[0]?.permissions || null }
+        }
+        const fallback = await pool.query('SELECT * FROM public.users LIMIT 1')
+        if (fallback.rows[0]) {
+          const roleData = await pool.query('SELECT permissions FROM public.organization_roles WHERE organization_id = $1 AND name = $2 LIMIT 1', [fallback.rows[0].organization_id, fallback.rows[0].role])
+          return { ...fallback.rows[0], permissions: roleData.rows[0]?.permissions || null }
+        }
+      }
+      return null
     }
-  }
 
-  const { data: roleData } = await supabase
-    .from('organization_roles')
-    .select('permissions')
-    .eq('organization_id', data.organization_id)
-    .eq('name', data.role)
-    .single()
+    let userResult = await pool.query('SELECT * FROM public.users WHERE clerk_id = $1', [clerkUser.id])
+    let user = userResult.rows[0]
+    if (!user) return null
 
-  return { ...data, email: user.email, permissions: roleData?.permissions || null }
+    if (clerkUser.email) {
+      try {
+        const emailPrefix = clerkUser.email.split('@')[0] || ''
+        const derivedName = emailPrefix.replace(/[._-]+/g, ' ').split(' ').filter(Boolean)
+          .map((part: string) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')
+        if (derivedName) {
+          const updated = await pool.query('UPDATE public.users SET full_name = $1 WHERE clerk_id = $2 RETURNING *', [derivedName, clerkUser.id])
+          if (updated.rows[0]) user = updated.rows[0]
+        }
+      } catch (e) { console.error('Failed to derive full_name from email', e) }
+    }
+
+    const roleData = await pool.query('SELECT permissions FROM public.organization_roles WHERE organization_id = $1 AND name = $2 LIMIT 1', [user.organization_id, user.role])
+    return { ...user, email: clerkUser.email, permissions: roleData.rows[0]?.permissions || null }
+  } catch (err: any) { console.error('Error getting current user:', err.message); return null }
 }
 
-export async function updateUserProfile(data: { 
-  full_name?: string
-  avatar_url?: string
-  password?: string
-  email?: string
-  designation?: string
-  phone?: string
-  bio?: string
-  department?: string
+// ─── updateUserProfile ────────────────────────────────────────────────────────
+
+export async function updateUserProfile(data: {
+  full_name?: string; avatar_url?: string; password?: string; email?: string
+  designation?: string; phone?: string; bio?: string; department?: string
 }) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  
-  const profileUpdate = {
-    full_name: data.full_name,
-    avatar_url: data.avatar_url,
-    designation: data.designation,
-    phone: data.phone,
-    bio: data.bio,
-    department: data.department,
-  }
+  const clerkUser = await getClerkUser()
+  const profileUpdate: Record<string, any> = {}
+  if (data.full_name !== undefined) profileUpdate.full_name = data.full_name
+  if (data.avatar_url !== undefined) profileUpdate.avatar_url = data.avatar_url
+  if (data.designation !== undefined) profileUpdate.designation = data.designation
+  if (data.phone !== undefined) profileUpdate.phone = data.phone
+  if (data.bio !== undefined) profileUpdate.bio = data.bio
+  if (data.department !== undefined) profileUpdate.department = data.department
 
-  const userId = user?.id
+  const userId = clerkUser?.id
   if (!userId) {
-     const { data: mockUser } = await supabase.from('users').select('id').eq('role', 'admin').limit(1).single()
-     if (mockUser) {
-        await supabase.from('users').update(profileUpdate).eq('id', mockUser.id)
-        return true
-     }
-     throw new Error('No user found')
+    const mockUser = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin'])
+    if (mockUser.rows[0]) {
+      const keys = Object.keys(profileUpdate); const vals = Object.values(profileUpdate)
+      const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+      await pool.query(`UPDATE public.users SET ${sets} WHERE id = $${keys.length + 1}`, [...vals, mockUser.rows[0].id])
+      return true
+    }
+    throw new Error('No user found')
   }
-
-  const { error } = await supabase
-    .from('users')
-    .update(profileUpdate)
-    .eq('id', userId)
-
-  if (error) throw error
-
-  if (data.password || data.email) {
-    const updateData: any = {}
-    if (data.password) updateData.password = data.password
-    if (data.email) updateData.email = data.email
-    
-    const { error: authError } = await supabase.auth.updateUser(updateData)
-    if (authError) throw authError
-  }
-
-  return true
+  try {
+    const keys = Object.keys(profileUpdate); const vals = Object.values(profileUpdate)
+    const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
+    await pool.query(`UPDATE public.users SET ${sets} WHERE clerk_id = $${keys.length + 1}`, [...vals, userId])
+    return true
+  } catch (err: any) { throw new Error(err.message) }
 }
+
+// ─── updateNotificationSettings ───────────────────────────────────────────────
 
 export async function updateNotificationSettings(prefs: any) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  
-  const userId = user?.id || (await supabase.from('users').select('id').eq('role', 'admin').limit(1).single()).data?.id
+  const clerkUser = await getClerkUser()
+  let userId: string | undefined
+  if (clerkUser?.id) {
+    const r = await pool.query('SELECT id FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
+    userId = r.rows[0]?.id
+  }
+  if (!userId) { const r = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin']); userId = r.rows[0]?.id }
   if (!userId) throw new Error('No user found')
-
-  const { error } = await supabase
-    .from('users')
-    .update({ notification_preferences: prefs })
-    .eq('id', userId)
-
-  if (error) throw error
-  
-  revalidatePath('/settings')
-  revalidatePath('/')
-  return true
+  try {
+    await pool.query('UPDATE public.users SET notification_preferences = $1 WHERE id = $2', [JSON.stringify(prefs), userId])
+    revalidatePath('/settings'); revalidatePath('/'); return true
+  } catch (err: any) { throw new Error(err.message) }
 }
+
+// ─── updateAppearanceSettings ─────────────────────────────────────────────────
 
 export async function updateAppearanceSettings(settings: any) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  const userId = user?.id || (await supabase.from('users').select('id').eq('role', 'admin').limit(1).single()).data?.id
-  // Appearance prefs are non-critical UI state. When there's no resolvable user
-  // (e.g. before sign-in / during hydration) just no-op instead of throwing —
-  // a thrown error here surfaces as a noisy "No user found" console error.
-  if (!userId) return false
-
-  const { error } = await supabase
-    .from('users')
-    .update({ appearance_settings: settings })
-    .eq('id', userId)
-
-  if (error) {
-    console.error('[updateAppearanceSettings] failed:', error.message)
-    return false
+  const clerkUser = await getClerkUser()
+  let userId: string | undefined
+  if (clerkUser?.id) {
+    const r = await pool.query('SELECT id FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
+    userId = r.rows[0]?.id
   }
-  return true
+  if (!userId) { const r = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin']); userId = r.rows[0]?.id }
+  if (!userId) return false
+  try {
+    await pool.query('UPDATE public.users SET appearance_settings = $1 WHERE id = $2', [JSON.stringify(settings), userId])
+    return true
+  } catch (err: any) { console.error('[updateAppearanceSettings] failed:', err.message); return false }
 }
 
-// ── Users & Roles Actions ────────────────────────────────────────────────────
+// ─── getUsersHubData ──────────────────────────────────────────────────────────
 
 export async function getUsersHubData() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { users: [], invites: [] }
+  try {
+    const [usersResult, roleDefsResult, leadsResult, dealsResult, invitesResult] = await Promise.all([
+      pool.query('SELECT id, full_name, role, is_active, created_at, avatar_url FROM public.users WHERE organization_id = $1 AND is_active = true ORDER BY full_name', [orgId]),
+      pool.query('SELECT name FROM public.organization_roles WHERE organization_id = $1', [orgId]),
+      pool.query('SELECT owner_id FROM public.leads WHERE organization_id = $1', [orgId]),
+      pool.query('SELECT assigned_to FROM public.deals WHERE organization_id = $1', [orgId]),
+      pool.query("SELECT * FROM public.organization_invites WHERE organization_id = $1 AND status = 'pending' ORDER BY created_at DESC", [orgId])
+    ])
 
-  // 1. Get all users for the org
-  const { data: usersData, error: usersErr } = await supabase
-    .from('users')
-    .select('id, full_name, role, is_active, created_at, avatar_url')
-    .eq('organization_id', orgId)
-    .eq('is_active', true) // only show active users in settings hub
-    .order('full_name')
+    const normalizeRole = (value: string | null) => (value || '').toLowerCase().replace(/\s+/g, '_')
+    const usersWithWorkload = usersResult.rows.map(u => {
+      const activeLeads = leadsResult.rows.filter(l => l.owner_id === u.id).length
+      const activeDeals = dealsResult.rows.filter(d => d.assigned_to === u.id).length
+      const matchingRole = roleDefsResult.rows.find(r => normalizeRole(r.name) === normalizeRole(u.role))
+      return { ...u, workload: activeLeads + activeDeals, role_display: matchingRole?.name || u.role }
+    })
 
-  if (usersErr) throw usersErr
-
-  // Also load role definitions so we can align display names
-  const { data: roleDefs } = await supabase
-    .from('organization_roles')
-    .select('name')
-    .eq('organization_id', orgId)
-
-  // Get active leads and deals count to calculate workload
-  const { data: leadsData } = await supabase
-    .from('leads')
-    .select('owner_id')
-    .eq('organization_id', orgId)
-
-  const { data: dealsData } = await supabase
-    .from('deals')
-    .select('assigned_to')
-    .eq('organization_id', orgId)
-
-  const normalizeRole = (value: string | null) =>
-    (value || '').toLowerCase().replace(/\s+/g, '_')
-
-  const usersWithWorkload = usersData.map(u => {
-    const activeLeads = leadsData?.filter(l => l.owner_id === u.id).length || 0
-    const activeDeals = dealsData?.filter(d => d.assigned_to === u.id).length || 0
-
-    const matchingRole = roleDefs?.find(r =>
-      normalizeRole(r.name) === normalizeRole(u.role)
-    )
-
-    return {
-      ...u,
-      workload: activeLeads + activeDeals,
-      role_display: matchingRole?.name || u.role
-    }
-  })
-
-  // 2. Get pending invites
-  const { data: invitesData, error: invitesErr } = await supabase
-    .from('organization_invites')
-    .select('*')
-    .eq('organization_id', orgId)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false })
-
-  if (invitesErr) throw invitesErr
-
-  return {
-    users: usersWithWorkload,
-    invites: invitesData
-  }
+    return { users: usersWithWorkload, invites: invitesResult.rows }
+  } catch (err: any) { console.error('Error fetching users hub data:', err.message); return { users: [], invites: [] } }
 }
+
+// ─── inviteUser ───────────────────────────────────────────────────────────────
 
 export async function inviteUser(formData: FormData) {
-  const supabase = await createClient()
   const email = formData.get('email') as string
   const role = formData.get('role') as string
-
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { isAdmin, user, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, user, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Only admins can invite users' }
-  const currentUserId = user.id
-
-  const { error } = await supabase
-    .from('organization_invites')
-    .insert({
-      organization_id: orgId,
-      email,
-      role,
-      invited_by: currentUserId
-    })
-
-  if (error) return { error: error.message }
-  
-  revalidatePath('/settings')
-  return { success: true }
+  try {
+    await pool.query('INSERT INTO public.organization_invites (organization_id, email, role, invited_by) VALUES ($1,$2,$3,$4)', [orgId, email, role, user?.id])
+    revalidatePath('/settings'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── revokeInvite ─────────────────────────────────────────────────────────────
 
 export async function revokeInvite(inviteId: string) {
-  const supabase = await createClient()
-  
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
-
-  const { error } = await supabase
-    .from('organization_invites')
-    .update({ status: 'revoked' })
-    .eq('id', inviteId)
-
-  if (error) return { error: error.message }
-
-  revalidatePath('/settings')
-  revalidatePath('/reps')
-  revalidatePath('/home')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query("UPDATE public.organization_invites SET status = 'revoked' WHERE id = $1", [inviteId])
+    revalidatePath('/settings'); revalidatePath('/reps'); revalidatePath('/home'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── updateUserRole ───────────────────────────────────────────────────────────
 
 export async function updateUserRole(userId: string, newRole: string) {
-  const supabase = await createClient()
-  
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Only admins can change roles' }
-
-  const { error } = await supabase
-    .from('users')
-    .update({ role: newRole })
-    .eq('id', userId)
-
-  if (error) return { error: error.message }
-
-  revalidatePath('/settings')
-  revalidatePath('/reps')
-  revalidatePath('/home')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('UPDATE public.users SET role = $1 WHERE id = $2', [newRole, userId])
+    revalidatePath('/settings'); revalidatePath('/reps'); revalidatePath('/home'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── toggleUserSuspension ─────────────────────────────────────────────────────
 
 export async function toggleUserSuspension(userId: string, suspend: boolean) {
-  const supabase = await createClient()
-
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
-  
-  const { error } = await supabase
-    .from('users')
-    .update({ is_active: !suspend })
-    .eq('id', userId)
-
-  if (error) return { error: error.message }
-  
-  revalidatePath('/settings')
-  revalidatePath('/reps')
-  revalidatePath('/home')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('UPDATE public.users SET is_active = $1 WHERE id = $2', [!suspend, userId])
+    revalidatePath('/settings'); revalidatePath('/reps'); revalidatePath('/home'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── removeUser ───────────────────────────────────────────────────────────────
 
 export async function removeUser(userId: string) {
-  const supabase = await createClient()
-  
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
-
-  // Hard-deleting users breaks foreign key constraints (attendance, leads, tasks, etc.).
-  // Instead, we soft-delete by marking the user as inactive so all history remains intact.
-  const { error } = await supabase
-    .from('users')
-    .update({ is_active: false })
-    .eq('id', userId)
-
-  if (error) return { error: error.message }
-  
-  revalidatePath('/settings')
-  revalidatePath('/reps')
-  revalidatePath('/home')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('UPDATE public.users SET is_active = false WHERE id = $1', [userId])
+    revalidatePath('/settings'); revalidatePath('/reps'); revalidatePath('/home'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
 
-// ── Advanced Roles & Permissions ─────────────────────────────────────────────
+// ─── getRoles ─────────────────────────────────────────────────────────────────
 
 export async function getRoles() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return []
-
-  const { data, error } = await supabase
-    .from('organization_roles')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('created_at')
-
-  if (error) {
-    console.error('getRoles Error:', error)
-    return []
-  }
-
-  // Ensure 'admin' and 'user' exist, if not, create default
-  if (!data || data.length === 0) {
+  try {
+    const result = await pool.query('SELECT * FROM public.organization_roles WHERE organization_id = $1 ORDER BY created_at', [orgId])
+    if (!result.rows || result.rows.length === 0) {
       const defaultRoles = [
-          { organization_id: orgId, name: 'Admin', is_system: true, description: 'Full access to all modules and settings.', permissions: { global: { manage_billing: true, manage_users: true }, leads: { view_all: true, create: true, edit: true, delete: true }, deals: { view_all: true, create: true, edit: true, delete: true, manage_stages: true }, tasks: { view_all: true, create: true, edit: true, delete: true } } },
-          { organization_id: orgId, name: 'Sales Rep', is_system: true, description: 'Standard access for sales representatives.', permissions: { global: { manage_billing: false, manage_users: false }, leads: { view_all: false, create: true, edit: true, delete: false }, deals: { view_all: false, create: true, edit: true, delete: false, manage_stages: false }, tasks: { view_all: false, create: true, edit: true, delete: false } } }
+        { organization_id: orgId, name: 'Admin', is_system: true, description: 'Full access to all modules and settings.', permissions: { global: { manage_billing: true, manage_users: true }, leads: { view_all: true, create: true, edit: true, delete: true }, deals: { view_all: true, create: true, edit: true, delete: true, manage_stages: true }, tasks: { view_all: true, create: true, edit: true, delete: true } } },
+        { organization_id: orgId, name: 'Sales Rep', is_system: true, description: 'Standard access for sales representatives.', permissions: { global: { manage_billing: false, manage_users: false }, leads: { view_all: false, create: true, edit: true, delete: false }, deals: { view_all: false, create: true, edit: true, delete: false, manage_stages: false }, tasks: { view_all: false, create: true, edit: true, delete: false } } }
       ]
-      
-      const { data: newRoles, error: insertErr } = await supabase
-        .from('organization_roles')
-        .insert(defaultRoles)
-        .select()
-        
-      if(insertErr) {
-          console.error("Failed to seed default roles", insertErr)
-          return []
+      const newRoles: any[] = []
+      for (const role of defaultRoles) {
+        const r = await pool.query(
+          'INSERT INTO public.organization_roles (organization_id, name, is_system, description, permissions) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+          [role.organization_id, role.name, role.is_system, role.description, JSON.stringify(role.permissions)])
+        newRoles.push(r.rows[0])
       }
-      return newRoles || []
-  }
-
-  return data
+      return newRoles
+    }
+    return result.rows
+  } catch (err: any) { console.error('getRoles Error:', err.message); return [] }
 }
+
+// ─── createRole ───────────────────────────────────────────────────────────────
 
 export async function createRole(name: string, description: string) {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
+  const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
-
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
-
   const defaultPermissions = {
-      leads: { view_all: false, create: false, edit: false, delete: false },
-      deals: { view_all: false, create: false, edit: false, delete: false, manage_stages: false },
-      tasks: { view_all: false, create: false, edit: false, delete: false },
-      global: { manage_users: false, manage_billing: false }
+    leads: { view_all: false, create: false, edit: false, delete: false },
+    deals: { view_all: false, create: false, edit: false, delete: false, manage_stages: false },
+    tasks: { view_all: false, create: false, edit: false, delete: false },
+    global: { manage_users: false, manage_billing: false }
   }
-
-  const { error } = await supabase
-    .from('organization_roles')
-    .insert({
-      organization_id: orgId,
-      name,
-      description,
-      permissions: defaultPermissions
-    })
-
-  if (error) return { error: error.message }
-  
-  revalidatePath('/settings')
-  return { success: true }
+  try {
+    await pool.query(
+      'INSERT INTO public.organization_roles (organization_id, name, description, permissions) VALUES ($1,$2,$3,$4)',
+      [orgId, name, description, JSON.stringify(defaultPermissions)])
+    revalidatePath('/settings'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── updateRolePermissions ────────────────────────────────────────────────────
 
 export async function updateRolePermissions(roleId: string, permissions: any) {
-  const supabase = await createClient()
-
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
-
-  const { error } = await supabase
-    .from('organization_roles')
-    .update({ permissions })
-    .eq('id', roleId)
-
-  if (error) return { error: error.message }
-
-  revalidatePath('/settings')
-  revalidatePath('/reps')
-  revalidatePath('/home')
-  revalidatePath('/')
-  return { success: true }
+  try {
+    await pool.query('UPDATE public.organization_roles SET permissions = $1 WHERE id = $2', [JSON.stringify(permissions), roleId])
+    revalidatePath('/settings'); revalidatePath('/reps'); revalidatePath('/home'); revalidatePath('/'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
+
+// ─── deleteRole ───────────────────────────────────────────────────────────────
 
 export async function deleteRole(roleId: string) {
-  const supabase = await createClient()
-
-  const { isAdmin, error: authError } = await requireAdmin(supabase)
+  const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Unauthorized' }
-
-  const { data: role, error: roleErr } = await supabase
-    .from('organization_roles')
-    .select('id, name, is_system')
-    .eq('id', roleId)
-    .single()
-
-  if (roleErr || !role) {
-    return { error: roleErr?.message || 'Role not found' }
-  }
-
-  if (role.is_system) {
-    return { error: 'System roles cannot be deleted' }
-  }
-
-  const { data: usersUsingRole, error: usersErr } = await supabase
-    .from('users')
-    .select('id')
-    .eq('role', role.name)
-    .limit(1)
-
-  if (usersErr) {
-    return { error: usersErr.message }
-  }
-
-  if (usersUsingRole && usersUsingRole.length > 0) {
-    return { error: 'This role is currently assigned to users. Change their roles before deleting.' }
-  }
-
-  const { error } = await supabase
-    .from('organization_roles')
-    .delete()
-    .eq('id', roleId)
-
-  if (error) {
-    return { error: error.message }
-  }
-
-  revalidatePath('/settings')
-  return { success: true }
+  try {
+    const roleResult = await pool.query('SELECT id, name, is_system FROM public.organization_roles WHERE id = $1', [roleId])
+    const role = roleResult.rows[0]
+    if (!role) return { error: 'Role not found' }
+    if (role.is_system) return { error: 'System roles cannot be deleted' }
+    const usersResult = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', [role.name])
+    if (usersResult.rows.length > 0) return { error: 'This role is currently assigned to users. Change their roles before deleting.' }
+    await pool.query('DELETE FROM public.organization_roles WHERE id = $1', [roleId])
+    revalidatePath('/settings'); return { success: true }
+  } catch (err: any) { return { error: err.message } }
 }
-
-

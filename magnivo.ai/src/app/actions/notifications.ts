@@ -1,145 +1,126 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import pool from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
+import { currentUser } from '@clerk/nextjs/server'
 
-// Define a common utility for getting the current org inside this file
-async function getDefaultOrgId(supabase: any) {
-  const { data } = await supabase.from('organizations').select('id').limit(1).single()
-  return data?.id
+async function getDefaultOrgId(): Promise<string | null> {
+  try {
+    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+    return r.rows[0]?.id ?? null
+  } catch { return null }
 }
 
-
 export async function getMockableUser() {
-    const supabase = await createClient()
-    let { data: { user } } = await supabase.auth.getUser()
-    const { cookies } = await import('next/headers')
+  try {
     const cookieStore = await cookies()
     const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
+    const clerkUser = await currentUser()
 
-    if (!user && isMockAuth) {
-        const { data: firstUser } = await supabase.from('users').select('*').limit(1).single()
-        if (firstUser) user = { ...firstUser } as any
+    if (!clerkUser && isMockAuth) {
+      const r = await pool.query('SELECT * FROM public.users LIMIT 1')
+      return r.rows[0] ?? null
     }
 
-    if (user) {
-        const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single()
-        if (profile) return { ...user, ...profile }
+    if (clerkUser) {
+      const r = await pool.query('SELECT * FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
+      return r.rows[0] ?? null
     }
-    return user
+
+    return null
+  } catch { return null }
 }
 
 export async function getNotifications() {
-  const supabase = await createClient()
-  const orgId = await getDefaultOrgId(supabase)
-  if (!orgId) return []
+  try {
+    const orgId = await getDefaultOrgId()
+    if (!orgId) return []
 
-  const user = await getMockableUser()
+    const user = await getMockableUser()
+    if (!user) return []
 
-  if (!user) return []
-
-  const { data, error } = await supabase
-    .from('notifications')
-    .select(`
-      *,
-      actor:users!actor_id(id, full_name, avatar_url)
-    `)
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-    .limit(50)
-
-  if (error) {
-    console.error('Error fetching notifications:', error.message, error.details, error.hint)
+    const result = await pool.query(`
+      SELECT n.*,
+        json_build_object('id', u.id, 'full_name', u.full_name, 'avatar_url', u.avatar_url) AS actor
+      FROM public.notifications n
+      LEFT JOIN public.users u ON u.id = n.actor_id
+      WHERE n.user_id = $1
+      ORDER BY n.created_at DESC
+      LIMIT 50
+    `, [user.id])
+    return result.rows
+  } catch (err: any) {
+    console.error('Error fetching notifications:', err.message)
     return []
   }
-
-  return data || []
 }
 
 export async function createNotification(payload: {
-    user_id: string;
-    actor_id?: string;
-    type: string;
-    title: string;
-    content?: string;
-    link_url?: string;
+  user_id: string
+  actor_id?: string
+  type: string
+  title: string
+  content?: string
+  link_url?: string
 }) {
-    const supabase = await createClient()
-    const orgId = await getDefaultOrgId(supabase)
+  try {
+    const orgId = await getDefaultOrgId()
     if (!orgId) return { error: 'No org found' }
 
-    const { error } = await supabase.from('notifications').insert({
-        organization_id: orgId,
-        ...payload
-    })
+    await pool.query(
+      'INSERT INTO public.notifications (organization_id, user_id, actor_id, type, title, content, link_url) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [orgId, payload.user_id, payload.actor_id ?? null, payload.type, payload.title, payload.content ?? null, payload.link_url ?? null]
+    )
 
-    if (error) {
-        console.error('Error creating notification:', error)
-        return { error: error.message }
-    }
-    
-    // We don't necessarily revalidatePath here because supabase realtime handles UI updates naturally for notifications,
-    // but just in case, we'll revalidate the layout. 
     revalidatePath('/', 'layout')
     return { success: true }
+  } catch (err: any) {
+    console.error('Error creating notification:', err.message)
+    return { error: err.message }
+  }
 }
 
 export async function markAsRead(notificationIds: string[]) {
-    const supabase = await createClient()
-    const { error } = await supabase
-        .from('notifications')
-        .update({ read_at: new Date().toISOString() })
-        .in('id', notificationIds)
-        .is('read_at', null)
-
-    if (error) {
-        console.error('Error marking notifications read:', error)
-        return { error: error.message }
-    }
-
+  try {
+    if (!notificationIds.length) return { success: true }
+    const ph = notificationIds.map((_, i) => `$${i + 2}`).join(', ')
+    await pool.query(
+      `UPDATE public.notifications SET read_at = $1 WHERE id IN (${ph}) AND read_at IS NULL`,
+      [new Date().toISOString(), ...notificationIds]
+    )
     revalidatePath('/', 'layout')
     return { success: true }
+  } catch (err: any) {
+    console.error('Error marking notifications read:', err.message)
+    return { error: err.message }
+  }
 }
 
 export async function markAllAsRead() {
-    const supabase = await createClient()
-    let { data: { user } } = await supabase.auth.getUser()
-    
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-
-    if (!user && isMockAuth) {
-        const { data: firstUser } = await supabase.from('users').select('id').limit(1).single()
-        if (firstUser) user = { id: firstUser.id } as any
-    }
-
+  try {
+    const user = await getMockableUser()
     if (!user) return { error: 'Not authenticated' }
 
-    const { error } = await supabase
-        .from('notifications')
-        .update({ read_at: new Date().toISOString() })
-        .eq('user_id', user.id)
-        .is('read_at', null)
-
-    if (error) {
-        console.error('Error marking all read:', error)
-        return { error: error.message }
-    }
-
+    await pool.query(
+      'UPDATE public.notifications SET read_at = $1 WHERE user_id = $2 AND read_at IS NULL',
+      [new Date().toISOString(), user.id]
+    )
     revalidatePath('/', 'layout')
     return { success: true }
+  } catch (err: any) {
+    console.error('Error marking all read:', err.message)
+    return { error: err.message }
+  }
 }
 
 export async function deleteNotification(notificationId: string) {
-    const supabase = await createClient()
-    const { error } = await supabase.from('notifications').delete().eq('id', notificationId)
-
-    if (error) {
-        console.error('Error deleting notification:', error)
-        return { error: error.message }
-    }
-
+  try {
+    await pool.query('DELETE FROM public.notifications WHERE id = $1', [notificationId])
     revalidatePath('/', 'layout')
     return { success: true }
+  } catch (err: any) {
+    console.error('Error deleting notification:', err.message)
+    return { error: err.message }
+  }
 }

@@ -165,6 +165,7 @@ export default function PlaybookBuilderClient(props: {
                       {steps.map((s, idx) => (
                         <Draggable key={s.id} draggableId={s.id} index={idx}>
                           {(draggable) => (
+                            // @ts-ignore
                             <div
                               ref={draggable.innerRef}
                               {...draggable.draggableProps}

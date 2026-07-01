@@ -1,31 +1,22 @@
 import { getTasks, getLeads, getOrgMembers } from '@/app/actions/crm'
-import { createClient } from '@/lib/supabase/server'
+import { getMockableUser } from '@/app/actions/notifications'
 import { redirect } from 'next/navigation'
 import FollowUpsClient from '@/components/followups/FollowUpsClient'
+import { cookies } from 'next/headers'
+import { currentUser } from '@clerk/nextjs/server'
 
 export default async function FollowUpsPage() {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-
-    const { cookies } = await import('next/headers')
     const cookieStore = await cookies()
     const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
     const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
+    const clerkUser = await currentUser()
 
-    if (!user && !isMockAuth && !bypassAuth) {
+    if (!clerkUser && !isMockAuth && !bypassAuth) {
         redirect('/login')
     }
 
-    // Fetch current user's role
-    let currentUserRole = 'admin' // default to admin for local dev / mock auth
-    if (user) {
-        const { data: profile } = await supabase
-            .from('users')
-            .select('role')
-            .eq('id', user.id)
-            .single()
-        if (profile?.role) currentUserRole = profile.role
-    }
+    const mockUser = await getMockableUser()
+    const currentUserRole: string = mockUser?.role || 'admin'
 
     const [tasks, leadsRes, members] = await Promise.all([
         getTasks(),
@@ -43,4 +34,3 @@ export default async function FollowUpsPage() {
         />
     )
 }
-

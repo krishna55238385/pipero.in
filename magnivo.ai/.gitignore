@@ -36,6 +36,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Supabase CLI local state / DB dumps (never commit — may contain project refs, conn strings)
+supabase/.temp/
+*backup*.sql
+
 # local router helper (deployed via CLI, not part of app)
 /meratutor-router/
 
@@ -45,3 +49,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
