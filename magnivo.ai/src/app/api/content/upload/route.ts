@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { generateText } from '@/lib/llm'
+import { uploadFile } from '@/lib/s3'
 
 export const maxDuration = 60
 
@@ -94,16 +95,7 @@ export async function POST(req: NextRequest) {
     const safeName = sanitizeFileName(file.name || 'upload')
     const path = `${org.id}/${ymd}/${Date.now()}_${safeName}`
 
-    const { error: uploadError } = await supabase
-      .storage
-      .from('content-library')
-      .upload(path, file, { upsert: false, contentType: file.type, cacheControl: '3600' })
-
-    if (uploadError) {
-      return NextResponse.json({ success: false, error: uploadError.message }, { status: 500 })
-    }
-
-    const { data: publicUrlData } = supabase.storage.from('content-library').getPublicUrl(path)
+    const publicUrl = await uploadFile(Buffer.from(bytes), `content-library/${path}`, file.type)
 
     const ai = await summarizeWithAI(bytes, file.type, parsedText)
 
@@ -114,7 +106,7 @@ export async function POST(req: NextRequest) {
         size: file.size,
         mime_type: file.type,
         path,
-        public_url: publicUrlData?.publicUrl || null,
+        public_url: publicUrl,
       },
       extracted_text: ai.extractedText || parsedText || '',
       summary: ai.summary || '',

@@ -128,27 +128,21 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
         setPage(1)
     }, [search, type, userId, dateRange, leadId, dealId])
 
-    // Real-time updates
+    // Poll for new activity (replaces Supabase real-time subscription)
     useEffect(() => {
         if (!isCoreAdmin) return
-        const channel = supabase
-            .channel('global_activity_feed')
-            .on(
-                'postgres_changes',
-                { event: 'INSERT', schema: 'public', table: 'activity_logs' },
-                async (payload) => {
-                    const result = await getGlobalActivities({ limit: 1 })
-                    if (result.data.length > 0) {
-                        setActivities(prev => [result.data[0], ...prev.slice(0, limit - 1)])
-                        setTotal(prev => prev + 1)
-                    }
-                }
-            )
-            .subscribe()
+        const interval = setInterval(async () => {
+            const result = await getGlobalActivities({ limit: 1 })
+            if (result.data.length > 0) {
+                setActivities(prev => {
+                    if (prev[0]?.id === result.data[0].id) return prev
+                    setTotal(t => t + 1)
+                    return [result.data[0], ...prev.slice(0, limit - 1)]
+                })
+            }
+        }, 15000)
 
-        return () => {
-            supabase.removeChannel(channel)
-        }
+        return () => clearInterval(interval)
     }, [isCoreAdmin])
 
     const handleExport = async () => {

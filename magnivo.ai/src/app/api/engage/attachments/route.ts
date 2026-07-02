@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase/service'
 import { ATTACHMENTS_BUCKET, MAX_ATTACHMENT_BYTES } from '@/lib/engage-attachments'
+import { uploadFile } from '@/lib/s3'
 
 // Uploads a composer/template attachment into private storage and returns the
 // metadata the send/template APIs expect ({ path, filename, mimeType, size }).
@@ -21,14 +21,11 @@ export async function POST(req: NextRequest) {
     const safeName = (file.name || 'attachment').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120)
     const path = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}/${safeName}`
 
-    const supabase = createServiceClient()
-    const { error } = await supabase.storage
-      .from(ATTACHMENTS_BUCKET)
-      .upload(path, Buffer.from(await file.arrayBuffer()), {
-        contentType: file.type || 'application/octet-stream',
-        upsert: false,
-      })
-    if (error) throw new Error(error.message)
+    await uploadFile(
+      Buffer.from(await file.arrayBuffer()),
+      `${ATTACHMENTS_BUCKET}/${path}`,
+      file.type || 'application/octet-stream',
+    )
 
     return NextResponse.json({
       attachment: {

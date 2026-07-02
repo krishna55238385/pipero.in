@@ -3,7 +3,7 @@ import { Send, Check, CheckCheck, Lightbulb, Paperclip, Smile, MoreVertical, Pho
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { useEffect, useState, useRef } from "react"
-import { getMessages, sendWhatsAppMessage, markAsRead, syncLeadMessages } from "@/app/actions/interakt"
+import { getMessages, sendWhatsAppMessage, markAsRead, syncLeadMessages, uploadChatAttachment } from "@/app/actions/interakt"
 import { format, isToday, isYesterday, isSameDay } from "date-fns"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
@@ -241,22 +241,10 @@ export function ChatWindow({ conversationId, leadId, leadName, initialConversati
 
         try {
             if (selectedFile) {
-                const supabase = createClient()
-                const fileExt = selectedFile.name.split('.').pop()
-                const fileName = `${Math.random()}.${fileExt}`
-                const filePath = `${leadId}/${fileName}`
+                const result = await uploadChatAttachment(selectedFile, leadId)
+                if (!result.success || !result.url) throw new Error(result.error || 'Upload failed')
 
-                const { error: uploadError, data } = await supabase.storage
-                    .from('chat-attachments')
-                    .upload(filePath, selectedFile)
-
-                if (uploadError) throw uploadError
-
-                const { data: { publicUrl } } = supabase.storage
-                    .from('chat-attachments')
-                    .getPublicUrl(filePath)
-
-                mediaUrl = publicUrl
+                mediaUrl = result.url
                 messageType = selectedFile.type.startsWith('image/') ? 'image' :
                     selectedFile.type.startsWith('video/') ? 'video' :
                         selectedFile.type.startsWith('audio/') ? 'audio' : 'document'

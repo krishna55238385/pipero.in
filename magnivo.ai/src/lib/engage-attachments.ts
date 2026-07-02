@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EngageAttachment } from '@/types/engage'
+import { downloadFile } from '@/lib/s3'
 
 export const ATTACHMENTS_BUCKET = 'engage-attachments'
 
@@ -9,17 +10,18 @@ export const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 
 /** Downloads attachment payloads from storage so they can be MIME-embedded. */
 export async function loadAttachments(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   attachments: EngageAttachment[],
 ): Promise<Array<{ meta: EngageAttachment; data: Buffer }>> {
   const loaded: Array<{ meta: EngageAttachment; data: Buffer }> = []
   for (const meta of attachments.slice(0, 10)) {
     if (!meta?.path) continue
-    const { data, error } = await supabase.storage.from(ATTACHMENTS_BUCKET).download(meta.path)
-    if (error || !data) {
-      throw new Error(`Attachment "${meta.filename || meta.path}" could not be loaded: ${error?.message ?? 'not found'}`)
+    let buf: Buffer
+    try {
+      buf = await downloadFile(`${ATTACHMENTS_BUCKET}/${meta.path}`)
+    } catch (error) {
+      throw new Error(`Attachment "${meta.filename || meta.path}" could not be loaded: ${error instanceof Error ? error.message : 'not found'}`)
     }
-    const buf = Buffer.from(await data.arrayBuffer())
     if (buf.byteLength > MAX_ATTACHMENT_BYTES) {
       throw new Error(`Attachment "${meta.filename}" exceeds the ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB limit`)
     }

@@ -2,10 +2,25 @@
 
 import pool from '@/lib/db'
 import { revalidatePath } from 'next/cache'
+import { uploadFile } from '@/lib/s3'
 
 const INTERAKT_API_KEY = process.env.INTERAKT_API_KEY
 const INTERAKT_FB_TEMPLATE_NAME = process.env.INTERAKT_FB_TEMPLATE_NAME
 const INTERAKT_FB_TEMPLATE_LANG = process.env.INTERAKT_FB_TEMPLATE_LANG || 'en'
+
+/** Uploads a chat attachment picked in the composer and returns its public URL. */
+export async function uploadChatAttachment(file: File, leadId: string) {
+  try {
+    const fileExt = file.name.split('.').pop()
+    const fileName = `${Math.random()}.${fileExt}`
+    const filePath = `${leadId}/${fileName}`
+    const buffer = Buffer.from(await file.arrayBuffer())
+    const url = await uploadFile(buffer, `chat-attachments/${filePath}`, file.type || 'application/octet-stream')
+    return { success: true, url }
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'Upload failed' }
+  }
+}
 
 export async function sendWhatsAppMessage(
   leadId: string,
