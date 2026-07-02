@@ -127,6 +127,11 @@ def run_phase(phase: str, body: RunRequest, background: BackgroundTasks) -> dict
 
 @app.get("/runs/{run_id}", dependencies=[Depends(require_token)])
 def get_run(run_id: str) -> dict:
+    import uuid as _uuid
+    try:
+        _uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Run not found")
     run = db.get_phase_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="run not found")

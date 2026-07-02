@@ -1,4 +1,5 @@
 import json
+import os
 
 from openai import OpenAI
 
@@ -7,7 +8,10 @@ from gtm_backend.phase1.core.retries import retry_on_transient
 
 
 _settings = get_settings()
-_client = OpenAI(api_key=_settings.openai_api_key)
+_client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY", _settings.openai_api_key),
+)
 
 
 
@@ -52,20 +56,19 @@ def chat_json(
     icp_id: int | None = None,
     phase: str = "phase1",
 ) -> dict:
-    """Call OpenAI with JSON mode. Returns parsed dict. Raises on failure.
+    """Call OpenRouter with JSON mode. Returns parsed dict. Raises on failure.
 
-    The model defaults to OPENAI_MODEL from the root .env (the project's single
-    source of truth); callers may still pass an explicit override.
+    The model defaults to OPENROUTER_MODEL from the root .env (the project's
+    single source of truth); callers may still pass an explicit override.
     """
-    model = model or _settings.openai_model
+    model = model or os.getenv("OPENROUTER_MODEL", "google/gemini-flash-1.5")
     response = _client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": system},
+            {"role": "system", "content": f"{system}\n\nRespond only in valid JSON format."},
             {"role": "user", "content": user},
         ],
         temperature=temperature,
-        response_format={"type": "json_object"},
     )
     # Record usage for EVERY completed API call — before any content validation
     # that could raise — so even a malformed/empty response logs the spend.

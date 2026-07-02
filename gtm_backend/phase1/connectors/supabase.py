@@ -13,7 +13,7 @@ _LOCAL_SIGNALS_PATH = Path(__file__).resolve().parent.parent / "data" / "buying_
 
 _settings = get_settings()
 _client = httpx.Client(
-    base_url=f"{_settings.supabase_url}/rest/v1",
+    base_url=_settings.supabase_url,
     headers={
         "apikey": _settings.supabase_key,
         "Authorization": f"Bearer {_settings.supabase_key}",
