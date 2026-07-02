@@ -1101,7 +1101,7 @@ export async function backfillContactsAndCompaniesFromLeads() {
 
   try {
     const leadsResult = await pool.query(
-      `SELECT id, organization_id, name, company_name, contact_person, email, phone_number, company_id, contact_id
+      `SELECT id, organization_id, name, contact_person, email, phone_number, company_id, contact_id
        FROM public.leads WHERE organization_id = $1 AND (company_id IS NULL OR contact_id IS NULL)
        ORDER BY created_at DESC`, [orgId])
     const leads = leadsResult.rows
@@ -1114,7 +1114,7 @@ export async function backfillContactsAndCompaniesFromLeads() {
     for (const lead of leads) {
       let companyId = lead.company_id as string | null
       let contactId = lead.contact_id as string | null
-      const companyName = String(lead.company_name || lead.name || '').trim()
+      const companyName = String(lead.name || '').trim()
       const contactName = String(lead.contact_person || lead.name || '').trim()
       const email = String(lead.email || '').trim()
       const phone = String(lead.phone_number || '').trim()

@@ -93,7 +93,7 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
     })
     const [saving, setSaving] = useState(false)
 
-    const col = columns.find(c => c.id === deal.status)
+    const col = columns.find(c => c.id === deal.status?.toLowerCase())
     const daysOpen = differenceInDays(new Date(), new Date(deal.created_at))
 
     const handleSave = async () => {
@@ -386,7 +386,7 @@ export default function DealsClient({
     const totalPipeline = filteredDeals.filter(d => !['won', 'lost'].includes(d.status)).reduce((s, d) => s + (Number(d.value) || 0), 0)
     const totalWon = filteredDeals.filter(d => d.status === 'won').reduce((s, d) => s + (Number(d.value) || 0), 0)
     const weightedPipeline = filteredDeals.reduce((s, d) => {
-        const col = columns.find(c => c.id === d.status)
+        const col = columns.find(c => c.id === d.status?.toLowerCase())
         const prob = d.probability ?? col?.prob ?? 50
         return s + (Number(d.value) || 0) * (prob / 100)
     }, 0)
@@ -550,7 +550,7 @@ export default function DealsClient({
                 {isMounted && (
                     <DragDropContext onDragEnd={onDragEnd}>
                         {columns.map(column => {
-                            const colDeals = filteredDeals.filter(d => d.status === column.id)
+                            const colDeals = filteredDeals.filter(d => d.status?.toLowerCase() === column.id)
                             const colTotal = colDeals.reduce((s, d) => s + (Number(d.value) || 0), 0)
                             const isWon = column.id === 'won'
                             const isLost = column.id === 'lost'
@@ -664,7 +664,7 @@ export default function DealsClient({
                                                                                                 title={deal.assigned_user.full_name}>
                                                                                                 {deal.assigned_user.full_name?.[0]?.toUpperCase()}
                                                                                             </div>
-                                                                                            <span className="text-[9px] font-bold text-slate-700 dark:text-muted-foreground">{deal.assigned_user.full_name.split(' ')[0]}</span>
+                                                                                            <span className="text-[9px] font-bold text-slate-700 dark:text-muted-foreground">{deal.assigned_user?.full_name?.split(' ')?.[0] ?? ''}</span>
                                                                                         </div>
                                                                                     )}
                                                                                 </div>
