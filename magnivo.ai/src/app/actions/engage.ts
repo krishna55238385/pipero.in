@@ -38,6 +38,41 @@ async function getDefaultOrgId(): Promise<string | undefined> {
   } catch { return undefined }
 }
 
+async function getOrCreateUser(clerkUser: { id: string, email: string | null, firstName?: string | null, lastName?: string | null }) {
+  // Try to find existing user
+  const existing = await pool.query(
+    'SELECT * FROM public.users WHERE clerk_id = $1 LIMIT 1',
+    [clerkUser.id]
+  )
+
+  if (existing.rows[0]) {
+    // Update email if missing
+    if (!existing.rows[0].email && clerkUser.email) {
+      await pool.query(
+        'UPDATE public.users SET email = $1 WHERE clerk_id = $2',
+        [clerkUser.email, clerkUser.id]
+      )
+    }
+    return existing.rows[0]
+  }
+
+  // Auto-create new user
+  const orgResult = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+  const orgId = orgResult.rows[0]?.id
+  if (!orgId) return null
+
+  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
+
+  const newUser = await pool.query(
+    `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
+     VALUES ($1, $2, $3, $4, 'user')
+     RETURNING *`,
+    [clerkUser.id, orgId, clerkUser.email, fullName]
+  )
+
+  return newUser.rows[0]
+}
+
 async function getCurrentActor() {
   const cookieStore = await cookies()
   const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
@@ -47,8 +82,13 @@ async function getCurrentActor() {
     const r = await pool.query('SELECT id FROM public.users LIMIT 1')
     userId = r.rows[0]?.id ?? null
   } else if (clerkUser) {
-    const r = await pool.query('SELECT id FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
-    userId = r.rows[0]?.id ?? null
+    const dbRow = await getOrCreateUser({
+      id: clerkUser.id,
+      email: clerkUser.emailAddresses?.[0]?.emailAddress ?? null,
+      firstName: clerkUser.firstName,
+      lastName: clerkUser.lastName,
+    })
+    userId = dbRow?.id ?? null
   }
   if (!userId) throw new Error('Authentication required')
   const orgRes = await pool.query('SELECT id FROM public.organizations LIMIT 1')

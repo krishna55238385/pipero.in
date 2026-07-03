@@ -59,10 +59,7 @@ export default function MyProfile({ user }: { user: any }) {
             await updateUserProfile({
                 full_name: formData.full_name,
                 email: emailChanged ? formData.email : undefined, // only send if changed
-                phone: formData.phone,
-                designation: formData.designation,
-                department: formData.department,
-                bio: formData.bio,
+                avatar_url: formData.avatar_url,
                 password: formData.password || undefined,
             })
             toast.success("Profile updated successfully!")

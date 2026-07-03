@@ -22,8 +22,48 @@ async function getClerkUser() {
   try {
     const u = await currentUser()
     if (!u) return null
-    return { id: u.id, email: u.emailAddresses?.[0]?.emailAddress ?? null }
+    return {
+      id: u.id,
+      email: u.emailAddresses?.[0]?.emailAddress ?? null,
+      firstName: u.firstName ?? null,
+      lastName: u.lastName ?? null,
+    }
   } catch { return null }
+}
+
+async function getOrCreateUser(clerkUser: { id: string, email: string | null, firstName?: string | null, lastName?: string | null }) {
+  // Try to find existing user
+  const existing = await pool.query(
+    'SELECT * FROM public.users WHERE clerk_id = $1 LIMIT 1',
+    [clerkUser.id]
+  )
+
+  if (existing.rows[0]) {
+    // Update email if missing
+    if (!existing.rows[0].email && clerkUser.email) {
+      await pool.query(
+        'UPDATE public.users SET email = $1 WHERE clerk_id = $2',
+        [clerkUser.email, clerkUser.id]
+      )
+    }
+    return existing.rows[0]
+  }
+
+  // Auto-create new user
+  const orgResult = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+  const orgId = orgResult.rows[0]?.id
+  if (!orgId) return null
+
+  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
+
+  const newUser = await pool.query(
+    `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
+     VALUES ($1, $2, $3, $4, 'user')
+     RETURNING *`,
+    [clerkUser.id, orgId, clerkUser.email, fullName]
+  )
+
+  return newUser.rows[0]
 }
 
 async function requireAdmin() {
@@ -39,11 +79,11 @@ async function requireAdmin() {
   }
   if (!clerkUser) return { isAdmin: false, user: null, error: 'Authentication required' }
 
-  const r = await pool.query('SELECT id, role FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
-  const role = r.rows[0]?.role
+  const dbRow = await getOrCreateUser(clerkUser)
+  const role = dbRow?.role
   const isAdmin = role === 'admin' || role === 'super_admin'
   // clerkUser.id is the Clerk ID string, not the public.users UUID — swap in the resolved DB id
-  const dbUser = r.rows[0]?.id ? { ...clerkUser, id: r.rows[0].id } : clerkUser
+  const dbUser = dbRow?.id ? { ...clerkUser, id: dbRow.id } : clerkUser
   if (!isAdmin) return { isAdmin: false, user: dbUser, error: 'Admin privileges required' }
   return { isAdmin: true, user: dbUser }
 }
@@ -131,9 +171,9 @@ export async function getLeads(filters: LeadFilters = {}) {
   if (!clerkUser && isMockAuth) { isAdmin = true }
   else if (!clerkUser && !isMockAuth) { return { data: [], count: 0, debug: 'no-user-prod' } }
   else if (clerkUser) {
-    const r = await pool.query('SELECT id, role FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
-    userId = r.rows[0]?.id ?? null
-    const role = r.rows[0]?.role
+    const dbRow = await getOrCreateUser(clerkUser)
+    userId = dbRow?.id ?? null
+    const role = dbRow?.role
     isAdmin = role === 'admin' || role === 'super_admin'
   }
 
@@ -211,9 +251,9 @@ export async function getDeals(searchQuery?: string) {
   if (!clerkUser && isMockAuth) { isAdmin = true }
   else if (!clerkUser && !isMockAuth) { return [] }
   else if (clerkUser) {
-    const r = await pool.query('SELECT id, role FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
-    userId = r.rows[0]?.id ?? null
-    isAdmin = r.rows[0]?.role === 'admin' || r.rows[0]?.role === 'super_admin'
+    const dbRow = await getOrCreateUser(clerkUser)
+    userId = dbRow?.id ?? null
+    isAdmin = dbRow?.role === 'admin' || dbRow?.role === 'super_admin'
   }
 
   const values: any[] = [orgId]
@@ -1367,9 +1407,9 @@ export async function getAnalytics(days: number = 30) {
   let isAdmin = false; let userId: string | null = null
   if (!clerkUser && isMockAuth) { isAdmin = true }
   else if (clerkUser) {
-    const r = await pool.query('SELECT id, role FROM public.users WHERE clerk_id = $1', [clerkUser.id])
-    userId = r.rows[0]?.id ?? null
-    isAdmin = r.rows[0]?.role === 'admin' || r.rows[0]?.role === 'super_admin'
+    const dbRow = await getOrCreateUser(clerkUser)
+    userId = dbRow?.id ?? null
+    isAdmin = dbRow?.role === 'admin' || dbRow?.role === 'super_admin'
   }
 
   const startDate = new Date(); startDate.setDate(startDate.getDate() - days)
@@ -1490,7 +1530,11 @@ export async function forwardLead(leadId: string, toUserId: string, note?: strin
     await pool.query(
       'INSERT INTO public.activity_logs (organization_id, user_id, lead_id, action, details) VALUES ($1,$2,$3,$4,$5)',
       [orgId, fromUser?.id || null, leadId, 'lead_forwarded',
-        `Forwarded "${lead?.name || 'Lead'}" to ${toUser?.full_name || toUserId}${note ? ` (Note: ${note})` : ''}`])
+        JSON.stringify({
+          lead_name: lead?.name || 'Lead',
+          forwarded_to: toUser?.full_name || toUserId,
+          note: note || null
+        })])
 
     const shim = createDbShim()
     await logLeadEvent(shim, orgId, {
@@ -1828,8 +1872,7 @@ export async function getCurrentUser() {
       return null
     }
 
-    let userResult = await pool.query('SELECT * FROM public.users WHERE clerk_id = $1', [clerkUser.id])
-    let user = userResult.rows[0]
+    let user = await getOrCreateUser(clerkUser)
     if (!user) return null
 
     if (clerkUser.email) {
@@ -1853,22 +1896,19 @@ export async function getCurrentUser() {
 
 export async function updateUserProfile(data: {
   full_name?: string; avatar_url?: string; password?: string; email?: string
-  designation?: string; phone?: string; bio?: string; department?: string
 }) {
   const clerkUser = await getClerkUser()
   const profileUpdate: Record<string, any> = {}
   if (data.full_name !== undefined) profileUpdate.full_name = data.full_name
   if (data.avatar_url !== undefined) profileUpdate.avatar_url = data.avatar_url
-  if (data.designation !== undefined) profileUpdate.designation = data.designation
-  if (data.phone !== undefined) profileUpdate.phone = data.phone
-  if (data.bio !== undefined) profileUpdate.bio = data.bio
-  if (data.department !== undefined) profileUpdate.department = data.department
+  if (data.email !== undefined) profileUpdate.email = data.email
 
   const userId = clerkUser?.id
   if (!userId) {
     const mockUser = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin'])
     if (mockUser.rows[0]) {
       const keys = Object.keys(profileUpdate); const vals = Object.values(profileUpdate)
+      if (keys.length === 0) return true
       const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
       await pool.query(`UPDATE public.users SET ${sets} WHERE id = $${keys.length + 1}`, [...vals, mockUser.rows[0].id])
       return true
@@ -1877,6 +1917,7 @@ export async function updateUserProfile(data: {
   }
   try {
     const keys = Object.keys(profileUpdate); const vals = Object.values(profileUpdate)
+    if (keys.length === 0) return true
     const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
     await pool.query(`UPDATE public.users SET ${sets} WHERE clerk_id = $${keys.length + 1}`, [...vals, userId])
     return true
@@ -1889,8 +1930,8 @@ export async function updateNotificationSettings(prefs: any) {
   const clerkUser = await getClerkUser()
   let userId: string | undefined
   if (clerkUser?.id) {
-    const r = await pool.query('SELECT id FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
-    userId = r.rows[0]?.id
+    const dbRow = await getOrCreateUser(clerkUser)
+    userId = dbRow?.id
   }
   if (!userId) { const r = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin']); userId = r.rows[0]?.id }
   if (!userId) throw new Error('No user found')
@@ -1906,8 +1947,8 @@ export async function updateAppearanceSettings(settings: any) {
   const clerkUser = await getClerkUser()
   let userId: string | undefined
   if (clerkUser?.id) {
-    const r = await pool.query('SELECT id FROM public.users WHERE clerk_id = $1 LIMIT 1', [clerkUser.id])
-    userId = r.rows[0]?.id
+    const dbRow = await getOrCreateUser(clerkUser)
+    userId = dbRow?.id
   }
   if (!userId) { const r = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin']); userId = r.rows[0]?.id }
   if (!userId) return false
