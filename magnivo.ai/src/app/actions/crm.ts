@@ -1,6 +1,7 @@
 'use server'
 
 import pool from '@/lib/db'
+import { randomUUID } from 'crypto'
 import { revalidatePath } from 'next/cache'
 import { createNotification, getMockableUser } from '@/app/actions/notifications'
 import { cookies } from 'next/headers'
@@ -49,16 +50,49 @@ async function getOrCreateUser(clerkUser: { id: string, email: string | null, fi
     return existing.rows[0]
   }
 
-  // Auto-create new user
+  // Not found by clerk_id — check if a user with this email already exists
+  if (clerkUser.email) {
+    const byEmail = await pool.query(
+      'SELECT * FROM public.users WHERE email = $1 LIMIT 1',
+      [clerkUser.email]
+    )
+    if (byEmail.rows[0]) return byEmail.rows[0]
+  }
+
+  // Still not found — check for a pending invite matching this email
+  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
+
+  if (clerkUser.email) {
+    const invite = await pool.query(
+      `SELECT id, organization_id, role FROM public.organization_invites
+       WHERE email = $1 AND status = 'pending' AND expires_at > now()
+       ORDER BY created_at DESC LIMIT 1`,
+      [clerkUser.email]
+    )
+    const invited = invite.rows[0]
+    if (invited) {
+      const invitedUser = await pool.query(
+        `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [clerkUser.id, invited.organization_id, clerkUser.email, fullName, invited.role]
+      )
+      await pool.query(
+        `UPDATE public.organization_invites SET status = 'accepted', accepted_at = now() WHERE id = $1`,
+        [invited.id]
+      )
+      return invitedUser.rows[0]
+    }
+  }
+
+  // No invite either — fall back to the existing org
   const orgResult = await pool.query('SELECT id FROM public.organizations LIMIT 1')
   const orgId = orgResult.rows[0]?.id
   if (!orgId) return null
 
-  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
-
   const newUser = await pool.query(
     `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
-     VALUES ($1, $2, $3, $4, 'user')
+     VALUES ($1, $2, $3, $4, 'admin')
      RETURNING *`,
     [clerkUser.id, orgId, clerkUser.email, fullName]
   )
@@ -1720,8 +1754,11 @@ export async function getHistoricalAttendance(filter: 'weekly' | 'monthly' | 'ye
 // ─── getRepPerformanceData ────────────────────────────────────────────────────
 
 export async function getRepPerformanceData() {
-  const orgId = await getDefaultOrgId()
-  if (!orgId) return []
+  const clerkUser = await getClerkUser()
+  if (!clerkUser) return []
+  const dbUser = await getOrCreateUser(clerkUser)
+  if (!dbUser?.organization_id) return []
+  const orgId = dbUser.organization_id
   const monthYear = new Date().toISOString().substring(0, 7)
   try {
     const [membersRes, leadsRes, dealsRes, tasksRes, targetsRes] = await Promise.all([
@@ -1984,18 +2021,36 @@ export async function getUsersHubData() {
   } catch (err: any) { console.error('Error fetching users hub data:', err.message); return { users: [], invites: [] } }
 }
 
-// ─── inviteUser ───────────────────────────────────────────────────────────────
+// ─── inviteUser / createInvite ─────────────────────────────────────────────────
+
+const INVITE_BASE_URL = 'https://magnivo-ai.vercel.app'
 
 export async function inviteUser(formData: FormData) {
-  const email = formData.get('email') as string
-  const role = formData.get('role') as string
+  const email = (formData.get('email') as string || '').trim().toLowerCase()
+  const role = formData.get('role') as string === 'admin' ? 'admin' : 'user'
   const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
+  if (!email) return { error: 'Email is required' }
   const { isAdmin, user, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Only admins can invite users' }
+
   try {
-    await pool.query('INSERT INTO public.organization_invites (organization_id, email, role, invited_by) VALUES ($1,$2,$3,$4)', [orgId, email, role, user?.id])
-    revalidatePath('/settings'); return { success: true }
+    const existingMember = await pool.query(
+      'SELECT id FROM public.users WHERE organization_id = $1 AND email = $2 LIMIT 1',
+      [orgId, email]
+    )
+    if (existingMember.rows[0]) return { error: 'This person is already a member of your organization' }
+
+    const token = randomUUID()
+    const result = await pool.query(
+      `INSERT INTO public.organization_invites (organization_id, email, role, invited_by, token)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING token`,
+      [orgId, email, role, user?.id, token]
+    )
+
+    revalidatePath('/settings')
+    return { success: true, token: result.rows[0].token, link: `${INVITE_BASE_URL}/invite/${result.rows[0].token}` }
   } catch (err: any) { return { error: err.message } }
 }
 
@@ -2016,7 +2071,18 @@ export async function updateUserRole(userId: string, newRole: string) {
   const { isAdmin, error: authError } = await requireAdmin()
   if (!isAdmin) return { error: authError || 'Only admins can change roles' }
   try {
-    await pool.query('UPDATE public.users SET role = $1 WHERE id = $2', [newRole, userId])
+    const roleMap: Record<string, string> = {
+      'admin': 'admin',
+      'Admin': 'admin',
+      'super_admin': 'super_admin',
+      'Super Admin': 'super_admin',
+      'user': 'user',
+      'User': 'user',
+      'Sales Rep': 'user',
+      'sales rep': 'user',
+    }
+    const normalizedRole = roleMap[newRole] ?? 'user'
+    await pool.query('UPDATE public.users SET role = $1 WHERE id = $2', [normalizedRole, userId])
     revalidatePath('/settings'); revalidatePath('/reps'); revalidatePath('/home'); revalidatePath('/'); return { success: true }
   } catch (err: any) { return { error: err.message } }
 }

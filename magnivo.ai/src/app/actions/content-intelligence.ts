@@ -47,16 +47,49 @@ async function getOrCreateUser(clerkUser: { id: string, email: string | null, fi
     return existing.rows[0]
   }
 
-  // Auto-create new user
+  // Not found by clerk_id — check if a user with this email already exists
+  if (clerkUser.email) {
+    const byEmail = await pool.query(
+      'SELECT * FROM public.users WHERE email = $1 LIMIT 1',
+      [clerkUser.email]
+    )
+    if (byEmail.rows[0]) return byEmail.rows[0]
+  }
+
+  // Still not found — check for a pending invite matching this email
+  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
+
+  if (clerkUser.email) {
+    const invite = await pool.query(
+      `SELECT id, organization_id, role FROM public.organization_invites
+       WHERE email = $1 AND status = 'pending' AND expires_at > now()
+       ORDER BY created_at DESC LIMIT 1`,
+      [clerkUser.email]
+    )
+    const invited = invite.rows[0]
+    if (invited) {
+      const invitedUser = await pool.query(
+        `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [clerkUser.id, invited.organization_id, clerkUser.email, fullName, invited.role]
+      )
+      await pool.query(
+        `UPDATE public.organization_invites SET status = 'accepted', accepted_at = now() WHERE id = $1`,
+        [invited.id]
+      )
+      return invitedUser.rows[0]
+    }
+  }
+
+  // No invite either — fall back to the existing org
   const orgResult = await pool.query('SELECT id FROM public.organizations LIMIT 1')
   const orgId = orgResult.rows[0]?.id
   if (!orgId) return null
 
-  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
-
   const newUser = await pool.query(
     `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
-     VALUES ($1, $2, $3, $4, 'user')
+     VALUES ($1, $2, $3, $4, 'admin')
      RETURNING *`,
     [clerkUser.id, orgId, clerkUser.email, fullName]
   )

@@ -13,6 +13,8 @@ import {
     Loader2,
     Plus,
     Trash2,
+    Copy,
+    Check,
 } from "lucide-react"
 import {
     DropdownMenu,
@@ -61,6 +63,8 @@ export default function UsersAndRoles({ members, invites = [] }: { members: any[
 
     const [inviteOpen, setInviteOpen] = useState(false)
     const [inviting, setInviting] = useState(false)
+    const [inviteLink, setInviteLink] = useState<string | null>(null)
+    const [linkCopied, setLinkCopied] = useState(false)
 
     const loadRoles = async () => {
         const fetchedRoles = await getRoles()
@@ -129,8 +133,25 @@ export default function UsersAndRoles({ members, invites = [] }: { members: any[
         setInviting(true)
         const res = await inviteUser(formData)
         if (res.error) toast.error(res.error)
-        else { toast.success('Invite sent successfully!'); setInviteOpen(false); router.refresh() }
+        else {
+            toast.success('Invite created!')
+            setInviteLink((res as any).link || null)
+            router.refresh()
+        }
         setInviting(false)
+    }
+
+    const handleCopyLink = async () => {
+        if (!inviteLink) return
+        await navigator.clipboard.writeText(inviteLink)
+        setLinkCopied(true)
+        setTimeout(() => setLinkCopied(false), 2000)
+    }
+
+    const closeInviteDialog = () => {
+        setInviteOpen(false)
+        setInviteLink(null)
+        setLinkCopied(false)
     }
 
     const handleCreateRole = async (formData: FormData) => {
@@ -480,41 +501,55 @@ export default function UsersAndRoles({ members, invites = [] }: { members: any[
                 </CardContent>
             </Card>
 
-            <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+            <Dialog open={inviteOpen} onOpenChange={(open) => { if (!open) closeInviteDialog(); else setInviteOpen(true) }}>
                 <DialogContent className="sm:max-w-[425px]">
                     <DialogHeader>
                         <DialogTitle>Invite Teammate</DialogTitle>
                         <DialogDescription>
-                            Send an email invitation to join your workspace.
+                            {inviteLink ? 'Share this link with your teammate to let them join.' : 'Create an invite link to add someone to your workspace.'}
                         </DialogDescription>
                     </DialogHeader>
-                    <form action={handleInvite}>
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="email" className="text-right">Email</Label>
-                                <Input id="email" name="email" type="email" placeholder="colleague@company.com" className="col-span-3" required />
+                    {inviteLink ? (
+                        <div className="space-y-4 py-4">
+                            <div className="flex items-center gap-2">
+                                <Input readOnly value={inviteLink} className="flex-1 text-xs" onFocus={(e) => e.target.select()} />
+                                <Button type="button" variant="outline" size="icon" onClick={handleCopyLink}>
+                                    {linkCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                                </Button>
                             </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="role" className="text-right">Role</Label>
-                                <Select name="role" defaultValue={roles.find(r => r.name === 'Sales Rep')?.name || "Sales Rep"}>
-                                    <SelectTrigger className="col-span-3">
-                                        <SelectValue placeholder="Select role" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {roles.map(r => (
-                                            <SelectItem key={r.id} value={r.name}>{r.name}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
+                            <p className="text-xs text-slate-500">This link expires in 7 days.</p>
+                            <DialogFooter>
+                                <Button type="button" onClick={closeInviteDialog} className="w-full">Done</Button>
+                            </DialogFooter>
                         </div>
-                        <DialogFooter>
-                            <Button type="submit" disabled={inviting} className="bg-indigo-600 text-white hover:bg-indigo-700 w-full">
-                                {inviting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                                Send Invitation
-                            </Button>
-                        </DialogFooter>
-                    </form>
+                    ) : (
+                        <form action={handleInvite}>
+                            <div className="grid gap-4 py-4">
+                                <div className="grid grid-cols-4 items-center gap-4">
+                                    <Label htmlFor="email" className="text-right">Email</Label>
+                                    <Input id="email" name="email" type="email" placeholder="colleague@company.com" className="col-span-3" required />
+                                </div>
+                                <div className="grid grid-cols-4 items-center gap-4">
+                                    <Label htmlFor="role" className="text-right">Role</Label>
+                                    <Select name="role" defaultValue="user">
+                                        <SelectTrigger className="col-span-3">
+                                            <SelectValue placeholder="Select role" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="user">Member</SelectItem>
+                                            <SelectItem value="admin">Admin</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+                            <DialogFooter>
+                                <Button type="submit" disabled={inviting} className="bg-indigo-600 text-white hover:bg-indigo-700 w-full">
+                                    {inviting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                                    Create Invite Link
+                                </Button>
+                            </DialogFooter>
+                        </form>
+                    )}
                 </DialogContent>
             </Dialog>
 
