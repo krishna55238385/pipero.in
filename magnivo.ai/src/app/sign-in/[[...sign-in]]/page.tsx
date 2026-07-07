@@ -1,10 +1,5 @@
-import { SignIn } from '@clerk/nextjs'
-import AuthShell, { clerkAppearance } from '@/components/auth/AuthShell'
+import { redirect } from 'next/navigation'
 
 export default function SignInPage() {
-  return (
-    <AuthShell>
-      <SignIn appearance={clerkAppearance} />
-    </AuthShell>
-  )
+  redirect('/login')
 }

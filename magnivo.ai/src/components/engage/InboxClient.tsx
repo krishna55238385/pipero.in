@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/resizable'
 import { INTEREST_STATUSES, type EngageEmailSummary, type EngageThread, type InterestStatus, type UniboxMeta } from '@/types/engage'
 import { setThreadInterest } from '@/app/actions/engage'
-import { createClient as createSupabaseClient } from '@/lib/supabase/client'
 
 type Mailbox = { email?: string } | null
 
@@ -171,39 +170,19 @@ export default function InboxClient({ mailbox }: { mailbox: Mailbox }) {
     return () => window.clearTimeout(t)
   }, [search, canUseInbox, loadInbox])
 
+  // Poll for inbox/mailbox/thread changes (replaces the Supabase real-time
+  // subscriptions on engage_mailboxes/engage_emails).
   useEffect(() => {
     if (!canUseInbox) return
     const timer = window.setInterval(() => {
       // ref-stable loader reads the current box/search/filters from filtersRef
+      refreshMailbox()
       loadInbox()
       loadMeta()
       if (activeThreadId) loadThread(activeThreadId)
     }, 30000)
     return () => window.clearInterval(timer)
-  }, [canUseInbox, activeThreadId, loadInbox, loadMeta, loadThread])
-
-  useEffect(() => {
-    const supabase = createSupabaseClient()
-    const mailboxChannel = supabase
-      .channel('engage-mailbox-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'engage_mailboxes' }, async () => {
-        await refreshMailbox()
-        // ref-stable loader refetches with the current filters
-        await loadInbox()
-      })
-      .subscribe()
-    const emailsChannel = supabase
-      .channel('engage-emails-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'engage_emails' }, async () => {
-        // ref-stable loader refetches with the current filters
-        await loadInbox()
-      })
-      .subscribe()
-    return () => {
-      supabase.removeChannel(mailboxChannel)
-      supabase.removeChannel(emailsChannel)
-    }
-  }, [refreshMailbox, loadInbox])
+  }, [canUseInbox, activeThreadId, refreshMailbox, loadInbox, loadMeta, loadThread])
 
   const subtitle = useMemo(() => {
     if (!canUseInbox) return 'Connect Gmail in Engage Settings to view your inbox.'

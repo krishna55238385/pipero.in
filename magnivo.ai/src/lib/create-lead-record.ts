@@ -49,14 +49,7 @@ export async function createLeadRecord(
   } = options
 
   try {
-    let ownerId: string | null = initialOwnerId
-    if (ownerId) {
-      const ownerResult = await pool.query(
-        'SELECT id FROM public.users WHERE clerk_id = $1 LIMIT 1',
-        [ownerId]
-      )
-      ownerId = ownerResult.rows[0]?.id || null
-    }
+    const ownerId: string | null = initialOwnerId
 
     const statusResult = await pool.query(
       'SELECT label FROM public.lead_statuses WHERE organization_id = $1 ORDER BY sort_order ASC LIMIT 1',

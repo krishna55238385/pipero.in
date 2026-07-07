@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Bell, Check } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
-import { markAsRead } from '@/app/actions/notifications'
+import { markAsRead, getNotifications } from '@/app/actions/notifications'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
@@ -12,7 +11,6 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
     const [notifications, setNotifications] = useState(initialNotifications)
     const [isOpen, setIsOpen] = useState(false)
     const popoverRef = useRef<HTMLDivElement>(null)
-    const supabase = createClient()
     const router = useRouter()
 
     const unreadCount = notifications.filter(n => !n.read_at).length
@@ -33,45 +31,30 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
         return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [])
 
+    // Poll for new notifications (replaces Supabase real-time subscription)
     useEffect(() => {
         if (!userId) return
 
-        const channel = supabase.channel('notification_changes')
-            .on(
-                'postgres_changes',
-                { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
-                (payload) => {
-                    const newNotification = payload.new as any
-                    setNotifications(prev => [newNotification, ...prev])
-                    toast(newNotification.title, {
-                        description: newNotification.content,
-                        action: newNotification.link_url ? {
+        const interval = setInterval(async () => {
+            const latest = await getNotifications()
+            setNotifications(prev => {
+                const prevIds = new Set(prev.map(n => n.id))
+                const fresh = latest.filter(n => !prevIds.has(n.id))
+                fresh.forEach(n => {
+                    toast(n.title, {
+                        description: n.content,
+                        action: n.link_url ? {
                             label: 'View',
-                            onClick: () => router.push(newNotification.link_url)
+                            onClick: () => router.push(n.link_url)
                         } : undefined
                     })
-                }
-            )
-            .on(
-                'postgres_changes',
-                { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
-                (payload) => {
-                    setNotifications(prev => prev.map(n => n.id === payload.new.id ? { ...n, ...payload.new } : n))
-                }
-            )
-            .on(
-                'postgres_changes',
-                { event: 'DELETE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
-                (payload) => {
-                    setNotifications(prev => prev.filter(n => n.id !== payload.old.id))
-                }
-            )
-            .subscribe()
+                })
+                return latest
+            })
+        }, 30000)
 
-        return () => {
-            supabase.removeChannel(channel)
-        }
-    }, [userId, supabase, router])
+        return () => clearInterval(interval)
+    }, [userId, router])
 
     const handleMarkAsRead = async (e: React.MouseEvent, id: string) => {
         e.preventDefault()

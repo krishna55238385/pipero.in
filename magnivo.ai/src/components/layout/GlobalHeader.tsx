@@ -2,7 +2,7 @@ import { Search, Bell } from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
 import { NotificationBell } from './NotificationBell'
 import { getNotifications, getMockableUser } from '@/app/actions/notifications'
-import { UserButton } from '@clerk/nextjs'
+import { UserMenu } from './UserMenu'
 
 export async function GlobalHeader() {
     const notifications = await getNotifications()
@@ -26,7 +26,7 @@ export async function GlobalHeader() {
                 </div>
                 <NotificationBell initialNotifications={notifications} userId={user?.id} />
                 <ThemeToggle />
-                <UserButton />
+                <UserMenu fullName={user?.full_name} email={user?.email} />
             </div>
         </header>
     )

@@ -2,11 +2,10 @@
 
 import { useState, useEffect } from 'react'
 import { Bell, BellOff, Check, CheckSquare, Trash2, Mail, Users, Star, AlertCircle, Calendar, RefreshCw } from 'lucide-react'
-import { markAsRead, markAllAsRead, deleteNotification } from '@/app/actions/notifications'
+import { markAsRead, markAllAsRead, deleteNotification, getNotifications } from '@/app/actions/notifications'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 
 type Notification = {
     id: string;
@@ -64,28 +63,25 @@ function timeAgo(dateStr: string) {
 
 export function NotificationsClient({ initialData, userId }: { initialData: Notification[], userId?: string }) {
     const router = useRouter()
-    const supabase = createClient()
     const [notifications, setNotifications] = useState(initialData)
     const [selectedTab, setSelectedTab] = useState('all')
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
     const [isRefreshing, setIsRefreshing] = useState(false)
 
-    // Real-time subscription — same as bell but for the full page
+    // Poll for changes — same as the header bell, but for the full page
+    // (replaces the Supabase real-time subscription).
     useEffect(() => {
         if (!userId) return
-        const channel = supabase.channel('notifications_page')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, (p) => {
-                setNotifications(prev => [p.new as Notification, ...prev])
-                toast.success((p.new as Notification).title, { description: (p.new as Notification).content })
+        const interval = setInterval(async () => {
+            const latest = await getNotifications() as Notification[]
+            setNotifications(prev => {
+                const prevIds = new Set(prev.map(n => n.id))
+                const fresh = latest.filter(n => !prevIds.has(n.id))
+                fresh.forEach(n => toast.success(n.title, { description: n.content }))
+                return latest
             })
-            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, (p) => {
-                setNotifications(prev => prev.map(n => n.id === p.new.id ? { ...n, ...p.new } : n))
-            })
-            .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, (p) => {
-                setNotifications(prev => prev.filter(n => n.id !== p.old.id))
-            })
-            .subscribe()
-        return () => { supabase.removeChannel(channel) }
+        }, 30000)
+        return () => clearInterval(interval)
     }, [userId])
 
     const filtered = notifications.filter(n => {

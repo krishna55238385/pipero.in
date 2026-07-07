@@ -4,122 +4,26 @@ import pool from '@/lib/db'
 import { randomUUID } from 'crypto'
 import { revalidatePath } from 'next/cache'
 import { createNotification, getMockableUser } from '@/app/actions/notifications'
-import { cookies } from 'next/headers'
 import { executeAutomationFlows } from '@/app/actions/automation'
-import { currentUser } from '@clerk/nextjs/server'
+import { getSessionUser, requireAdmin as requireAdminSession } from '@/lib/auth'
 import { logLeadEvent } from '@/app/actions/lead-management'
 import { createLeadRecord, type PublicLeadPayload } from '@/lib/create-lead-record'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function getDefaultOrgId(): Promise<string | null> {
+  const session = await getSessionUser()
+  if (session?.orgId) return session.orgId
   try {
     const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
     return r.rows[0]?.id ?? null
   } catch { return null }
 }
 
-async function getClerkUser() {
-  try {
-    const u = await currentUser()
-    if (!u) return null
-    return {
-      id: u.id,
-      email: u.emailAddresses?.[0]?.emailAddress ?? null,
-      firstName: u.firstName ?? null,
-      lastName: u.lastName ?? null,
-    }
-  } catch { return null }
-}
-
-async function getOrCreateUser(clerkUser: { id: string, email: string | null, firstName?: string | null, lastName?: string | null }) {
-  // Try to find existing user
-  const existing = await pool.query(
-    'SELECT * FROM public.users WHERE clerk_id = $1 LIMIT 1',
-    [clerkUser.id]
-  )
-
-  if (existing.rows[0]) {
-    // Update email if missing
-    if (!existing.rows[0].email && clerkUser.email) {
-      await pool.query(
-        'UPDATE public.users SET email = $1 WHERE clerk_id = $2',
-        [clerkUser.email, clerkUser.id]
-      )
-    }
-    return existing.rows[0]
-  }
-
-  // Not found by clerk_id — check if a user with this email already exists
-  if (clerkUser.email) {
-    const byEmail = await pool.query(
-      'SELECT * FROM public.users WHERE email = $1 LIMIT 1',
-      [clerkUser.email]
-    )
-    if (byEmail.rows[0]) return byEmail.rows[0]
-  }
-
-  // Still not found — check for a pending invite matching this email
-  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
-
-  if (clerkUser.email) {
-    const invite = await pool.query(
-      `SELECT id, organization_id, role FROM public.organization_invites
-       WHERE email = $1 AND status = 'pending' AND expires_at > now()
-       ORDER BY created_at DESC LIMIT 1`,
-      [clerkUser.email]
-    )
-    const invited = invite.rows[0]
-    if (invited) {
-      const invitedUser = await pool.query(
-        `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING *`,
-        [clerkUser.id, invited.organization_id, clerkUser.email, fullName, invited.role]
-      )
-      await pool.query(
-        `UPDATE public.organization_invites SET status = 'accepted', accepted_at = now() WHERE id = $1`,
-        [invited.id]
-      )
-      return invitedUser.rows[0]
-    }
-  }
-
-  // No invite either — fall back to the existing org
-  const orgResult = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-  const orgId = orgResult.rows[0]?.id
-  if (!orgId) return null
-
-  const newUser = await pool.query(
-    `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
-     VALUES ($1, $2, $3, $4, 'admin')
-     RETURNING *`,
-    [clerkUser.id, orgId, clerkUser.email, fullName]
-  )
-
-  return newUser.rows[0]
-}
-
 async function requireAdmin() {
-  const cookieStore = await cookies()
-  const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  const clerkUser = await getClerkUser()
-
-  if (!clerkUser && isMockAuth) {
-    const r = await pool.query('SELECT * FROM public.users LIMIT 1')
-    const firstUser = r.rows[0]
-    if (firstUser) return { isAdmin: true, user: firstUser }
-    return { isAdmin: false, user: null, error: 'No users found' }
-  }
-  if (!clerkUser) return { isAdmin: false, user: null, error: 'Authentication required' }
-
-  const dbRow = await getOrCreateUser(clerkUser)
-  const role = dbRow?.role
-  const isAdmin = role === 'admin' || role === 'super_admin'
-  // clerkUser.id is the Clerk ID string, not the public.users UUID — swap in the resolved DB id
-  const dbUser = dbRow?.id ? { ...clerkUser, id: dbRow.id } : clerkUser
-  if (!isAdmin) return { isAdmin: false, user: dbUser, error: 'Admin privileges required' }
-  return { isAdmin: true, user: dbUser }
+  const { isAdmin, user, error } = await requireAdminSession()
+  if (!user) return { isAdmin, user: null, error }
+  return { isAdmin, user: { id: user.userId, email: user.email, role: user.role }, error }
 }
 
 // Minimal shim for imported functions (logLeadEvent, createLeadRecord) that still expect supabase
@@ -177,7 +81,7 @@ function createDbShim() {
   }
   return {
     from: (table: string) => makeTable(table),
-    auth: { getUser: async () => { const u = await getClerkUser(); return { data: { user: u }, error: null } } }
+    auth: { getUser: async () => { const s = await getSessionUser(); return { data: { user: s ? { id: s.userId, email: s.email } : null }, error: null } } }
   }
 }
 
@@ -195,21 +99,11 @@ export async function getLeads(filters: LeadFilters = {}) {
   const orgId = await getDefaultOrgId()
   if (!orgId) return { data: [], count: 0, debug: 'no-org-id' }
 
-  const cookieStore = await cookies()
-  const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  const clerkUser = await getClerkUser()
+  const session = await getSessionUser()
+  if (!session) return { data: [], count: 0, debug: 'no-user-prod' }
 
-  let isAdmin = false
-  let userId: string | null = null
-
-  if (!clerkUser && isMockAuth) { isAdmin = true }
-  else if (!clerkUser && !isMockAuth) { return { data: [], count: 0, debug: 'no-user-prod' } }
-  else if (clerkUser) {
-    const dbRow = await getOrCreateUser(clerkUser)
-    userId = dbRow?.id ?? null
-    const role = dbRow?.role
-    isAdmin = role === 'admin' || role === 'super_admin'
-  }
+  const userId: string | null = session.userId
+  const isAdmin = session.role === 'admin' || session.role === 'super_admin'
 
   const values: any[] = [orgId]
   const conditions: string[] = ['l.organization_id = $1']
@@ -276,19 +170,11 @@ export async function getDeals(searchQuery?: string) {
   const orgId = await getDefaultOrgId()
   if (!orgId) return []
 
-  const cookieStore = await cookies()
-  const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  const clerkUser = await getClerkUser()
+  const session = await getSessionUser()
+  if (!session) return []
 
-  let isAdmin = false; let userId: string | null = null
-
-  if (!clerkUser && isMockAuth) { isAdmin = true }
-  else if (!clerkUser && !isMockAuth) { return [] }
-  else if (clerkUser) {
-    const dbRow = await getOrCreateUser(clerkUser)
-    userId = dbRow?.id ?? null
-    isAdmin = dbRow?.role === 'admin' || dbRow?.role === 'super_admin'
-  }
+  const userId: string | null = session.userId
+  const isAdmin = session.role === 'admin' || session.role === 'super_admin'
 
   const values: any[] = [orgId]
   const conditions: string[] = ['d.organization_id = $1']
@@ -316,11 +202,8 @@ export async function addLead(formData: FormData) {
   const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
 
-  const cookieStore = await cookies()
-  const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  const clerkUser = await getClerkUser()
-
-  if (!clerkUser && !isMockAuth) return { error: 'Not authenticated' }
+  const session = await getSessionUser()
+  if (!session) return { error: 'Not authenticated' }
 
   const payload: PublicLeadPayload = {
     company: (formData.get('company') as string) || '',
@@ -335,10 +218,10 @@ export async function addLead(formData: FormData) {
   }
 
   const result = await createLeadRecord(orgId, payload, {
-    initialOwnerId: clerkUser?.id || null,
+    initialOwnerId: session.userId || null,
     method: 'manual',
     defaultSource: 'Direct',
-    performedBy: clerkUser?.id || null
+    performedBy: session.userId || null
   })
 
   if ('error' in result) return { error: result.error }
@@ -1434,17 +1317,11 @@ export async function getAnalytics(days: number = 30) {
   const orgId = await getDefaultOrgId()
   if (!orgId) return null
 
-  const cookieStore = await cookies()
-  const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  const clerkUser = await getClerkUser()
+  const session = await getSessionUser()
+  if (!session) return null
 
-  let isAdmin = false; let userId: string | null = null
-  if (!clerkUser && isMockAuth) { isAdmin = true }
-  else if (clerkUser) {
-    const dbRow = await getOrCreateUser(clerkUser)
-    userId = dbRow?.id ?? null
-    isAdmin = dbRow?.role === 'admin' || dbRow?.role === 'super_admin'
-  }
+  const userId: string | null = session.userId
+  const isAdmin = session.role === 'admin' || session.role === 'super_admin'
 
   const startDate = new Date(); startDate.setDate(startDate.getDate() - days)
 
@@ -1754,11 +1631,9 @@ export async function getHistoricalAttendance(filter: 'weekly' | 'monthly' | 'ye
 // ─── getRepPerformanceData ────────────────────────────────────────────────────
 
 export async function getRepPerformanceData() {
-  const clerkUser = await getClerkUser()
-  if (!clerkUser) return []
-  const dbUser = await getOrCreateUser(clerkUser)
-  if (!dbUser?.organization_id) return []
-  const orgId = dbUser.organization_id
+  const session = await getSessionUser()
+  if (!session?.orgId) return []
+  const orgId = session.orgId
   const monthYear = new Date().toISOString().substring(0, 7)
   try {
     const [membersRes, leadsRes, dealsRes, tasksRes, targetsRes] = await Promise.all([
@@ -1888,44 +1763,15 @@ export async function saveIntegration(provider: string, config: any, isActive: b
 
 export async function getCurrentUser() {
   try {
-    const clerkUser = await getClerkUser()
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
+    const session = await getSessionUser()
+    if (!session) return null
 
-    if (!clerkUser) {
-      if (isMockAuth) {
-        const r = await pool.query('SELECT * FROM public.users WHERE is_active = true LIMIT 1')
-        const user = r.rows[0]
-        if (user) {
-          const roleData = await pool.query('SELECT permissions FROM public.organization_roles WHERE organization_id = $1 AND name = $2 LIMIT 1', [user.organization_id, user.role])
-          return { ...user, permissions: roleData.rows[0]?.permissions || null }
-        }
-        const fallback = await pool.query('SELECT * FROM public.users LIMIT 1')
-        if (fallback.rows[0]) {
-          const roleData = await pool.query('SELECT permissions FROM public.organization_roles WHERE organization_id = $1 AND name = $2 LIMIT 1', [fallback.rows[0].organization_id, fallback.rows[0].role])
-          return { ...fallback.rows[0], permissions: roleData.rows[0]?.permissions || null }
-        }
-      }
-      return null
-    }
-
-    let user = await getOrCreateUser(clerkUser)
+    const r = await pool.query('SELECT * FROM public.users WHERE id = $1 LIMIT 1', [session.userId])
+    const user = r.rows[0]
     if (!user) return null
 
-    if (clerkUser.email) {
-      try {
-        const emailPrefix = clerkUser.email.split('@')[0] || ''
-        const derivedName = emailPrefix.replace(/[._-]+/g, ' ').split(' ').filter(Boolean)
-          .map((part: string) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')
-        if (derivedName) {
-          const updated = await pool.query('UPDATE public.users SET full_name = $1 WHERE clerk_id = $2 RETURNING *', [derivedName, clerkUser.id])
-          if (updated.rows[0]) user = updated.rows[0]
-        }
-      } catch (e) { console.error('Failed to derive full_name from email', e) }
-    }
-
     const roleData = await pool.query('SELECT permissions FROM public.organization_roles WHERE organization_id = $1 AND name = $2 LIMIT 1', [user.organization_id, user.role])
-    return { ...user, email: clerkUser.email, permissions: roleData.rows[0]?.permissions || null }
+    return { ...user, permissions: roleData.rows[0]?.permissions || null }
   } catch (err: any) { console.error('Error getting current user:', err.message); return null }
 }
 
@@ -1934,29 +1780,18 @@ export async function getCurrentUser() {
 export async function updateUserProfile(data: {
   full_name?: string; avatar_url?: string; password?: string; email?: string
 }) {
-  const clerkUser = await getClerkUser()
+  const session = await getSessionUser()
+  if (!session) throw new Error('No user found')
   const profileUpdate: Record<string, any> = {}
   if (data.full_name !== undefined) profileUpdate.full_name = data.full_name
   if (data.avatar_url !== undefined) profileUpdate.avatar_url = data.avatar_url
   if (data.email !== undefined) profileUpdate.email = data.email
 
-  const userId = clerkUser?.id
-  if (!userId) {
-    const mockUser = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin'])
-    if (mockUser.rows[0]) {
-      const keys = Object.keys(profileUpdate); const vals = Object.values(profileUpdate)
-      if (keys.length === 0) return true
-      const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
-      await pool.query(`UPDATE public.users SET ${sets} WHERE id = $${keys.length + 1}`, [...vals, mockUser.rows[0].id])
-      return true
-    }
-    throw new Error('No user found')
-  }
   try {
     const keys = Object.keys(profileUpdate); const vals = Object.values(profileUpdate)
     if (keys.length === 0) return true
     const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ')
-    await pool.query(`UPDATE public.users SET ${sets} WHERE clerk_id = $${keys.length + 1}`, [...vals, userId])
+    await pool.query(`UPDATE public.users SET ${sets} WHERE id = $${keys.length + 1}`, [...vals, session.userId])
     return true
   } catch (err: any) { throw new Error(err.message) }
 }
@@ -1964,16 +1799,10 @@ export async function updateUserProfile(data: {
 // ─── updateNotificationSettings ───────────────────────────────────────────────
 
 export async function updateNotificationSettings(prefs: any) {
-  const clerkUser = await getClerkUser()
-  let userId: string | undefined
-  if (clerkUser?.id) {
-    const dbRow = await getOrCreateUser(clerkUser)
-    userId = dbRow?.id
-  }
-  if (!userId) { const r = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin']); userId = r.rows[0]?.id }
-  if (!userId) throw new Error('No user found')
+  const session = await getSessionUser()
+  if (!session) throw new Error('No user found')
   try {
-    await pool.query('UPDATE public.users SET notification_preferences = $1 WHERE id = $2', [JSON.stringify(prefs), userId])
+    await pool.query('UPDATE public.users SET notification_preferences = $1 WHERE id = $2', [JSON.stringify(prefs), session.userId])
     revalidatePath('/settings'); revalidatePath('/'); return true
   } catch (err: any) { throw new Error(err.message) }
 }
@@ -1981,16 +1810,10 @@ export async function updateNotificationSettings(prefs: any) {
 // ─── updateAppearanceSettings ─────────────────────────────────────────────────
 
 export async function updateAppearanceSettings(settings: any) {
-  const clerkUser = await getClerkUser()
-  let userId: string | undefined
-  if (clerkUser?.id) {
-    const dbRow = await getOrCreateUser(clerkUser)
-    userId = dbRow?.id
-  }
-  if (!userId) { const r = await pool.query('SELECT id FROM public.users WHERE role = $1 LIMIT 1', ['admin']); userId = r.rows[0]?.id }
-  if (!userId) return false
+  const session = await getSessionUser()
+  if (!session) return false
   try {
-    await pool.query('UPDATE public.users SET appearance_settings = $1 WHERE id = $2', [JSON.stringify(settings), userId])
+    await pool.query('UPDATE public.users SET appearance_settings = $1 WHERE id = $2', [JSON.stringify(settings), session.userId])
     return true
   } catch (err: any) { console.error('[updateAppearanceSettings] failed:', err.message); return false }
 }

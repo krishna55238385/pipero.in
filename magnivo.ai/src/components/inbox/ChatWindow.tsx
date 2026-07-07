@@ -6,7 +6,6 @@ import { useEffect, useState, useRef } from "react"
 import { getMessages, sendWhatsAppMessage, markAsRead, syncLeadMessages, uploadChatAttachment } from "@/app/actions/interakt"
 import { format, isToday, isYesterday, isSameDay } from "date-fns"
 import { toast } from "sonner"
-import { createClient } from "@/lib/supabase/client"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 
 const COMMON_EMOJIS = ["😊", "😂", "🥰", "👍", "🙏", "❤️", "🔥", "✨", "💯", "🙌", "🤔", "😮", "😢", "🎉", "😎", "🤝", "✅", "❌", "📍", "📞"]
@@ -147,12 +146,13 @@ export function ChatWindow({ conversationId, leadId, leadName, initialConversati
         }
     }
 
-    // Auto-polling (every 60s)
+    // Auto-polling (every 30s) — replaces the Supabase real-time subscription
+    // that used to push new messages instantly.
     useEffect(() => {
         if (!effectiveLeadId) return
         const interval = setInterval(() => {
             handleSync()
-        }, 60000)
+        }, 30000)
         return () => clearInterval(interval)
     }, [effectiveLeadId])
 
@@ -177,31 +177,6 @@ export function ChatWindow({ conversationId, leadId, leadName, initialConversati
         }
 
         fetchMessages()
-
-        const supabase = createClient()
-        const channel = supabase
-            .channel(`chat_${conversationId}`)
-            .on(
-                'postgres_changes',
-                {
-                    event: 'INSERT',
-                    schema: 'public',
-                    table: 'messages',
-                    filter: `conversation_id=eq.${conversationId}`
-                },
-                (payload) => {
-                    setMessages(prev => {
-                        if (prev.find(m => m.id === payload.new.id)) return prev
-                        return [...prev, payload.new]
-                    })
-                    markAsRead(conversationId)
-                }
-            )
-            .subscribe()
-
-        return () => {
-            supabase.removeChannel(channel)
-        }
     }, [conversationId])
 
     useEffect(() => {

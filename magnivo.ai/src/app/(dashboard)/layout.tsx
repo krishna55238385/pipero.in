@@ -10,9 +10,6 @@ export default async function DashboardLayout({
 }: {
     children: React.ReactNode
 }) {
-    const { cookies } = await import('next/headers')
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
     const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
 
     let user: Awaited<ReturnType<typeof getCurrentUser>> = null
@@ -22,16 +19,16 @@ export default async function DashboardLayout({
         org = await getOrganizationDetails()
     } catch (e) {
         if (process.env.NODE_ENV === 'development') console.warn('Dashboard layout auth/org failed', e)
-        if (isMockAuth || bypassAuth) {
+        if (bypassAuth) {
             user = { id: 'bypass', full_name: 'User', role: 'admin', organization_id: '', permissions: null }
             org = { name: 'Workspace', currency: 'USD', timezone: 'UTC' }
         }
     }
 
-    if (!user && !isMockAuth && !bypassAuth) {
+    if (!user && !bypassAuth) {
         redirect('/login')
     }
-    if (!user && (isMockAuth || bypassAuth)) {
+    if (!user && bypassAuth) {
         user = { id: 'bypass', full_name: 'User', role: 'admin', organization_id: '', permissions: null }
     }
     if (!org) {

@@ -1,19 +1,11 @@
 import { getTasks, getLeads, getOrgMembers } from '@/app/actions/crm'
 import { getMockableUser } from '@/app/actions/notifications'
-import { redirect } from 'next/navigation'
 import FollowUpsClient from '@/components/followups/FollowUpsClient'
-import { cookies } from 'next/headers'
-import { currentUser } from '@clerk/nextjs/server'
+import { requireAuth } from '@/lib/auth'
 
 export default async function FollowUpsPage() {
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
     const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
-    const clerkUser = await currentUser()
-
-    if (!clerkUser && !isMockAuth && !bypassAuth) {
-        redirect('/login')
-    }
+    if (!bypassAuth) await requireAuth()
 
     const mockUser = await getMockableUser()
     const currentUserRole: string = mockUser?.role || 'admin'

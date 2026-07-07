@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import type { EngageAttachment, EngageTemplate } from '@/types/engage'
 import { deleteEngageTemplate, upsertEngageTemplate } from '@/app/actions/engage'
-import { createClient as createSupabaseClient } from '@/lib/supabase/client'
 
 function formatSize(size: number) {
   if (size < 1024) return `${size} B`
@@ -34,34 +33,31 @@ export default function TemplatesClient({ initialTemplates }: { initialTemplates
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState('')
 
+  // Poll for changes (replaces the Supabase real-time subscription).
   useEffect(() => {
-    const supabase = createSupabaseClient()
-    const channel = supabase
-      .channel('engage-templates-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'engage_templates' }, async () => {
-        setSyncing(true)
-        try {
-          const res = await fetch('/api/engage/templates', { cache: 'no-store' })
-          const data = await res.json()
-          if (res.ok && Array.isArray(data?.templates)) {
-            setTemplates(data.templates)
-            if (!activeId && data.templates[0]) {
-              const first = data.templates[0] as EngageTemplate
-              setActiveId(first.id)
-              setName(first.name)
-              setSubject(first.subject)
-              setBody(first.body)
-              setAttachments(first.attachments || [])
-            }
+    const poll = async () => {
+      setSyncing(true)
+      try {
+        const res = await fetch('/api/engage/templates', { cache: 'no-store' })
+        const data = await res.json()
+        if (res.ok && Array.isArray(data?.templates)) {
+          setTemplates(data.templates)
+          if (!activeId && data.templates[0]) {
+            const first = data.templates[0] as EngageTemplate
+            setActiveId(first.id)
+            setName(first.name)
+            setSubject(first.subject)
+            setBody(first.body)
+            setAttachments(first.attachments || [])
           }
-        } finally {
-          setSyncing(false)
         }
-      })
-      .subscribe()
-    return () => {
-      supabase.removeChannel(channel)
+      } finally {
+        setSyncing(false)
+      }
     }
+
+    const interval = setInterval(poll, 30000)
+    return () => clearInterval(interval)
   }, [activeId])
 
   const select = (tpl: EngageTemplate) => {

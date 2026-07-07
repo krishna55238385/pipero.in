@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input"
 import { useEffect, useState, useMemo } from "react"
 import { getConversations, syncInteraktData } from "@/app/actions/interakt"
 import { format, isToday, isYesterday } from "date-fns"
-import { createClient } from "@/lib/supabase/client"
 import { toast } from "sonner"
 
 const formatMessageDate = (date: Date) => {
@@ -57,43 +56,12 @@ export function ConversationList({ activeId, onSelect }: { activeId?: string, on
         setSyncing(false)
     }
 
+    // Poll for changes (replaces the Supabase real-time subscription on the
+    // conversations/messages tables).
     useEffect(() => {
         fetch()
-        // ... (rest of useEffect)
-
-        const supabase = createClient()
-        const channel = supabase
-            .channel('realtime_conversations')
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'conversations'
-                },
-                (payload) => {
-                    console.log('Realtime change in conversations:', payload)
-                    fetch()
-                }
-            )
-            .subscribe()
-        const msgChannel = supabase
-            .channel('realtime_messages_list')
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'messages'
-                },
-                () => fetch()
-            )
-            .subscribe()
-
-        return () => {
-            supabase.removeChannel(channel)
-            supabase.removeChannel(msgChannel)
-        }
+        const interval = setInterval(fetch, 30000)
+        return () => clearInterval(interval)
     }, [])
 
     return (

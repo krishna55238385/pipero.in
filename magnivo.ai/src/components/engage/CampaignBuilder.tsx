@@ -14,7 +14,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import type { EngageCampaign, EngageLead, EngageSequence, EngageTemplate } from '@/types/engage'
 import { createEngageCampaign, deleteEngageCampaign, runEngageWorkerNow } from '@/app/actions/engage'
 import type { WorkerReport } from '@/lib/engage-worker'
-import { createClient as createSupabaseClient } from '@/lib/supabase/client'
 
 const STATUS_BADGE: Record<EngageCampaign['status'], string> = {
   draft: 'bg-muted text-muted-foreground',
@@ -86,31 +85,27 @@ export default function CampaignBuilder({
   const [workerReport, setWorkerReport] = useState<WorkerReport | null>(null)
   const [workerError, setWorkerError] = useState('')
 
+  // Poll for changes (replaces the Supabase real-time subscription).
   useEffect(() => {
-    const supabase = createSupabaseClient()
-    const channel = supabase
-      .channel('engage-campaigns-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'engage_campaigns' }, async () => {
-        setSyncing(true)
-        try {
-          const res = await fetch('/api/engage/campaigns', { cache: 'no-store' })
-          const data = await res.json()
-          if (res.ok && Array.isArray(data?.campaigns)) {
-            // Server is the source of truth: replace with the refetched rows and
-            // drop any optimistic local-* placeholders so the saved row coming
-            // back from the refetch doesn't transiently duplicate.
-            const server = (data.campaigns as EngageCampaign[]).filter((c) => !String(c.id).startsWith('local-'))
-            setCampaigns(server)
-          }
-        } finally {
-          setSyncing(false)
+    const poll = async () => {
+      setSyncing(true)
+      try {
+        const res = await fetch('/api/engage/campaigns', { cache: 'no-store' })
+        const data = await res.json()
+        if (res.ok && Array.isArray(data?.campaigns)) {
+          // Server is the source of truth: replace with the refetched rows and
+          // drop any optimistic local-* placeholders so the saved row coming
+          // back from the refetch doesn't transiently duplicate.
+          const server = (data.campaigns as EngageCampaign[]).filter((c) => !String(c.id).startsWith('local-'))
+          setCampaigns(server)
         }
-      })
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
+      } finally {
+        setSyncing(false)
+      }
     }
+
+    const interval = setInterval(poll, 30000)
+    return () => clearInterval(interval)
   }, [])
 
   const toggleLead = (id: string) => {

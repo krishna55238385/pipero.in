@@ -1,7 +1,5 @@
-import { redirect } from 'next/navigation'
-import { cookies } from 'next/headers'
-import { currentUser } from '@clerk/nextjs/server'
 import { getRepPerformanceData } from '@/app/actions/crm'
+import { requireAuth } from '@/lib/auth'
 import RepMonitoringClient from '@/components/reps/RepMonitoringClient'
 
 export const metadata = {
@@ -10,14 +8,8 @@ export const metadata = {
 }
 
 export default async function RepMonitorPage() {
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
     const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
-    const clerkUser = await currentUser()
-
-    if (!clerkUser && !isMockAuth && !bypassAuth) {
-        redirect('/login')
-    }
+    if (!bypassAuth) await requireAuth()
 
     const data = await getRepPerformanceData()
 

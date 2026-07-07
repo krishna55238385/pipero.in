@@ -1,8 +1,6 @@
 import ActivityIntelligenceClient from '@/components/dashboard/ActivityIntelligenceClient'
 import { getGlobalActivities } from '@/app/actions/crm'
-import { redirect } from 'next/navigation'
-import { cookies } from 'next/headers'
-import { currentUser } from '@clerk/nextjs/server'
+import { requireAuth } from '@/lib/auth'
 
 export const metadata = {
     title: "Activity Intelligence | Magnivo AI",
@@ -10,14 +8,8 @@ export const metadata = {
 }
 
 export default async function ActivityLogPage() {
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
     const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
-    const clerkUser = await currentUser()
-
-    if (!clerkUser && !isMockAuth && !bypassAuth) {
-        redirect('/login')
-    }
+    if (!bypassAuth) await requireAuth()
 
     const { data, total } = await getGlobalActivities({ limit: 20 })
 

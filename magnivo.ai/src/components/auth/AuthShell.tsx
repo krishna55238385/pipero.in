@@ -10,31 +10,6 @@ const display = Fraunces({
   display: 'swap',
 })
 
-/** Clerk theming so the auth card matches the Magnivo AI brand (blue, rounded, calm). */
-export const clerkAppearance = {
-  variables: {
-    colorPrimary: '#2563eb',
-    colorText: '#0f172a',
-    colorTextSecondary: '#64748b',
-    colorBackground: '#ffffff',
-    borderRadius: '0.85rem',
-    fontFamily: 'var(--font-geist-sans), system-ui, sans-serif',
-  },
-  elements: {
-    rootBox: 'w-full',
-    cardBox: 'w-full shadow-xl shadow-slate-300/40 rounded-3xl',
-    card: 'rounded-3xl border border-slate-100 bg-white px-8 py-9',
-    headerTitle: 'text-[1.45rem] font-semibold tracking-tight text-slate-900',
-    headerSubtitle: 'text-slate-500',
-    socialButtonsBlockButton:
-      'rounded-xl border-slate-200 hover:bg-slate-50 transition-colors',
-    formButtonPrimary:
-      'rounded-xl bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-600/25 text-sm normal-case font-semibold',
-    formFieldInput: 'rounded-xl border-slate-200 focus:border-blue-500',
-    footerActionLink: 'text-blue-600 hover:text-blue-700 font-semibold',
-  },
-} as const
-
 const FEATURES = [
   'AI lead discovery & ICP scoring',
   'Account & buying-committee intelligence',

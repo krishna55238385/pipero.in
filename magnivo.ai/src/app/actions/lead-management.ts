@@ -2,8 +2,7 @@
 
 import pool from '@/lib/db'
 import { revalidatePath } from 'next/cache'
-import { cookies } from 'next/headers'
-import { currentUser } from '@clerk/nextjs/server'
+import { requireAdmin as requireAdminSession } from '@/lib/auth'
 
 async function getDefaultOrgId(): Promise<string | null> {
   try {
@@ -12,97 +11,8 @@ async function getDefaultOrgId(): Promise<string | null> {
   } catch { return null }
 }
 
-async function getOrCreateUser(clerkUser: { id: string, email: string | null, firstName?: string | null, lastName?: string | null }) {
-  // Try to find existing user
-  const existing = await pool.query(
-    'SELECT * FROM public.users WHERE clerk_id = $1 LIMIT 1',
-    [clerkUser.id]
-  )
-
-  if (existing.rows[0]) {
-    // Update email if missing
-    if (!existing.rows[0].email && clerkUser.email) {
-      await pool.query(
-        'UPDATE public.users SET email = $1 WHERE clerk_id = $2',
-        [clerkUser.email, clerkUser.id]
-      )
-    }
-    return existing.rows[0]
-  }
-
-  // Not found by clerk_id — check if a user with this email already exists
-  if (clerkUser.email) {
-    const byEmail = await pool.query(
-      'SELECT * FROM public.users WHERE email = $1 LIMIT 1',
-      [clerkUser.email]
-    )
-    if (byEmail.rows[0]) return byEmail.rows[0]
-  }
-
-  // Still not found — check for a pending invite matching this email
-  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
-
-  if (clerkUser.email) {
-    const invite = await pool.query(
-      `SELECT id, organization_id, role FROM public.organization_invites
-       WHERE email = $1 AND status = 'pending' AND expires_at > now()
-       ORDER BY created_at DESC LIMIT 1`,
-      [clerkUser.email]
-    )
-    const invited = invite.rows[0]
-    if (invited) {
-      const invitedUser = await pool.query(
-        `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING *`,
-        [clerkUser.id, invited.organization_id, clerkUser.email, fullName, invited.role]
-      )
-      await pool.query(
-        `UPDATE public.organization_invites SET status = 'accepted', accepted_at = now() WHERE id = $1`,
-        [invited.id]
-      )
-      return invitedUser.rows[0]
-    }
-  }
-
-  // No invite either — fall back to the existing org
-  const orgResult = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-  const orgId = orgResult.rows[0]?.id
-  if (!orgId) return null
-
-  const newUser = await pool.query(
-    `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
-     VALUES ($1, $2, $3, $4, 'admin')
-     RETURNING *`,
-    [clerkUser.id, orgId, clerkUser.email, fullName]
-  )
-
-  return newUser.rows[0]
-}
-
 async function requireAdmin() {
-  const cookieStore = await cookies()
-  const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-  const clerkUser = await currentUser()
-
-  if (!clerkUser && isMockAuth) {
-    const r = await pool.query('SELECT * FROM public.users LIMIT 1')
-    const firstUser = r.rows[0]
-    if (firstUser) return { isAdmin: true, user: firstUser }
-    return { isAdmin: false, user: null, error: 'No users found' }
-  }
-  if (!clerkUser) return { isAdmin: false, user: null, error: 'Authentication required' }
-
-  const dbRow = await getOrCreateUser({
-    id: clerkUser.id,
-    email: clerkUser.emailAddresses?.[0]?.emailAddress ?? null,
-    firstName: clerkUser.firstName,
-    lastName: clerkUser.lastName,
-  })
-  const role = dbRow?.role
-  const isAdmin = role === 'admin' || role === 'super_admin'
-  if (!isAdmin) return { isAdmin: false, user: clerkUser, error: 'Admin privileges required' }
-  return { isAdmin: true, user: clerkUser }
+  return requireAdminSession()
 }
 
 // Signature preserved for backward-compat callers in crm.ts (supabase param ignored).

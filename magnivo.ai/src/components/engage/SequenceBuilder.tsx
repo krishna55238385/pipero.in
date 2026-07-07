@@ -10,7 +10,6 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { EngageSequence, EngageTemplate } from '@/types/engage'
 import { createEngageSequence, deleteEngageSequence, generateSequenceWithAI, updateEngageSequence } from '@/app/actions/engage'
-import { createClient as createSupabaseClient } from '@/lib/supabase/client'
 
 type DraftStep = { id: string; templateId: string; delayDays: number }
 
@@ -38,43 +37,39 @@ export default function SequenceBuilder({
   // Keep local template list in sync if the server prop changes (re-navigation).
   useEffect(() => setTemplateList(templates), [templates])
 
+  // Poll for changes (replaces the Supabase real-time subscription). Also
+  // refetches templates so one created on the Templates page (or another
+  // tab) appears in the step dropdowns here without a manual reload.
   useEffect(() => {
-    const supabase = createSupabaseClient()
-    const channel = supabase
-      .channel('engage-sequences-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'engage_sequences' }, async () => {
-        setSyncing(true)
-        try {
-          const res = await fetch('/api/engage/sequences', { cache: 'no-store' })
-          const data = await res.json()
-          if (res.ok && Array.isArray(data?.sequences)) {
-            // Server is the source of truth: replace with the refetched rows and
-            // drop any optimistic local-* placeholders so the saved row coming
-            // back from the refetch doesn't transiently duplicate.
-            const server = (data.sequences as EngageSequence[]).filter((s) => !String(s.id).startsWith('local-'))
-            setSequences(server)
-          }
-        } finally {
-          setSyncing(false)
+    const poll = async () => {
+      setSyncing(true)
+      try {
+        const res = await fetch('/api/engage/sequences', { cache: 'no-store' })
+        const data = await res.json()
+        if (res.ok && Array.isArray(data?.sequences)) {
+          // Server is the source of truth: replace with the refetched rows and
+          // drop any optimistic local-* placeholders so the saved row coming
+          // back from the refetch doesn't transiently duplicate.
+          const server = (data.sequences as EngageSequence[]).filter((s) => !String(s.id).startsWith('local-'))
+          setSequences(server)
         }
-      })
-      // A template created on the Templates page (or another tab) should appear
-      // in the step dropdowns here without a manual reload.
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'engage_templates' }, async () => {
-        try {
-          const res = await fetch('/api/engage/templates', { cache: 'no-store' })
-          const data = await res.json()
-          if (res.ok && Array.isArray(data?.templates)) {
-            setTemplateList(data.templates as EngageTemplate[])
-          }
-        } catch {
-          // non-fatal — server fetch on next navigation will catch up
+      } finally {
+        setSyncing(false)
+      }
+
+      try {
+        const res = await fetch('/api/engage/templates', { cache: 'no-store' })
+        const data = await res.json()
+        if (res.ok && Array.isArray(data?.templates)) {
+          setTemplateList(data.templates as EngageTemplate[])
         }
-      })
-      .subscribe()
-    return () => {
-      supabase.removeChannel(channel)
+      } catch {
+        // non-fatal — server fetch on next navigation will catch up
+      }
     }
+
+    const interval = setInterval(poll, 30000)
+    return () => clearInterval(interval)
   }, [])
 
   const templateName = useMemo(

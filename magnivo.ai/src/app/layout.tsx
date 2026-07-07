@@ -4,7 +4,6 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner"
 import { UIProvider } from "@/components/providers/UIProvider";
 import { getCurrentUser } from "@/app/actions/crm";
-import { ClerkProvider } from "@clerk/nextjs";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -62,12 +61,10 @@ export default async function RootLayout({
           managers, dark-mode tools) inject style/attributes onto <body> before
           React hydrates, which is harmless but otherwise logs a mismatch. */}
       <body suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <ClerkProvider afterSignOutUrl="/sign-in">
-          <UIProvider initialSettings={user?.appearance_settings}>
-            {children}
-            <Toaster />
-          </UIProvider>
-        </ClerkProvider>
+        <UIProvider initialSettings={user?.appearance_settings}>
+          {children}
+          <Toaster />
+        </UIProvider>
       </body>
     </html>
   );

@@ -1,9 +1,8 @@
 'use server'
 
 import pool from '@/lib/db'
-import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
-import { currentUser } from '@clerk/nextjs/server'
+import { getSessionUser } from '@/lib/auth'
 import { embedText, generateText, renderTemplateVariables } from '@/lib/llm'
 
 type OrgContext = { orgId: string; userId: string | null }
@@ -29,98 +28,12 @@ function friendlyDbError(entityName: string, error: unknown) {
   return e?.message || `Failed to process ${entityName}`
 }
 
-async function getOrCreateUser(clerkUser: { id: string, email: string | null, firstName?: string | null, lastName?: string | null }) {
-  // Try to find existing user
-  const existing = await pool.query(
-    'SELECT * FROM public.users WHERE clerk_id = $1 LIMIT 1',
-    [clerkUser.id]
-  )
-
-  if (existing.rows[0]) {
-    // Update email if missing
-    if (!existing.rows[0].email && clerkUser.email) {
-      await pool.query(
-        'UPDATE public.users SET email = $1 WHERE clerk_id = $2',
-        [clerkUser.email, clerkUser.id]
-      )
-    }
-    return existing.rows[0]
-  }
-
-  // Not found by clerk_id — check if a user with this email already exists
-  if (clerkUser.email) {
-    const byEmail = await pool.query(
-      'SELECT * FROM public.users WHERE email = $1 LIMIT 1',
-      [clerkUser.email]
-    )
-    if (byEmail.rows[0]) return byEmail.rows[0]
-  }
-
-  // Still not found — check for a pending invite matching this email
-  const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || clerkUser.email || 'New User'
-
-  if (clerkUser.email) {
-    const invite = await pool.query(
-      `SELECT id, organization_id, role FROM public.organization_invites
-       WHERE email = $1 AND status = 'pending' AND expires_at > now()
-       ORDER BY created_at DESC LIMIT 1`,
-      [clerkUser.email]
-    )
-    const invited = invite.rows[0]
-    if (invited) {
-      const invitedUser = await pool.query(
-        `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING *`,
-        [clerkUser.id, invited.organization_id, clerkUser.email, fullName, invited.role]
-      )
-      await pool.query(
-        `UPDATE public.organization_invites SET status = 'accepted', accepted_at = now() WHERE id = $1`,
-        [invited.id]
-      )
-      return invitedUser.rows[0]
-    }
-  }
-
-  // No invite either — fall back to the existing org
-  const orgResult = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-  const orgId = orgResult.rows[0]?.id
-  if (!orgId) return null
-
-  const newUser = await pool.query(
-    `INSERT INTO public.users (clerk_id, organization_id, email, full_name, role)
-     VALUES ($1, $2, $3, $4, 'admin')
-     RETURNING *`,
-    [clerkUser.id, orgId, clerkUser.email, fullName]
-  )
-
-  return newUser.rows[0]
-}
-
 async function getOrgContext(): Promise<OrgContext | null> {
   try {
-    const orgRes = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-    const orgId = orgRes.rows[0]?.id
+    const session = await getSessionUser()
+    const orgId = session?.orgId ?? (await pool.query('SELECT id FROM public.organizations LIMIT 1')).rows[0]?.id
     if (!orgId) return null
-
-    const cookieStore = await cookies()
-    const isMockAuth = cookieStore.get('sb-mock-auth')?.value === 'true'
-    const clerkUser = await currentUser()
-
-    if (clerkUser) {
-      const dbRow = await getOrCreateUser({
-        id: clerkUser.id,
-        email: clerkUser.emailAddresses?.[0]?.emailAddress ?? null,
-        firstName: clerkUser.firstName,
-        lastName: clerkUser.lastName,
-      })
-      return { orgId, userId: dbRow?.id ?? null }
-    }
-    if (isMockAuth) {
-      const ur = await pool.query('SELECT id FROM public.users WHERE organization_id = $1 LIMIT 1', [orgId])
-      return { orgId, userId: ur.rows[0]?.id ?? null }
-    }
-    return { orgId, userId: null }
+    return { orgId, userId: session?.userId ?? null }
   } catch { return null }
 }
 
