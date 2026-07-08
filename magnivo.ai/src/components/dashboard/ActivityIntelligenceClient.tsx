@@ -70,6 +70,11 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
     const [deals, setDeals] = useState<any[]>([])
     const [page, setPage] = useState(1)
     const limit = 20
+    const [mounted, setMounted] = useState(false)
+
+    useEffect(() => {
+        setMounted(true)
+    }, [])
 
     useEffect(() => {
         if (!isCoreAdmin) return
@@ -194,6 +199,8 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
     }
 
     const kpis = useMemo(() => {
+        if (!mounted) return { todayCount: 0, uniqueReps: 0, mainAction: 'None' }
+
         const todayCount = activities.filter(a => {
             const d = toValidDate(a.created_at)
             return d ? isToday(d) : false
@@ -210,9 +217,11 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
             uniqueReps,
             mainAction: mainAction.replace('_', ' ')
         }
-    }, [activities])
+    }, [activities, mounted])
 
     const groupedActivities = useMemo(() => {
+        if (!mounted) return {}
+
         const groups: { [key: string]: any[] } = {}
         activities.forEach(activity => {
             const date = toValidDate(activity.created_at)
@@ -226,7 +235,7 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
             groups[dateKey].push(activity)
         })
         return groups
-    }, [activities])
+    }, [activities, mounted])
 
     const getIcon = (rawAction: string) => {
         const action = String(rawAction || '')
@@ -305,7 +314,7 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
                             </div>
                             <div>
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{kpi.label}</p>
-                                <p className="text-2xl font-bold text-slate-900 dark:text-foreground">{kpi.value}</p>
+                                <p suppressHydrationWarning className="text-2xl font-bold text-slate-900 dark:text-foreground">{kpi.value}</p>
                             </div>
                         </CardContent>
                     </Card>
@@ -396,7 +405,7 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
                         {/* Date Header */}
                         <div className="sticky top-0 z-10 py-4 bg-slate-50/80 dark:bg-background/80 backdrop-blur-md mb-8">
                             <div className="flex items-center gap-3">
-                                <span className="text-xs font-black uppercase tracking-[0.2em] text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-500/10 px-4 py-1.5 rounded-full">
+                                <span suppressHydrationWarning className="text-xs font-black uppercase tracking-[0.2em] text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-500/10 px-4 py-1.5 rounded-full">
                                     {date}
                                 </span>
                                 <div className="h-[1px] flex-1 bg-slate-100 dark:bg-secondary" />
@@ -435,8 +444,8 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
                                                                     <UserCircle className="w-3 h-3" /> {activity.users?.full_name}
                                                                 </div>
                                                                 <span className="text-slate-300 dark:text-slate-700 font-bold text-[10px]">•</span>
-                                                                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-bold uppercase tracking-tight">
-                                                                    <Clock className="w-3 h-3" /> {safeDate(activity.created_at, 'HH:mm:ss', '--:--:--')}
+                                                                <div suppressHydrationWarning className="flex items-center gap-1.5 text-[10px] text-slate-400 font-bold uppercase tracking-tight">
+                                                                    <Clock className="w-3 h-3" /> {mounted ? safeDate(activity.created_at, 'HH:mm:ss', '--:--:--') : '--:--:--'}
                                                                 </div>
                                                             </div>
                                                             <div className="text-sm text-slate-600 dark:text-muted-foreground font-medium leading-relaxed break-words">
@@ -456,7 +465,7 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
                                                                         </Link>
                                                                     )}
                                                                     {activity.deals && (
-                                                                        <Link href={`/pipeline`}>
+                                                                        <Link href={`/deals`}>
                                                                             <Badge variant="outline" className="h-7 px-3 rounded-xl border-slate-100 dark:border-border hover:bg-slate-50 dark:hover:bg-slate-900 group/link transition-colors cursor-pointer">
                                                                                 <Briefcase className="w-3 h-3 mr-1.5 text-blue-500" />
                                                                                 <span className="text-xs font-bold text-slate-600 dark:text-muted-foreground">{activity.deals.title}</span>

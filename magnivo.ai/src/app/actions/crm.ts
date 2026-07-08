@@ -1631,21 +1631,24 @@ export async function getRepPerformanceData() {
   const session = await getSessionUser()
   if (!session?.orgId) return []
   const orgId = session.orgId
+  console.log('[RepMonitor] session:', JSON.stringify(session))
+  console.log('[RepMonitor] orgId:', orgId)
   const monthYear = new Date().toISOString().substring(0, 7)
   try {
     const [membersRes, leadsRes, dealsRes, tasksRes, targetsRes] = await Promise.all([
       pool.query('SELECT id, full_name, role FROM public.users WHERE organization_id = $1 AND is_active = true', [orgId]),
       pool.query('SELECT id, owner_id, status, created_at FROM public.leads WHERE organization_id = $1', [orgId]),
-      pool.query('SELECT id, user_id, status, value FROM public.deals WHERE organization_id = $1', [orgId]),
+      pool.query('SELECT id, assigned_to, status, value FROM public.deals WHERE organization_id = $1', [orgId]),
       pool.query('SELECT id, assigned_to, status, due_date FROM public.tasks WHERE organization_id = $1', [orgId]),
       pool.query('SELECT * FROM public.user_targets WHERE organization_id = $1 AND month_year = $2', [orgId, monthYear])
     ])
+    console.log('[RepMonitor] members count:', membersRes.rows.length)
 
     const now = new Date(); const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000)
 
     return membersRes.rows.map(user => {
       const userLeads = leadsRes.rows.filter(l => l.owner_id === user.id)
-      const userDeals = dealsRes.rows.filter(d => d.user_id === user.id)
+      const userDeals = dealsRes.rows.filter(d => d.assigned_to === user.id)
       const userTasks = tasksRes.rows.filter(t => t.assigned_to === user.id)
       const userTarget = targetsRes.rows.find(t => t.user_id === user.id)
       const revenueWon = userDeals.filter(d => d.status === 'won').reduce((sum, d) => sum + (Number(d.value) || 0), 0)
