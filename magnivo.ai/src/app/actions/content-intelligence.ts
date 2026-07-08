@@ -31,7 +31,7 @@ function friendlyDbError(entityName: string, error: unknown) {
 async function getOrgContext(): Promise<OrgContext | null> {
   try {
     const session = await getSessionUser()
-    const orgId = session?.orgId ?? (await pool.query('SELECT id FROM public.organizations LIMIT 1')).rows[0]?.id
+    const orgId = session?.orgId
     if (!orgId) return null
     return { orgId, userId: session?.userId ?? null }
   } catch { return null }

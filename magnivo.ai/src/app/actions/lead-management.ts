@@ -2,13 +2,11 @@
 
 import pool from '@/lib/db'
 import { revalidatePath } from 'next/cache'
-import { requireAdmin as requireAdminSession } from '@/lib/auth'
+import { requireAdmin as requireAdminSession, getSessionUser } from '@/lib/auth'
 
 async function getDefaultOrgId(): Promise<string | null> {
-  try {
-    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-    return r.rows[0]?.id ?? null
-  } catch { return null }
+  const session = await getSessionUser()
+  return session?.orgId ?? null
 }
 
 async function requireAdmin() {

@@ -8,14 +8,13 @@
  */
 
 import pool from '@/lib/db'
+import { getSessionUser } from '@/lib/auth'
 import type { CallLog, DialerCallSummary } from '@/components/dialer/storage'
 import type { DialerLead } from '@/components/dialer/types'
 
 async function getDefaultOrgId(): Promise<string | undefined> {
-  try {
-    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-    return r.rows[0]?.id ?? undefined
-  } catch { return undefined }
+  const session = await getSessionUser()
+  return session?.orgId ?? undefined
 }
 
 // --------------------------------------------------------------------------- //

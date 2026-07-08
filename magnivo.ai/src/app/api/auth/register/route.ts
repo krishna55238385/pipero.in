@@ -30,11 +30,16 @@ export async function POST(req: NextRequest) {
     orgId = invite.organization_id
     role = invite.role
   } else {
-    const orgResult = await pool.query('SELECT id FROM public.organizations LIMIT 1')
+    const domain = normalizedEmail.split('@')[1]?.split('.')[0] ?? 'New'
+    const orgName = domain.charAt(0).toUpperCase() + domain.slice(1)
+    const orgResult = await pool.query(
+      'INSERT INTO public.organizations (name) VALUES ($1) RETURNING id',
+      [orgName]
+    )
     orgId = orgResult.rows[0]?.id
     role = 'admin'
     if (!orgId) {
-      return NextResponse.json({ error: 'No organization found' }, { status: 500 })
+      return NextResponse.json({ error: 'Failed to create organization' }, { status: 500 })
     }
   }
 

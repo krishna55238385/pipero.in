@@ -3,12 +3,11 @@
 import pool from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { generateText } from '@/lib/llm'
+import { getSessionUser } from '@/lib/auth'
 
 async function getDefaultOrgId(): Promise<string | null> {
-  try {
-    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-    return r.rows[0]?.id ?? null
-  } catch { return null }
+  const session = await getSessionUser()
+  return session?.orgId ?? null
 }
 
 export async function executeAutomationFlows(triggerType: string, entityType: 'lead' | 'deal', entityId: string, data: any) {

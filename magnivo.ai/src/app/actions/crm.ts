@@ -13,11 +13,7 @@ import { createLeadRecord, type PublicLeadPayload } from '@/lib/create-lead-reco
 
 async function getDefaultOrgId(): Promise<string | null> {
   const session = await getSessionUser()
-  if (session?.orgId) return session.orgId
-  try {
-    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-    return r.rows[0]?.id ?? null
-  } catch { return null }
+  return session?.orgId ?? null
 }
 
 async function requireAdmin() {
@@ -1251,7 +1247,7 @@ export async function getGlobalActivities(params: {
 
     if (params.type && params.type !== 'all') { values.push(params.type); conditions.push(`al.action = $${values.length}`) }
     if (params.userId && params.userId !== 'all') { values.push(params.userId); conditions.push(`al.user_id = $${values.length}`) }
-    if (params.search) { values.push(`%${params.search}%`); conditions.push(`al.details ILIKE $${values.length}`) }
+    if (params.search) { values.push(`%${params.search}%`); conditions.push(`al.details::text ILIKE $${values.length}`) }
     if (params.leadId && params.leadId !== 'all') { values.push(params.leadId); conditions.push(`al.lead_id = $${values.length}`) }
     if (params.dealId && params.dealId !== 'all') { values.push(params.dealId); conditions.push(`al.deal_id = $${values.length}`) }
     if (params.dateFrom) { values.push(params.dateFrom); conditions.push(`al.created_at >= $${values.length}`) }
@@ -1284,7 +1280,8 @@ export async function getGlobalActivities(params: {
           details = `Forwarded "${lead_name || 'Lead'}" to ${forwarded_to || 'Unknown'}${note ? ` (Note: ${note})` : ''}`
         } else { details = JSON.stringify(details) }
       }
-      return { ...activity, details: details || '' }
+      details = details || ''
+      return { ...activity, details }
     })
 
     return { data: normalizedData, total }

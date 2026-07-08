@@ -20,7 +20,7 @@ import {
     Loader2,
     Download
 } from 'lucide-react'
-import { format, isToday, isYesterday, parseISO } from 'date-fns'
+import { format, isToday, isYesterday } from 'date-fns'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -37,6 +37,17 @@ import { motion, AnimatePresence } from 'framer-motion'
 import Link from 'next/link'
 import { useWorkspace } from '@/components/providers/WorkspaceProvider'
 import { toText } from '@/lib/gtm-render'
+
+function toValidDate(val: any): Date | null {
+    if (!val) return null
+    const d = new Date(val)
+    return isNaN(d.getTime()) ? null : d
+}
+
+function safeDate(val: any, fmtStr: string, fallback: string = ''): string {
+    const d = toValidDate(val)
+    return d ? format(d, fmtStr) : fallback
+}
 
 export default function ActivityIntelligenceClient({ initialActivities, initialTotal }: { initialActivities: any[], initialTotal: number }) {
     const { userRole } = useWorkspace()
@@ -167,7 +178,7 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
                 toText(a.action),
                 `"${toText(a.details).replace(/"/g, '""')}"`,
                 a.users?.full_name || '',
-                a.created_at ? format(parseISO(a.created_at), 'yyyy-MM-dd HH:mm:ss') : '',
+                safeDate(a.created_at, 'yyyy-MM-dd HH:mm:ss'),
                 a.leads?.name || a.deals?.title || 'None'
             ].join(','))
         ].join('\n')
@@ -183,7 +194,10 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
     }
 
     const kpis = useMemo(() => {
-        const todayCount = activities.filter(a => isToday(parseISO(a.created_at))).length
+        const todayCount = activities.filter(a => {
+            const d = toValidDate(a.created_at)
+            return d ? isToday(d) : false
+        }).length
         const uniqueReps = new Set(activities.map(a => a.actor_id)).size
         const topAction = activities.reduce((acc: any, curr) => {
             acc[curr.action] = (acc[curr.action] || 0) + 1
@@ -201,10 +215,12 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
     const groupedActivities = useMemo(() => {
         const groups: { [key: string]: any[] } = {}
         activities.forEach(activity => {
-            const date = parseISO(activity.created_at)
-            let dateKey = format(date, 'MMMM d, yyyy')
-            if (isToday(date)) dateKey = 'Today'
-            else if (isYesterday(date)) dateKey = 'Yesterday'
+            const date = toValidDate(activity.created_at)
+            let dateKey = date ? format(date, 'MMMM d, yyyy') : 'Unknown Date'
+            if (date) {
+                if (isToday(date)) dateKey = 'Today'
+                else if (isYesterday(date)) dateKey = 'Yesterday'
+            }
 
             if (!groups[dateKey]) groups[dateKey] = []
             groups[dateKey].push(activity)
@@ -420,7 +436,7 @@ export default function ActivityIntelligenceClient({ initialActivities, initialT
                                                                 </div>
                                                                 <span className="text-slate-300 dark:text-slate-700 font-bold text-[10px]">•</span>
                                                                 <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-bold uppercase tracking-tight">
-                                                                    <Clock className="w-3 h-3" /> {format(parseISO(activity.created_at), 'HH:mm:ss')}
+                                                                    <Clock className="w-3 h-3" /> {safeDate(activity.created_at, 'HH:mm:ss', '--:--:--')}
                                                                 </div>
                                                             </div>
                                                             <div className="text-sm text-slate-600 dark:text-muted-foreground font-medium leading-relaxed break-words">
