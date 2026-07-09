@@ -531,13 +531,14 @@ export default function UsersAndRoles({ members, invites = [] }: { members: any[
                                 </div>
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="role" className="text-right">Role</Label>
-                                    <Select name="role" defaultValue="user">
+                                    <Select name="role" defaultValue={roles[0]?.name}>
                                         <SelectTrigger className="col-span-3">
                                             <SelectValue placeholder="Select role" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            <SelectItem value="user">Member</SelectItem>
-                                            <SelectItem value="admin">Admin</SelectItem>
+                                            {roles.map((r) => (
+                                                <SelectItem key={r.id} value={r.name}>{r.name}</SelectItem>
+                                            ))}
                                         </SelectContent>
                                     </Select>
                                 </div>

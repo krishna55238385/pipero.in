@@ -75,7 +75,9 @@ export default function InvitePage({ params }: { params: Promise<{ token: string
     )
   }
 
-  const roleLabel = invite.role === 'admin' ? 'an Admin' : 'a Member'
+  const roleLabel = invite.role
+    ? invite.role.charAt(0).toUpperCase() + invite.role.slice(1)
+    : 'Member'
 
   return (
     <AuthShell>
@@ -85,7 +87,7 @@ export default function InvitePage({ params }: { params: Promise<{ token: string
             You&apos;ve been invited to join <span className="text-blue-600">{invite.orgName}</span>
           </h1>
           <p className="mt-2 text-sm text-slate-500">
-            You&apos;ll join as {roleLabel}. Create your account below to accept.
+            You&apos;ll join as a {roleLabel}. Create your account below to accept.
           </p>
         </div>
 

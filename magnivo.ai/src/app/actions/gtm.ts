@@ -9,6 +9,7 @@
 import { cache } from 'react'
 import { revalidatePath } from 'next/cache'
 import pool from '@/lib/db'
+import { getSessionUser } from '@/lib/auth'
 import { ensureAutoCampaignForRun } from '@/app/actions/engage'
 import {
   intentFromScore,
@@ -35,8 +36,8 @@ import {
 // Per-request memoized org lookup
 const cachedOrgId = cache(async (): Promise<string | undefined> => {
   try {
-    const r = await pool.query('SELECT id FROM public.organizations LIMIT 1')
-    return r.rows[0]?.id ?? undefined
+    const session = await getSessionUser()
+    return session?.orgId ?? undefined
   } catch { return undefined }
 })
 

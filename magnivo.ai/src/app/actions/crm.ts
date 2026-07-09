@@ -1850,7 +1850,10 @@ const INVITE_BASE_URL = 'https://magnivo-ai.vercel.app'
 
 export async function inviteUser(formData: FormData) {
   const email = (formData.get('email') as string || '').trim().toLowerCase()
-  const role = formData.get('role') as string === 'admin' ? 'admin' : 'user'
+  const rawRole = (formData.get('role') as string || '').trim()
+  const role = rawRole === 'admin' || rawRole === 'Admin' ? 'admin' :
+               rawRole === 'super_admin' ? 'super_admin' :
+               rawRole  // keep custom role names as-is
   const orgId = await getDefaultOrgId()
   if (!orgId) return { error: 'No organization found' }
   if (!email) return { error: 'Email is required' }
