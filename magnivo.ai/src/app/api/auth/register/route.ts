@@ -56,6 +56,20 @@ export async function POST(req: NextRequest) {
       `UPDATE public.organization_invites SET status = 'accepted', accepted_at = now() WHERE id = $1`,
       [invite.id]
     )
+  } else {
+    try {
+      await pool.query(
+        'INSERT INTO public.onboarding_tracker (organization_id) VALUES ($1)',
+        [orgId]
+      )
+      await pool.query(
+        `INSERT INTO public.client_subscriptions (organization_id, plan_name, status, mrr_cents, payment_status)
+         VALUES ($1, 'starter', 'trial', 0, 'trial')`,
+        [orgId]
+      )
+    } catch (err) {
+      console.error('Failed to create onboarding tracker / default subscription for org', orgId, err)
+    }
   }
 
   return NextResponse.json({ success: true })
