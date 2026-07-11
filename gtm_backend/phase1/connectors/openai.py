@@ -9,8 +9,8 @@ from gtm_backend.phase1.core.retries import retry_on_transient
 
 _settings = get_settings()
 _client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY", _settings.openai_api_key),
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.getenv("GROQ_API_KEY", ""),
 )
 
 
@@ -28,17 +28,19 @@ def log_usage(
     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
     total_tokens = getattr(usage, "total_tokens", 0) or 0
     try:
-        from gtm_backend.phase1.connectors import supabase
-        supabase.insert_llm_usage(
-            agent=agent,
-            model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            estimated_cost_usd=cost,
-            icp_id=icp_id,
-            phase=phase,
+        import psycopg2
+        import os
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO public.token_usage_logs 
+               (model, feature, total_tokens, estimated_cost_usd, date)
+               VALUES (%s, %s, %s, %s, CURRENT_DATE)""",
+            (model, phase or agent, total_tokens, cost)
         )
+        conn.commit()
+        cur.close()
+        conn.close()
     except Exception:
         print(
             f"[LLM usage] phase={phase} agent={agent} model={model} "
@@ -61,7 +63,7 @@ def chat_json(
     The model defaults to OPENROUTER_MODEL from the root .env (the project's
     single source of truth); callers may still pass an explicit override.
     """
-    model = model or os.getenv("OPENROUTER_MODEL", "google/gemini-flash-1.5")
+    model = model or os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
     response = _client.chat.completions.create(
         model=model,
         messages=[
