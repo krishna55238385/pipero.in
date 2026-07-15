@@ -1,6 +1,7 @@
 'use server'
 
 import pool from '@/lib/db'
+import bcrypt from 'bcryptjs'
 import { randomUUID } from 'crypto'
 import { revalidatePath } from 'next/cache'
 import { createNotification, getMockableUser } from '@/app/actions/notifications'
@@ -1786,6 +1787,9 @@ export async function updateUserProfile(data: {
   if (data.full_name !== undefined) profileUpdate.full_name = data.full_name
   if (data.avatar_url !== undefined) profileUpdate.avatar_url = data.avatar_url
   if (data.email !== undefined) profileUpdate.email = data.email
+  if (data.password !== undefined) {
+    profileUpdate.password_hash = await bcrypt.hash(data.password, 10)
+  }
 
   try {
     const keys = Object.keys(profileUpdate); const vals = Object.values(profileUpdate)
