@@ -1769,7 +1769,7 @@ export async function getCurrentUser() {
 
     const r = await pool.query('SELECT * FROM public.users WHERE id = $1 LIMIT 1', [session.userId])
     const user = r.rows[0]
-    if (!user) return null
+    if (!user || !user.is_active) return null
 
     const roleData = await pool.query('SELECT permissions FROM public.organization_roles WHERE organization_id = $1 AND name = $2 LIMIT 1', [user.organization_id, user.role])
     return { ...user, permissions: roleData.rows[0]?.permissions || null }
