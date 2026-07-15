@@ -2,7 +2,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
+import psycopg2
+from psycopg2 import errors as pg_errors
+from psycopg2.extras import RealDictCursor
 
 from gtm_backend.phase1.core.config import get_settings
 from gtm_backend.phase1.core.retries import retry_on_transient
@@ -12,23 +14,27 @@ _LOCAL_SIGNALS_PATH = Path(__file__).resolve().parent.parent / "data" / "buying_
 
 
 _settings = get_settings()
-_client = httpx.Client(
-    base_url=_settings.supabase_url,
-    headers={
-        "apikey": _settings.supabase_key,
-        "Authorization": f"Bearer {_settings.supabase_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    },
-    timeout=30.0,
-)
 
 
-class SupabaseError(httpx.HTTPError):
-    """Raised when Supabase REST returns a non-2xx response.
+def _get_connection():
+    return psycopg2.connect(_settings.database_url, cursor_factory=RealDictCursor)
 
-    Carries the response body so callers can see *why* a 400/409 happened.
-    Inherits from httpx.HTTPError so tenacity still retries transient 5xx.
+
+# Columns whose Postgres type is jsonb and therefore need an explicit
+# json.dumps(...) + ::jsonb cast. Everything else — including ICP's
+# industry/geography/buyer_titles/user_titles/blocker_titles, which are
+# native Postgres text[] columns, not jsonb — is passed through as a plain
+# parameter: psycopg2 adapts a Python list to a Postgres array automatically,
+# and casting one of those to ::jsonb would insert the wrong type entirely.
+_JSONB_COLUMNS = {"sources", "raw_data", "score_breakdown"}
+
+
+class SupabaseError(RuntimeError):
+    """Raised when a query fails against a missing/broken table.
+
+    Keeps the same shape (`status`, `body`) the old REST-based version had so
+    the 404-detection helpers below (`_is_missing_buying_signals_table`) and
+    any caller's `except SupabaseError` blocks don't need to change.
     """
 
     def __init__(self, method: str, path: str, status: int, body: str) -> None:
@@ -36,7 +42,7 @@ class SupabaseError(httpx.HTTPError):
         self.path = path
         self.status = status
         self.body = body
-        super().__init__(f"Supabase {method} {path} -> {status}: {body}")
+        super().__init__(f"{method} {path} -> {status}: {body}")
 
 
 _ORG_ID = _settings.gtm_org_id or None
@@ -61,45 +67,190 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _raise_for_status(method: str, path: str, response: httpx.Response) -> None:
-    if response.is_success:
-        return
-    body = response.text
-    if response.status_code == 404 and "Could not find the table" in body:
-        body += (
-            "\n\n[hint] One or more tables are missing. Apply the schema once via "
-            "the Supabase SQL editor:\n  python -m phase1 print-schema | pbcopy   "
-            "(then paste into Supabase → SQL editor → Run)\n"
-            "Or copy directly: phase1/data/schema.sql"
-        )
-    raise SupabaseError(method, path, response.status_code, body)
+def _table_from_path(path: str) -> str:
+    return path.lstrip("/")
+
+
+def _missing_table_error(method: str, path: str, exc: Exception) -> SupabaseError:
+    table = _table_from_path(path)
+    body = (
+        f"Could not find the table '{table}' in the schema cache: {exc}\n\n"
+        f"[hint] Apply the schema for this table in RDS, then retry."
+    )
+    return SupabaseError(method, path, 404, body)
+
+
+# --------------------------------------------------------------------------- #
+# PostgREST-style filter/order translation
+#
+# Every call site in this file builds params exactly like it did against the
+# old Supabase REST client (eq., is.null, not.is.null, in.(...), or=(...),
+# order=col.desc, select=col1,col2, limit=N) — only these four helpers changed,
+# so nothing above this line needed to change at all.
+# --------------------------------------------------------------------------- #
+
+def _parse_filter(column: str, expr: str, values: list) -> str:
+    """Translate one PostgREST filter value into a SQL condition.
+
+    Supports exactly the operators used anywhere in this file: eq., is.null,
+    not.is.null, in.(...). Any parameter value is appended to `values` so the
+    caller keeps everything correctly positional for psycopg2.
+    """
+    if expr == "is.null":
+        return f"{column} IS NULL"
+    if expr == "not.is.null":
+        return f"{column} IS NOT NULL"
+    if expr.startswith("eq."):
+        values.append(expr[len("eq."):])
+        return f"{column} = %s"
+    if expr.startswith("in.(") and expr.endswith(")"):
+        inner = expr[len("in.("):-1]
+        items = [v.strip() for v in inner.split(",") if v.strip() != ""]
+        values.extend(items)
+        placeholders = ", ".join(["%s"] * len(items))
+        return f"{column} IN ({placeholders})"
+    raise ValueError(f"Unsupported filter for column {column!r}: {expr!r}")
+
+
+def _parse_or(expr: str, values: list) -> str:
+    """Translate or=(col1.is.null,col2.is.null,...) into (col1 IS NULL OR col2 IS NULL OR ...).
+
+    Only the `is.null` operator ever appears inside an `or=` filter in this
+    file (get_leads_for_enrichment), so that's all this needs to parse.
+    """
+    inner = expr[1:-1]  # strip outer ( )
+    conditions = []
+    for part in inner.split(","):
+        column, _, rest = part.partition(".")
+        conditions.append(_parse_filter(column, rest, values))
+    return "(" + " OR ".join(conditions) + ")"
+
+
+def _build_where(params: dict, values: list) -> str:
+    conditions = []
+    for key, expr in params.items():
+        if key in ("select", "order", "limit"):
+            continue
+        if key == "or":
+            conditions.append(_parse_or(expr, values))
+        else:
+            conditions.append(_parse_filter(key, expr, values))
+    if not conditions:
+        return ""
+    return "WHERE " + " AND ".join(conditions)
+
+
+def _build_order(params: dict) -> str:
+    order = params.get("order")
+    if not order:
+        return ""
+    parts = []
+    for item in order.split(","):
+        column, _, direction = item.partition(".")
+        parts.append(f"{column} {'DESC' if direction == 'desc' else 'ASC'}")
+    return "ORDER BY " + ", ".join(parts)
+
+
+def _build_limit(params: dict, values: list) -> str:
+    limit = params.get("limit")
+    if limit is None:
+        return ""
+    values.append(int(limit))
+    return "LIMIT %s"
+
+
+def _value_placeholder(column: str, value: object, values: list) -> str:
+    """Append `value` to `values` and return its SQL placeholder.
+
+    jsonb columns (see _JSONB_COLUMNS) get json.dumps + an explicit ::jsonb
+    cast; everything else — scalars, native Postgres arrays like ICP's
+    industry/geography lists, None — goes through as a plain parameter and
+    psycopg2 adapts it correctly on its own.
+    """
+    if column in _JSONB_COLUMNS and isinstance(value, (dict, list)):
+        values.append(json.dumps(value))
+        return "%s::jsonb"
+    values.append(value)
+    return "%s"
 
 
 @retry_on_transient()
 def _get(path: str, params: dict | None = None) -> list[dict]:
-    response = _client.get(path, params=params)
-    _raise_for_status("GET", path, response)
-    return response.json()
+    table = _table_from_path(path)
+    params = params or {}
+    select_cols = params.get("select", "*")
+    values: list = []
+    where_clause = _build_where(params, values)
+    order_clause = _build_order(params)
+    limit_clause = _build_limit(params, values)
+    sql = f"SELECT {select_cols} FROM {table} {where_clause} {order_clause} {limit_clause}".strip()
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("GET", path, exc) from exc
 
 
 @retry_on_transient()
 def _post(path: str, json_body: list | dict) -> list[dict]:
-    response = _client.post(path, json=_inject_org(json_body))
-    _raise_for_status("POST", path, response)
-    return response.json()
+    table = _table_from_path(path)
+    json_body = _inject_org(json_body)
+    rows = json_body if isinstance(json_body, list) else [json_body]
+    if not rows:
+        return []
+    # Every caller in this file builds each row from the same pydantic model,
+    # so all rows in one call always share the same key set.
+    columns = list(rows[0].keys())
+    col_list = ", ".join(columns)
+    values: list = []
+    value_groups = []
+    for row in rows:
+        placeholders = [_value_placeholder(col, row.get(col), values) for col in columns]
+        value_groups.append("(" + ", ".join(placeholders) + ")")
+    sql = f"INSERT INTO {table} ({col_list}) VALUES {', '.join(value_groups)} RETURNING *"
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("POST", path, exc) from exc
 
 
 @retry_on_transient()
 def _patch(path: str, params: dict, json_body: dict) -> list[dict]:
-    response = _client.patch(path, params=params, json=json_body)
-    _raise_for_status("PATCH", path, response)
-    return response.json()
+    table = _table_from_path(path)
+    values: list = []
+    set_parts = [f"{col} = {_value_placeholder(col, val, values)}" for col, val in json_body.items()]
+    set_clause = ", ".join(set_parts)
+    where_clause = _build_where(params, values)
+    sql = f"UPDATE {table} SET {set_clause} {where_clause} RETURNING *"
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("PATCH", path, exc) from exc
 
 
 @retry_on_transient()
 def _delete(path: str, params: dict) -> None:
-    response = _client.delete(path, params=params)
-    _raise_for_status("DELETE", path, response)
+    table = _table_from_path(path)
+    values: list = []
+    where_clause = _build_where(params, values)
+    sql = f"DELETE FROM {table} {where_clause}"
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("DELETE", path, exc) from exc
 
 
 def insert_icp(icp: ICP, user_prompt: str) -> int:

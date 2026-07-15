@@ -8,6 +8,8 @@ tenacity>=8.2.0
 openai>=1.30.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
+# Direct-Postgres (RDS) access for gtm_service/db.py — imported but never listed here.
+psycopg2-binary>=2.9.9
 # GA4 ingest (optional at runtime — import-guarded in ga4_ingest.py)
 google-analytics-data>=0.18.0
 google-auth>=2.29.0

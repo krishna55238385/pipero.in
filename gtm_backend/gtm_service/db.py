@@ -30,10 +30,19 @@ def create_phase_run(phase: str, command: str, organization_id: str | None, icp_
 
 def update_phase_run(run_id: str, **fields: Any) -> None:
     fields["updated_at"] = _now_iso()
-    set_clause = ", ".join([f"{k} = %s" for k in fields.keys()])
+    set_parts = []
+    values = []
+    for key, value in fields.items():
+        if isinstance(value, (dict, list)):
+            set_parts.append(f"{key} = %s::jsonb")
+            values.append(json.dumps(value))
+        else:
+            set_parts.append(f"{key} = %s")
+            values.append(value)
+    set_clause = ", ".join(set_parts)
     with _get_db_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(f"UPDATE phase_runs SET {set_clause} WHERE id = %s", (*fields.values(), run_id))
+            cur.execute(f"UPDATE phase_runs SET {set_clause} WHERE id = %s", (*values, run_id))
             conn.commit()
 
 def append_phase_run_log(run_id: str, chunk: str, current: str) -> str:
@@ -87,13 +96,38 @@ def get_ga4_connections(organization_id: str | None = None) -> list[dict]:
                 cur.execute("SELECT * FROM ga4_connections WHERE sync_enabled = TRUE")
             return cur.fetchall()
 
+_VISITOR_SIGNAL_COLUMNS = [
+    "organization_id", "source", "company_name", "company_domain",
+    "matched_company_id", "matched_lead_id", "dimension", "dimension_value",
+    "region", "country", "channel", "sessions", "engaged_sessions", "page_views",
+    "avg_engagement_seconds", "top_pages", "visitor_score", "signal_strength",
+    "window_start", "window_end", "raw", "last_seen_at",
+]
+_VISITOR_SIGNAL_JSON_COLUMNS = {"top_pages", "raw"}
+# Matches uniq_website_visitor_signals (organization_id, source,
+# COALESCE(dimension_value, ''), COALESCE(window_end, '1970-01-01')) so a
+# re-sync of the same GA4 window updates metrics instead of duplicating rows.
+# first_seen_at is deliberately excluded from both the column list and the
+# UPDATE SET below, so it keeps its now() default on first insert and is never
+# overwritten on conflict.
+_VISITOR_SIGNAL_UPSERT_SQL = f"""
+    INSERT INTO website_visitor_signals ({", ".join(_VISITOR_SIGNAL_COLUMNS)})
+    VALUES ({", ".join(f"%s::jsonb" if c in _VISITOR_SIGNAL_JSON_COLUMNS else "%s" for c in _VISITOR_SIGNAL_COLUMNS)})
+    ON CONFLICT (organization_id, source, COALESCE(dimension_value, ''), COALESCE(window_end, '1970-01-01'))
+    DO UPDATE SET {", ".join(f"{c} = EXCLUDED.{c}" for c in _VISITOR_SIGNAL_COLUMNS if c not in ("organization_id", "source", "dimension_value", "window_end"))}
+"""
+
+
 def upsert_visitor_signals(rows: list[dict]) -> int:
-    # Simplified implementation for demonstration
-    count = 0
+    if not rows:
+        return 0
     with _get_db_connection() as conn:
         with conn.cursor() as cur:
             for row in rows:
-                cur.execute("INSERT INTO website_visitor_signals ... ON CONFLICT DO NOTHING", (...))
-            conn.commit()
-            count = len(rows)
-    return count
+                values = [
+                    json.dumps(row.get(c)) if c in _VISITOR_SIGNAL_JSON_COLUMNS else row.get(c)
+                    for c in _VISITOR_SIGNAL_COLUMNS
+                ]
+                cur.execute(_VISITOR_SIGNAL_UPSERT_SQL, values)
+        conn.commit()
+    return len(rows)

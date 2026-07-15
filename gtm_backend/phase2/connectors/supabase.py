@@ -1,10 +1,12 @@
-"""Phase 2 Supabase REST client.
+"""Phase 2 direct-Postgres (RDS) client.
 
 Reads from phase1 tables (icp_profiles, leads_raw, buying_signals) and
-writes to four new phase2 tables:
+writes to five phase2 tables:
     account_intelligence
     account_stakeholders
+    stakeholder_maps
     competitor_intel
+    lead_competitor_usage
     market_segment_intel
     gtm_insights
 
@@ -14,7 +16,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
+import psycopg2
+from psycopg2 import errors as pg_errors
+from psycopg2.extras import RealDictCursor
 
 from gtm_backend.phase2.core.config import get_settings
 from gtm_backend.phase2.core.retries import retry_on_transient
@@ -33,27 +37,46 @@ _FALLBACK_DIR = Path(__file__).resolve().parent.parent / "data" / "fallbacks"
 
 
 _settings = get_settings()
-_client = httpx.Client(
-    base_url=f"{_settings.supabase_url}/rest/v1",
-    headers={
-        "apikey": _settings.supabase_key,
-        "Authorization": f"Bearer {_settings.supabase_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    },
-    timeout=30.0,
-)
 
 
-class SupabaseError(httpx.HTTPError):
-    """Raised when Supabase REST returns a non-2xx response."""
+def _get_connection():
+    return psycopg2.connect(_settings.database_url, cursor_factory=RealDictCursor)
+
+
+# Columns whose Postgres type is jsonb and therefore need an explicit
+# json.dumps(...) + ::jsonb cast. Unlike phase1 (icp_profiles' text[] columns),
+# every structured field phase2 writes is jsonb — there are no native Postgres
+# array columns anywhere in this file's tables.
+_JSONB_COLUMNS = {
+    # account_intelligence (Agent 06)
+    "recent_moves", "likely_pain_points", "instability_flags",
+    "confirmed_facts", "inferences", "key_signals_for_outreach", "sources_scanned",
+    # account_stakeholders (Agent 07)
+    "risk_flags",
+    # stakeholder_maps (Agent 07)
+    "missing_roles",
+    # competitor_intel (Agent 08)
+    "complaint_categories", "talk_tracks", "sources",
+    # gtm_insights (Agent 10)
+    "who_to_target", "what_to_say", "which_channel",
+    "flags_and_contradictions", "next_actions",
+}
+
+
+class SupabaseError(RuntimeError):
+    """Raised when a query fails against a missing/broken table.
+
+    Keeps the same shape (`status`, `body`) the old REST-based version had so
+    `_missing_table` and any caller's `except SupabaseError` blocks don't need
+    to change.
+    """
 
     def __init__(self, method: str, path: str, status: int, body: str) -> None:
         self.method = method
         self.path = path
         self.status = status
         self.body = body
-        super().__init__(f"Supabase {method} {path} -> {status}: {body}")
+        super().__init__(f"{method} {path} -> {status}: {body}")
 
 
 _ORG_ID = _settings.gtm_org_id or None
@@ -77,39 +100,178 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _raise_for_status(method: str, path: str, response: httpx.Response) -> None:
-    if response.is_success:
-        return
-    body = response.text
-    if response.status_code == 404 and "Could not find the table" in body:
-        body += (
-            "\n\n[hint] One or more phase2 tables are missing. Apply the schema via "
-            "the Supabase SQL editor:\n  python -m phase2 print-schema | pbcopy   "
-            "(then paste into Supabase → SQL editor → Run)\n"
-            "Or copy directly: phase2/data/schema.sql"
-        )
-    raise SupabaseError(method, path, response.status_code, body)
+def _table_from_path(path: str) -> str:
+    return path.lstrip("/")
+
+
+def _missing_table_error(method: str, path: str, exc: Exception) -> SupabaseError:
+    table = _table_from_path(path)
+    body = (
+        f"Could not find the table '{table}' in the schema cache: {exc}\n\n"
+        f"[hint] Apply the schema for this table in RDS, then retry."
+    )
+    return SupabaseError(method, path, 404, body)
+
+
+# --------------------------------------------------------------------------- #
+# PostgREST-style filter/order translation — same helpers as phase1. No `or=`
+# support here: nothing in this file ever builds an `or=` filter.
+# --------------------------------------------------------------------------- #
+
+def _parse_filter(column: str, expr: str, values: list) -> str:
+    if expr == "is.null":
+        return f"{column} IS NULL"
+    if expr == "not.is.null":
+        return f"{column} IS NOT NULL"
+    if expr.startswith("eq."):
+        values.append(expr[len("eq."):])
+        return f"{column} = %s"
+    if expr.startswith("in.(") and expr.endswith(")"):
+        inner = expr[len("in.("):-1]
+        items = [v.strip() for v in inner.split(",") if v.strip() != ""]
+        values.extend(items)
+        placeholders = ", ".join(["%s"] * len(items))
+        return f"{column} IN ({placeholders})"
+    raise ValueError(f"Unsupported filter for column {column!r}: {expr!r}")
+
+
+def _build_where(params: dict, values: list) -> str:
+    conditions = [
+        _parse_filter(key, expr, values)
+        for key, expr in params.items()
+        if key not in ("select", "order", "limit")
+    ]
+    if not conditions:
+        return ""
+    return "WHERE " + " AND ".join(conditions)
+
+
+def _build_order(params: dict) -> str:
+    order = params.get("order")
+    if not order:
+        return ""
+    parts = []
+    for item in order.split(","):
+        column, _, direction = item.partition(".")
+        parts.append(f"{column} {'DESC' if direction == 'desc' else 'ASC'}")
+    return "ORDER BY " + ", ".join(parts)
+
+
+def _build_limit(params: dict, values: list) -> str:
+    limit = params.get("limit")
+    if limit is None:
+        return ""
+    values.append(int(limit))
+    return "LIMIT %s"
+
+
+def _value_placeholder(column: str, value: object, values: list) -> str:
+    if column in _JSONB_COLUMNS and isinstance(value, (dict, list)):
+        values.append(json.dumps(value))
+        return "%s::jsonb"
+    values.append(value)
+    return "%s"
 
 
 @retry_on_transient()
 def _get(path: str, params: dict | None = None) -> list[dict]:
-    response = _client.get(path, params=params)
-    _raise_for_status("GET", path, response)
-    return response.json()
+    table = _table_from_path(path)
+    params = params or {}
+    select_cols = params.get("select", "*")
+    values: list = []
+    where_clause = _build_where(params, values)
+    order_clause = _build_order(params)
+    limit_clause = _build_limit(params, values)
+    sql = f"SELECT {select_cols} FROM {table} {where_clause} {order_clause} {limit_clause}".strip()
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("GET", path, exc) from exc
 
 
 @retry_on_transient()
 def _post(path: str, json_body: list | dict) -> list[dict]:
-    response = _client.post(path, json=_inject_org(json_body))
-    _raise_for_status("POST", path, response)
-    return response.json()
+    table = _table_from_path(path)
+    json_body = _inject_org(json_body)
+    rows = json_body if isinstance(json_body, list) else [json_body]
+    if not rows:
+        return []
+    # Every caller in this file builds each row from the same pydantic model,
+    # so all rows in one call always share the same key set.
+    columns = list(rows[0].keys())
+    col_list = ", ".join(columns)
+    values: list = []
+    value_groups = []
+    for row in rows:
+        placeholders = [_value_placeholder(col, row.get(col), values) for col in columns]
+        value_groups.append("(" + ", ".join(placeholders) + ")")
+    sql = f"INSERT INTO {table} ({col_list}) VALUES {', '.join(value_groups)} RETURNING *"
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("POST", path, exc) from exc
 
 
 @retry_on_transient()
 def _patch(path: str, params: dict, json_body: dict) -> list[dict]:
-    response = _client.patch(path, params=params, json=json_body)
-    _raise_for_status("PATCH", path, response)
-    return response.json()
+    table = _table_from_path(path)
+    values: list = []
+    set_parts = [f"{col} = {_value_placeholder(col, val, values)}" for col, val in json_body.items()]
+    set_clause = ", ".join(set_parts)
+    where_clause = _build_where(params, values)
+    sql = f"UPDATE {table} SET {set_clause} {where_clause} RETURNING *"
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("PATCH", path, exc) from exc
+
+
+@retry_on_transient()
+def _upsert(path: str, json_body: dict, conflict_columns: list[str]) -> list[dict]:
+    """INSERT ... ON CONFLICT (conflict_columns) DO UPDATE ... RETURNING *.
+
+    Atomic replacement for the old "SELECT by key, then PATCH or POST" pattern
+    every upsert_* function used to do by hand: same net effect for a single
+    caller (insert if the key is new, full replace of every other column if it
+    already exists), but in one round trip with no gap between the existence
+    check and the write — the old two-step version had a real (if unlikely in
+    this pipeline's single-writer-per-run usage) TOCTOU race where two
+    concurrent calls for the same key could both see "not found" and both
+    INSERT, producing a duplicate row.
+    """
+    table = _table_from_path(path)
+    json_body = _inject_org(json_body)
+    columns = list(json_body.keys())
+    col_list = ", ".join(columns)
+    values: list = []
+    placeholders = [_value_placeholder(col, json_body.get(col), values) for col in columns]
+    conflict_list = ", ".join(conflict_columns)
+    update_cols = [c for c in columns if c not in conflict_columns]
+    set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+    sql = (
+        f"INSERT INTO {table} ({col_list}) VALUES ({', '.join(placeholders)}) "
+        f"ON CONFLICT ({conflict_list}) DO UPDATE SET {set_clause} "
+        f"RETURNING *"
+    )
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("POST", path, exc) from exc
 
 
 # -- Reads from phase1 tables ---------------------------------------------
@@ -176,19 +338,8 @@ def get_scored_lead_counts_by_icp(icp_id: int) -> dict[str, int]:
 
 def upsert_account_brief(brief: AccountBrief) -> int:
     payload = _account_brief_payload(brief)
-    existing = _get(
-        "/account_intelligence",
-        params={"lead_id": f"eq.{brief.lead_id}", "limit": 1, "select": "id"},
-    )
     try:
-        if existing:
-            rows = _patch(
-                "/account_intelligence",
-                params={"lead_id": f"eq.{brief.lead_id}"},
-                json_body=payload,
-            )
-        else:
-            rows = _post("/account_intelligence", payload)
+        rows = _upsert("/account_intelligence", payload, conflict_columns=["lead_id"])
     except SupabaseError as exc:
         if _missing_table(exc, "account_intelligence"):
             return _local_fallback_append("account_intelligence", payload)
@@ -249,19 +400,8 @@ def upsert_stakeholder_map(smap: StakeholderMap) -> int:
         "champion_budget_flag": smap.champion_budget_flag,
         "refreshed_at": smap.refreshed_at.isoformat(),
     }
-    existing = _get(
-        "/stakeholder_maps",
-        params={"lead_id": f"eq.{smap.lead_id}", "limit": 1, "select": "id"},
-    )
     try:
-        if existing:
-            rows = _patch(
-                "/stakeholder_maps",
-                params={"lead_id": f"eq.{smap.lead_id}"},
-                json_body=payload,
-            )
-        else:
-            rows = _post("/stakeholder_maps", payload)
+        rows = _upsert("/stakeholder_maps", payload, conflict_columns=["lead_id"])
     except SupabaseError as exc:
         if _missing_table(exc, "stakeholder_maps"):
             return _local_fallback_append("stakeholder_maps", payload)
@@ -300,27 +440,8 @@ def get_stakeholder_map_for_lead(lead_id: int) -> dict | None:
 def upsert_competitor(competitor: Competitor) -> int:
     payload = competitor.model_dump(mode="json")
     payload["refreshed_at"] = competitor.refreshed_at.isoformat()
-    existing = _get(
-        "/competitor_intel",
-        params={
-            "icp_id": f"eq.{competitor.icp_id}",
-            "competitor_name": f"eq.{competitor.competitor_name}",
-            "limit": 1,
-            "select": "id",
-        },
-    )
     try:
-        if existing:
-            rows = _patch(
-                "/competitor_intel",
-                params={
-                    "icp_id": f"eq.{competitor.icp_id}",
-                    "competitor_name": f"eq.{competitor.competitor_name}",
-                },
-                json_body=payload,
-            )
-        else:
-            rows = _post("/competitor_intel", payload)
+        rows = _upsert("/competitor_intel", payload, conflict_columns=["icp_id", "competitor_name"])
     except SupabaseError as exc:
         if _missing_table(exc, "competitor_intel"):
             return _local_fallback_append("competitor_intel", payload)
@@ -350,27 +471,8 @@ def upsert_lead_competitor_usage(usage: LeadCompetitorUsage) -> int:
         "evidence": usage.evidence,
         "detected_at": usage.detected_at.isoformat(),
     }
-    existing = _get(
-        "/lead_competitor_usage",
-        params={
-            "lead_id": f"eq.{usage.lead_id}",
-            "competitor_name": f"eq.{usage.competitor_name}",
-            "limit": 1,
-            "select": "id",
-        },
-    )
     try:
-        if existing:
-            rows = _patch(
-                "/lead_competitor_usage",
-                params={
-                    "lead_id": f"eq.{usage.lead_id}",
-                    "competitor_name": f"eq.{usage.competitor_name}",
-                },
-                json_body=payload,
-            )
-        else:
-            rows = _post("/lead_competitor_usage", payload)
+        rows = _upsert("/lead_competitor_usage", payload, conflict_columns=["lead_id", "competitor_name"])
     except SupabaseError as exc:
         if _missing_table(exc, "lead_competitor_usage"):
             return _local_fallback_append("lead_competitor_usage", payload)
@@ -389,27 +491,8 @@ def upsert_market_segments(segments: list[SegmentSizing]) -> list[int]:
         payload.append(row)
     ids: list[int] = []
     for row in payload:
-        existing = _get(
-            "/market_segment_intel",
-            params={
-                "icp_id": f"eq.{row['icp_id']}",
-                "week_of": f"eq.{row['week_of']}",
-                "limit": 1,
-                "select": "id",
-            },
-        )
         try:
-            if existing:
-                returned = _patch(
-                    "/market_segment_intel",
-                    params={
-                        "icp_id": f"eq.{row['icp_id']}",
-                        "week_of": f"eq.{row['week_of']}",
-                    },
-                    json_body=row,
-                )
-            else:
-                returned = _post("/market_segment_intel", row)
+            returned = _upsert("/market_segment_intel", row, conflict_columns=["icp_id", "week_of"])
         except SupabaseError as exc:
             if _missing_table(exc, "market_segment_intel"):
                 ids.append(_local_fallback_append("market_segment_intel", row))
@@ -444,27 +527,8 @@ def get_market_segments(week_of: str | None = None, icp_id: int | None = None) -
 def upsert_gtm_insight(insight: GTMInsight) -> int:
     payload = insight.model_dump(mode="json")
     payload["generated_at"] = insight.generated_at.isoformat()
-    existing = _get(
-        "/gtm_insights",
-        params={
-            "lead_id": f"eq.{insight.lead_id}",
-            "brief_date": f"eq.{insight.brief_date}",
-            "limit": 1,
-            "select": "id",
-        },
-    )
     try:
-        if existing:
-            rows = _patch(
-                "/gtm_insights",
-                params={
-                    "lead_id": f"eq.{insight.lead_id}",
-                    "brief_date": f"eq.{insight.brief_date}",
-                },
-                json_body=payload,
-            )
-        else:
-            rows = _post("/gtm_insights", payload)
+        rows = _upsert("/gtm_insights", payload, conflict_columns=["lead_id", "brief_date"])
     except SupabaseError as exc:
         if _missing_table(exc, "gtm_insights"):
             return _local_fallback_append("gtm_insights", payload)

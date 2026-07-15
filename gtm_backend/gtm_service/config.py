@@ -48,6 +48,11 @@ _load_root_env()
 
 
 class Config:
+    # --- RDS (the single shared CRM Postgres database) -----------------------
+    # gtm_service/db.py connects here directly (psycopg2) for phase_runs,
+    # gtm_schedules, and website_visitor_signals.
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+
     # --- Supabase (the single shared CRM project) ---------------------------
     # The service writes phase_runs / visitor signals with a service-role key.
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
