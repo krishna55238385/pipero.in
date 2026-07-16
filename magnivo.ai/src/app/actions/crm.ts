@@ -1871,6 +1871,24 @@ export async function inviteUser(formData: FormData) {
     )
     if (existingMember.rows[0]) return { error: 'This person is already a member of your organization' }
 
+    const limitResult = await pool.query(
+      `SELECT
+         COALESCE(cs.user_limit, p.max_users) AS effective_limit,
+         (SELECT COUNT(*) FROM public.users WHERE organization_id = $1 AND is_active = true)
+         + (SELECT COUNT(*) FROM public.organization_invites
+              WHERE organization_id = $1 AND status = 'pending' AND expires_at > now()) AS current_count
+       FROM public.client_subscriptions cs
+       LEFT JOIN public.plans p ON lower(p.name) = lower(cs.plan_name)
+       WHERE cs.organization_id = $1`,
+      [orgId]
+    )
+    const limitRow = limitResult.rows[0]
+    if (!limitRow) return { error: 'Unable to verify this organization\'s subscription. Contact your account manager before inviting more users.' }
+    const { effective_limit: effectiveLimit, current_count: currentCount } = limitRow
+    if (effectiveLimit != null && currentCount >= effectiveLimit) {
+      return { error: `This organization has reached its user limit of ${effectiveLimit}. Contact your account manager to increase it.` }
+    }
+
     const token = randomUUID()
     const result = await pool.query(
       `INSERT INTO public.organization_invites (organization_id, email, role, invited_by, token)
