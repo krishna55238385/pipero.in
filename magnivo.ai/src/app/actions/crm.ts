@@ -1767,12 +1767,20 @@ export async function getCurrentUser() {
     const session = await getSessionUser()
     if (!session) return null
 
-    const r = await pool.query('SELECT * FROM public.users WHERE id = $1 LIMIT 1', [session.userId])
+    const r = await pool.query(
+      `SELECT u.*, o.deleted_at AS org_deleted_at
+       FROM public.users u
+       LEFT JOIN public.organizations o ON o.id = u.organization_id
+       WHERE u.id = $1 LIMIT 1`,
+      [session.userId]
+    )
     const user = r.rows[0]
     if (!user || !user.is_active) return null
+    if (user.organization_id && user.org_deleted_at) return null
 
     const roleData = await pool.query('SELECT permissions FROM public.organization_roles WHERE organization_id = $1 AND name = $2 LIMIT 1', [user.organization_id, user.role])
-    return { ...user, permissions: roleData.rows[0]?.permissions || null }
+    const { org_deleted_at, ...userWithoutJoinField } = user
+    return { ...userWithoutJoinField, permissions: roleData.rows[0]?.permissions || null }
   } catch (err: any) { console.error('Error getting current user:', err.message); return null }
 }
 

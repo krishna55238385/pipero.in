@@ -45,12 +45,22 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 }
 
 // Re-checked against the DB on every call so a user deactivated mid-session
-// (toggleUserSuspension/removeUser) is rejected on their next request, not
-// only after their JWT naturally expires. Fails closed on a DB error.
+// (toggleUserSuspension/removeUser), or whose organization is archived
+// (Super Admin "Delete Organization"), is rejected on their next request,
+// not only after their JWT naturally expires. Fails closed on a DB error.
 async function isSessionUserActive(userId: string): Promise<boolean> {
   try {
-    const result = await pool.query('SELECT is_active FROM public.users WHERE id = $1 LIMIT 1', [userId])
-    return result.rows[0]?.is_active === true
+    const result = await pool.query(
+      `SELECT u.is_active, u.organization_id, o.deleted_at AS org_deleted_at
+       FROM public.users u
+       LEFT JOIN public.organizations o ON o.id = u.organization_id
+       WHERE u.id = $1 LIMIT 1`,
+      [userId]
+    )
+    const row = result.rows[0]
+    if (!row || row.is_active !== true) return false
+    if (row.organization_id && row.org_deleted_at) return false
+    return true
   } catch {
     return false
   }

@@ -10,7 +10,11 @@ export async function POST(req: NextRequest) {
   }
 
   const result = await pool.query(
-    'SELECT id, email, password_hash, role, organization_id, full_name FROM public.users WHERE email = $1 AND is_active = true LIMIT 1',
+    `SELECT u.id, u.email, u.password_hash, u.role, u.organization_id, u.full_name
+     FROM public.users u
+     LEFT JOIN public.organizations o ON o.id = u.organization_id
+     WHERE u.email = $1 AND u.is_active = true AND (u.organization_id IS NULL OR o.deleted_at IS NULL)
+     LIMIT 1`,
     [String(email).toLowerCase().trim()]
   )
   const user = result.rows[0]
