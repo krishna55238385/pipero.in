@@ -16,13 +16,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    openai_api_key: str
+    gemini_api_key: str
     # LLM model name — the single source of truth lives in the root .env
-    # (OPENAI_MODEL). Required: never hardcode a model name in the project.
-    openai_model: str
-    # Per-1M-token USD prices for OPENAI_MODEL (cost reporting only).
-    openai_input_cost_per_1m: float = 0.15
-    openai_output_cost_per_1m: float = 0.60
+    # (GEMINI_MODEL). Required: never hardcode a model name in the project.
+    gemini_model: str
+    # Per-1M-token USD prices for GEMINI_MODEL (cost reporting only).
+    gemini_input_cost_per_1m: float = 0.30
+    gemini_output_cost_per_1m: float = 2.50
     serp_api_key: str
     database_url: str
     supabase_url: str

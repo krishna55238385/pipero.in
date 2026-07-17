@@ -7,7 +7,7 @@ discover/extract domain → dedupe within run + against DB → insert.
 import json
 
 from gtm_backend.phase1.connectors import dns as dns_lookup
-from gtm_backend.phase1.connectors import openai as llm
+from gtm_backend.phase1.connectors import gemini as llm
 from gtm_backend.phase1.connectors import serpapi
 from gtm_backend.phase1.connectors import supabase
 from gtm_backend.phase1.core.prompts import LEAD_NORMALIZATION_SYSTEM

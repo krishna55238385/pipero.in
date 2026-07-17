@@ -1,7 +1,7 @@
 """End-to-end test for the Phase 1 pipeline.
 
 Drives ``phase1.main.main(["run-all", "--prompt", ...])`` with every outbound
-HTTP call mocked via ``respx``. No real OpenAI/SerpAPI/Disify/Supabase/DNS
+HTTP call mocked via ``respx``. No real Gemini/SerpAPI/Disify/Supabase/DNS
 traffic. A small in-memory Supabase clone tracks inserts and updates so the
 assertions can verify the agents actually wrote what we expect.
 """
@@ -93,45 +93,43 @@ _SCORING_RESPONSE: dict[str, Any] = {
 }
 
 
-def _openai_message(payload: dict[str, Any]) -> dict[str, Any]:
-    """Wrap a dict into the OpenAI chat-completion response envelope."""
+def _gemini_message(payload: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a dict into the Gemini generateContent response envelope."""
     return {
-        "id": "chatcmpl-test",
-        "object": "chat.completion",
-        "created": 0,
-        "model": os.environ["OPENAI_MODEL"],
-        "choices": [
+        "candidates": [
             {
+                "content": {"parts": [{"text": json.dumps(payload)}], "role": "model"},
+                "finishReason": "STOP",
                 "index": 0,
-                "message": {"role": "assistant", "content": json.dumps(payload)},
-                "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usageMetadata": {
+            "promptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+        },
+        "modelVersion": os.environ["GEMINI_MODEL"],
     }
 
 
-def _openai_handler(request: httpx.Request) -> httpx.Response:
-    """Route OpenAI chat calls to the right canned JSON based on system prompt."""
+def _gemini_handler(request: httpx.Request) -> httpx.Response:
+    """Route Gemini generateContent calls to the right canned JSON based on system prompt."""
     body = json.loads(request.content.decode("utf-8"))
-    system = ""
-    for message in body.get("messages", []):
-        if message.get("role") == "system":
-            system = message.get("content") or ""
-            break
+    system_parts = (body.get("systemInstruction") or {}).get("parts") or []
+    system = "".join(p.get("text", "") for p in system_parts)
 
     if "B2B sales qualification" in system or "llm_icp_score" in system:
-        return httpx.Response(200, json=_openai_message(_SCORING_RESPONSE))
+        return httpx.Response(200, json=_gemini_message(_SCORING_RESPONSE))
     if "extract a structured Ideal Customer Profile" in system:
-        return httpx.Response(200, json=_openai_message(_ICP_RESPONSE))
+        return httpx.Response(200, json=_gemini_message(_ICP_RESPONSE))
     if "extract company records" in system:
-        return httpx.Response(200, json=_openai_message(_LEAD_NORMALIZATION_RESPONSE))
+        return httpx.Response(200, json=_gemini_message(_LEAD_NORMALIZATION_RESPONSE))
     if "decision-maker contact" in system:
-        return httpx.Response(200, json=_openai_message(_CONTACT_RESPONSE))
+        return httpx.Response(200, json=_gemini_message(_CONTACT_RESPONSE))
     if "generate Google search queries" in system:
-        return httpx.Response(200, json=_openai_message(_QUERY_PLAN_RESPONSE))
+        return httpx.Response(200, json=_gemini_message(_QUERY_PLAN_RESPONSE))
     if "buying signal" in system or "signal_type" in system:
-        return httpx.Response(200, json=_openai_message(_SIGNAL_RESPONSE))
+        return httpx.Response(200, json=_gemini_message(_SIGNAL_RESPONSE))
     return httpx.Response(500, json={"error": f"unrouted system prompt: {system[:80]}"})
 
 
@@ -351,8 +349,10 @@ class _FakeSupabase:
 
 
 def _install_routes(router: respx.Router, store: _FakeSupabase) -> None:
-    router.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=_openai_handler,
+    router.route(
+        url__regex=r"^https://generativelanguage\.googleapis\.com/v1beta/models/.+:generateContent.*"
+    ).mock(
+        side_effect=_gemini_handler,
     )
     router.get("https://serpapi.com/search").mock(side_effect=_serpapi_handler)
     router.route(url__regex=r"^https://www\.disify\.com/api/email/.*").mock(
