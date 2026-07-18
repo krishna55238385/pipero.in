@@ -351,7 +351,7 @@ class _FakeSupabase:
 
 
 def _install_routes(router: respx.Router, store: _FakeSupabase) -> None:
-    router.post("https://api.openai.com/v1/chat/completions").mock(
+    router.post("https://api.groq.com/openai/v1/chat/completions").mock(
         side_effect=_openai_handler,
     )
     router.get("https://serpapi.com/search").mock(side_effect=_serpapi_handler)
