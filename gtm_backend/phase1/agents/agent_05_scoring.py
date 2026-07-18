@@ -7,7 +7,7 @@ Also calls an LLM to produce a rich ICP fit score alongside the deterministic on
 import json
 
 from gtm_backend.phase1.connectors import supabase
-from gtm_backend.phase1.connectors import gemini as llm
+from gtm_backend.phase1.connectors import openai as llm
 from gtm_backend.phase1.core.prompts import ICP_SCORING_SYSTEM
 from gtm_backend.phase1.core.scoring import score_lead, tier_for
 

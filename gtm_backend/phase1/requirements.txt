@@ -3,7 +3,7 @@ pydantic>=2.6.0
 pydantic-settings>=2.2.0
 python-dotenv>=1.0.0
 tenacity>=8.2.0
-google-genai>=1.0.0
+openai>=1.30.0
 # Direct-Postgres (RDS) access for connectors/supabase.py.
 psycopg2-binary>=2.9.9
 pytest>=8.0.0

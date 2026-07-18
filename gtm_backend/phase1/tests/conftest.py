@@ -19,8 +19,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-os.environ["GEMINI_API_KEY"] = "test-gemini"
-os.environ["GEMINI_MODEL"] = "gemini-2.5-flash-test"
+os.environ["OPENAI_API_KEY"] = "test-openai"
+os.environ["OPENAI_MODEL"] = "gpt-4o-mini"
 os.environ["SERP_API_KEY"] = "test-serp"
 os.environ["SUPABASE_URL"] = "https://fake.supabase.co"
 os.environ["SUPABASE_KEY"] = "test-supabase"

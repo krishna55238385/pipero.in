@@ -8,7 +8,7 @@ import re
 
 from gtm_backend.phase1.connectors import disify
 from gtm_backend.phase1.connectors import hunter
-from gtm_backend.phase1.connectors import gemini as llm
+from gtm_backend.phase1.connectors import openai as llm
 from gtm_backend.phase1.connectors import serpapi
 from gtm_backend.phase1.connectors import supabase
 from gtm_backend.phase1.connectors import website

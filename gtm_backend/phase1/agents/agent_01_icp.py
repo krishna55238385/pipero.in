@@ -2,7 +2,7 @@
 
 Takes a free-text prompt and produces a structured ICP saved to icp_profiles.
 """
-from gtm_backend.phase1.connectors import gemini as llm
+from gtm_backend.phase1.connectors import openai as llm
 from gtm_backend.phase1.connectors import supabase
 from gtm_backend.phase1.core.prompts import ICP_DEFINITION_SYSTEM
 from gtm_backend.phase1.core.schemas import ICP
