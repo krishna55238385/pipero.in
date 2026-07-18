@@ -175,8 +175,18 @@ def run_commands(
                 text=True,
                 timeout=config.STEP_TIMEOUT,
             )
-        except subprocess.TimeoutExpired:
-            logs = db.append_phase_run_log(run_id, "\n[timeout] step exceeded limit\n", logs)
+        except subprocess.TimeoutExpired as exc:
+            # subprocess.TimeoutExpired.stdout/.stderr come back as bytes even
+            # though text=True is set above (the exception path bypasses the
+            # text-decoding subprocess.run() normally applies) — decode before
+            # concatenating or this raises TypeError and the run never gets
+            # marked failed at all.
+            stdout_part = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr_part = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            partial = stdout_part + stderr_part
+            logs = db.append_phase_run_log(
+                run_id, partial + "\n[timeout] step exceeded limit\n", logs
+            )
             db.update_phase_run(
                 run_id, status="failed", error="step timed out", completed_at=_now_iso()
             )
