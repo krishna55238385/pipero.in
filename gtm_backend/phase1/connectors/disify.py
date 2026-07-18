@@ -4,7 +4,7 @@ from gtm_backend.phase1.core.retries import retry_on_transient
 
 
 _BASE_URL = "https://www.disify.com/api/email"
-_client = httpx.Client(timeout=15.0)
+_client = httpx.Client(timeout=8.0)
 
 
 _FALLBACK: dict = {
@@ -16,7 +16,7 @@ _FALLBACK: dict = {
 }
 
 
-@retry_on_transient()
+@retry_on_transient(max_attempts=2)
 def _fetch(email: str) -> dict:
     response = _client.get(f"{_BASE_URL}/{email}")
     response.raise_for_status()

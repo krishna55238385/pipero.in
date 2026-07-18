@@ -94,7 +94,7 @@ def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None)
     email = lead.get("contact_email")
     verified = bool(lead.get("verified"))
     if not contact_found:
-        contact = _find_contact(company_name, role_keywords, icp_id=icp_id)
+        contact = _find_contact(company_name, role_keywords, domain, icp_id=icp_id)
         contact_found = bool(contact and contact.get("contact_name"))
         if contact_found:
             email, bounce_status, verified = _find_email(contact["contact_name"], domain)
@@ -254,7 +254,37 @@ def _clean_value(value):
     return stripped if stripped.lower() not in _EMPTY_VALUES else None
 
 
-def _find_contact(company_name: str, role_keywords: list[str], icp_id: int | None = None) -> dict | None:
+def _hunter_contact(domain: str, role_keywords: list[str]) -> dict | None:
+    """Reuse Hunter's already-cached domain-search results (free — same lookup
+    ``_enrich_company`` already made for this domain) to see if a real,
+    named contact is already known before paying for a SerpAPI LinkedIn
+    search + LLM extraction call.
+    """
+    entries = hunter.find_emails(domain)
+    named = [e for e in entries if e.get("first_name") and e.get("last_name")]
+    if not named:
+        return None
+
+    def _score(entry: dict) -> tuple[bool, int]:
+        position = (entry.get("position") or "").lower()
+        title_match = any(kw.lower() in position for kw in role_keywords)
+        return (title_match, entry.get("confidence") or 0)
+
+    best = max(named, key=_score)
+    return {
+        "contact_name": f"{best['first_name']} {best['last_name']}".strip(),
+        "contact_title": best.get("position") or None,
+        "contact_linkedin_url": None,
+    }
+
+
+def _find_contact(
+    company_name: str, role_keywords: list[str], domain: str, icp_id: int | None = None
+) -> dict | None:
+    hunter_contact = _hunter_contact(domain, role_keywords)
+    if hunter_contact:
+        return hunter_contact
+
     try:
         snippets = serpapi.search_linkedin(company_name, role_keywords)
     except Exception as exc:
@@ -293,6 +323,11 @@ def _find_email(full_name: str, domain: str) -> tuple[str | None, str | None, bo
     settings = get_settings()
     if settings.hunter_api_key:
         hunter_results = hunter.find_emails(domain)
+        # Cap to the top 3 by confidence instead of trying every result Hunter
+        # returns (up to 10) — each candidate costs a Disify verification call.
+        hunter_results = sorted(
+            hunter_results, key=lambda e: e.get("confidence") or 0, reverse=True
+        )[:3]
         for item in hunter_results:
             email = item.get("email")
             if not email:

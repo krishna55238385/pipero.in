@@ -11,6 +11,7 @@ _settings = get_settings()
 _client = OpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY", ""),
+    timeout=30.0,
 )
 
 
@@ -48,7 +49,7 @@ def log_usage(
         )
 
 
-@retry_on_transient()
+@retry_on_transient(max_attempts=2)
 def chat_json(
     system: str,
     user: str,

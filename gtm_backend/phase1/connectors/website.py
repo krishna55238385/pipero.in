@@ -10,11 +10,11 @@ import re
 import httpx
 
 # A handful of paths most likely to carry HQ address / phone / company facts.
-_PATHS = ("", "/about", "/about-us", "/contact", "/contact-us")
+_PATHS = ("", "/about", "/contact")
 _MAX_CHARS = 6000  # cap text sent downstream to keep the LLM call cheap
 
 _client = httpx.Client(
-    timeout=10.0,
+    timeout=6.0,
     follow_redirects=True,
     headers={"User-Agent": "Mozilla/5.0 (compatible; GTM-Agent/1.0; +enrichment)"},
 )

@@ -6,7 +6,7 @@ from gtm_backend.phase1.core.retries import retry_on_transient
 
 _settings = get_settings()
 _BASE_URL = "https://serpapi.com/search"
-_client = httpx.Client(timeout=30.0)
+_client = httpx.Client(timeout=15.0)
 
 # Trip on the first 429 (free plan out of searches) and short-circuit every
 # later query for the rest of the run instead of retrying each with exponential
@@ -18,7 +18,7 @@ class SerpQuotaError(RuntimeError):
     """Raised when SerpAPI has no searches left, so callers skip cleanly."""
 
 
-@retry_on_transient()
+@retry_on_transient(max_attempts=2)
 def _request(params: dict) -> dict:
     global _quota_exhausted
     if _quota_exhausted:

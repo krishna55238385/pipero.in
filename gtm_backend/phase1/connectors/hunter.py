@@ -8,10 +8,10 @@ from gtm_backend.phase1.core.retries import retry_on_transient
 
 _settings = get_settings()
 _BASE_URL = "https://api.hunter.io/v2/domain-search"
-_client = httpx.Client(timeout=20.0)
+_client = httpx.Client(timeout=12.0)
 
 
-@retry_on_transient()
+@retry_on_transient(max_attempts=2)
 def _fetch(domain: str, api_key: str) -> dict:
     response = _client.get(
         _BASE_URL,
