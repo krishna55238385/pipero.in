@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # Per-1M-token USD prices for OPENAI_MODEL (cost reporting only).
     openai_input_cost_per_1m: float = 0.15
     openai_output_cost_per_1m: float = 0.60
+    # Per-1M-token USD prices for phase1's actual Groq model (llama-3.3-70b-versatile).
+    # Distinct from openai_input/output_cost_per_1m above, which phase2/phase3 use
+    # for their real OpenAI gpt-4o-mini calls — sharing one field would mis-price
+    # whichever phase didn't match the value.
+    groq_input_cost_per_1m: float = 0.59
+    groq_output_cost_per_1m: float = 0.79
     serp_api_key: str
     database_url: str
     supabase_url: str

@@ -14,6 +14,7 @@ _client = OpenAI(
     timeout=30.0,
 )
 
+_ORG_ID = _settings.gtm_org_id or None
 
 
 def log_usage(
@@ -34,10 +35,10 @@ def log_usage(
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO public.token_usage_logs 
-               (model, feature, total_tokens, estimated_cost_usd, date)
-               VALUES (%s, %s, %s, %s, CURRENT_DATE)""",
-            (model, phase or agent, total_tokens, cost)
+            """INSERT INTO public.token_usage_logs
+               (model, feature, total_tokens, estimated_cost_usd, date, organization_id)
+               VALUES (%s, %s, %s, %s, CURRENT_DATE, %s)""",
+            (model, phase or agent, total_tokens, cost, _ORG_ID)
         )
         conn.commit()
         cur.close()
@@ -80,8 +81,8 @@ def chat_json(
     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
     total_tokens = getattr(usage, "total_tokens", 0) or 0
     cost = (
-        prompt_tokens * _settings.openai_input_cost_per_1m
-        + completion_tokens * _settings.openai_output_cost_per_1m
+        prompt_tokens * _settings.groq_input_cost_per_1m
+        + completion_tokens * _settings.groq_output_cost_per_1m
     ) / 1_000_000
     log_usage(agent=agent, model=model, usage=usage, cost=cost, icp_id=icp_id, phase=phase)
 
