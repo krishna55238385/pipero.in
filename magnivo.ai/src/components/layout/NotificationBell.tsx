@@ -21,7 +21,6 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
     }, [initialNotifications])
 
     useEffect(() => {
-        // Handle click outside to close popover
         function handleClickOutside(event: MouseEvent) {
             if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
                 setIsOpen(false)
@@ -31,7 +30,6 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
         return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [])
 
-    // Poll for new notifications (replaces Supabase real-time subscription)
     useEffect(() => {
         if (!userId) return
 
@@ -59,7 +57,6 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
     const handleMarkAsRead = async (e: React.MouseEvent, id: string) => {
         e.preventDefault()
         e.stopPropagation()
-        // Optimistic update
         setNotifications(prev => prev.map(n => n.id === id ? { ...n, read_at: new Date().toISOString() } : n))
         await markAsRead([id])
     }
@@ -76,31 +73,31 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
         <div className="relative" ref={popoverRef}>
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="relative hover:text-gray-900 dark:hover:text-white transition-colors p-1"
+                className="relative flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200 hover:bg-accent cursor-pointer"
                 aria-label="Notifications"
             >
-                <Bell className="h-[18px] w-[18px]" />
+                <Bell className="h-4 w-4 text-muted-foreground" />
                 {unreadCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-red-500 px-[4px] text-[9px] font-bold text-white ring-2 ring-white dark:ring-black border-none">
+                    <span className="absolute top-1 right-1 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-red-500 px-[3px] text-[8px] font-bold text-white ring-1 ring-background">
                         {unreadCount > 9 ? '9+' : unreadCount}
                     </span>
                 )}
             </button>
 
             {isOpen && (
-                <div className="absolute right-0 mt-3 w-80 sm:w-96 bg-white dark:bg-[#1a2235] rounded-2xl shadow-xl shadow-black/10 border border-gray-200 dark:border-border overflow-hidden z-50">
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-border">
-                        <h3 className="font-semibold text-gray-900 dark:text-foreground flex items-center gap-2 text-sm">
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-card rounded-xl border border-border/40 shadow-lg shadow-black/5 overflow-hidden z-50 animate-scale-in">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-border/20">
+                        <h3 className="font-semibold text-foreground flex items-center gap-2 text-sm">
                             Notifications
                             {unreadCount > 0 && (
-                                <span className="bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400 text-[10px] px-2 py-0.5 rounded-full font-bold">
+                                <span className="bg-primary/10 text-primary text-[10px] px-2 py-0.5 rounded-full font-semibold">
                                     {unreadCount} new
                                 </span>
                             )}
                         </h3>
                         <Link
                             href="/notifications"
-                            className="text-xs text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                            className="text-xs text-primary hover:underline font-medium"
                             onClick={() => setIsOpen(false)}
                         >
                             View all
@@ -109,7 +106,7 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
 
                     <div className="max-h-[min(calc(100vh-120px),400px)] overflow-y-auto">
                         {displayList.length === 0 ? (
-                            <div className="py-8 text-center text-sm text-gray-500 dark:text-muted-foreground">
+                            <div className="py-8 text-center text-sm text-muted-foreground">
                                 You have no notifications.
                             </div>
                         ) : (
@@ -117,18 +114,18 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
                                 <div
                                     key={notif.id}
                                     onClick={() => handleItemClick(notif.link_url)}
-                                    className={`group flex gap-3 p-4 hover:bg-gray-50 dark:hover:bg-slate-800/50 transition-colors border-b border-gray-50 dark:border-border last:border-0 cursor-pointer ${!notif.read_at ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}`}
+                                    className={`group flex gap-3 p-4 hover:bg-accent/50 transition-colors border-b border-border/10 last:border-0 cursor-pointer ${!notif.read_at ? 'bg-primary/5' : ''}`}
                                 >
                                     <div className="flex-1 min-w-0">
-                                        <p className={`text-sm ${!notif.read_at ? 'font-semibold text-gray-900 dark:text-foreground' : 'text-gray-700 dark:text-muted-foreground'}`}>
+                                        <p className={`text-sm ${!notif.read_at ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
                                             {notif.title}
                                         </p>
                                         {notif.content && (
-                                            <p className="text-sm text-gray-500 dark:text-muted-foreground truncate mt-0.5">
+                                            <p className="text-sm text-muted-foreground truncate mt-0.5">
                                                 {notif.content}
                                             </p>
                                         )}
-                                        <p className="text-xs text-gray-400 dark:text-muted-foreground mt-1.5">
+                                        <p className="text-xs text-muted-foreground/60 mt-1.5">
                                             {new Date(notif.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                                         </p>
                                     </div>
@@ -136,10 +133,10 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
                                         {!notif.read_at && (
                                             <button
                                                 onClick={(e) => handleMarkAsRead(e, notif.id)}
-                                                className="p-1.5 text-blue-600 hover:bg-blue-100 dark:text-blue-400 dark:hover:bg-blue-500/20 rounded-md transition-colors"
+                                                className="p-1.5 text-primary hover:bg-primary/10 rounded-md transition-colors cursor-pointer"
                                                 title="Mark as read"
                                             >
-                                                <Check className="w-4 h-4" />
+                                                <Check className="w-3.5 h-3.5" />
                                             </button>
                                         )}
                                     </div>
@@ -149,10 +146,10 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
                     </div>
 
                     {displayList.length > 0 && notifications.length > 5 && (
-                        <div className="p-2 border-t border-gray-100 dark:border-border bg-gray-50 dark:bg-[#1a2235]/50 text-center">
+                        <div className="p-2 border-t border-border/20 bg-muted/30 text-center">
                             <Link
                                 href="/notifications"
-                                className="text-xs text-gray-600 dark:text-muted-foreground hover:text-gray-900 dark:hover:text-white font-medium block py-1.5"
+                                className="text-xs text-muted-foreground hover:text-foreground font-medium block py-1.5"
                                 onClick={() => setIsOpen(false)}
                             >
                                 See {notifications.length - 5} more notifications
@@ -164,4 +161,3 @@ export function NotificationBell({ initialNotifications, userId }: { initialNoti
         </div>
     )
 }
-

@@ -40,12 +40,14 @@ export default function ConversationsClient({
   if (conversations.length === 0) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-semibold">Conversations</h1>
+        <h1 className="text-xl font-semibold text-foreground">Conversations</h1>
         <Card>
-          <CardContent className="py-12 text-center">
-            <MessageSquare className="mx-auto h-8 w-8 text-muted-foreground" />
-            <p className="mt-3 text-sm font-medium">No conversations yet</p>
-            <p className="mt-1 text-xs text-muted-foreground">
+          <CardContent className="py-16 text-center">
+            <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-3">
+              <MessageSquare className="h-5 w-5 text-primary" />
+            </div>
+            <p className="text-sm font-semibold text-foreground">No conversations yet</p>
+            <p className="mt-1 text-xs text-muted-foreground max-w-xs mx-auto">
               Threads appear here when a lead replies. Connect your inbox in Engage
               Settings to start receiving conversations.
             </p>
@@ -60,13 +62,13 @@ export default function ConversationsClient({
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Conversations</h1>
+      <h1 className="text-xl font-semibold text-foreground">Conversations</h1>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_1fr]">
         {/* Thread list */}
         <Card className="overflow-hidden">
           <CardContent className="p-0">
-            <ul className="divide-y">
+            <ul className="divide-y divide-border/30">
               {conversations.map((c) => {
                 const isActive = c.id === selected.id
                 const last = c.messages[c.messages.length - 1]

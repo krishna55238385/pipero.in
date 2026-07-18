@@ -125,13 +125,13 @@ export default function EngageSettingsClient({
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Engage Settings</h1>
+      <h1 className="text-xl font-semibold text-foreground">Engage Settings</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="rounded-2xl">
+        <Card className="rounded-xl">
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2">
-              <Mail className="h-4 w-4" /> Gmail
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Mail className="h-4 w-4 text-muted-foreground" /> Gmail
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -146,7 +146,7 @@ export default function EngageSettingsClient({
                   {connectedMailboxes.map((m, i) => (
                     <li
                       key={m.id}
-                      className="flex items-center justify-between gap-2 rounded-xl border px-2.5 py-1.5"
+                      className="flex items-center justify-between gap-2 rounded-lg border border-border/50 px-2.5 py-2"
                     >
                       <span className="truncate text-sm font-medium">{m.email}</span>
                       <span className="flex items-center gap-2 text-[11px] text-muted-foreground whitespace-nowrap">
@@ -165,11 +165,16 @@ export default function EngageSettingsClient({
             <Button
               asChild
               type="button"
-              className="w-full"
+              className="w-full bg-[#EA4335] hover:bg-[#D33426] text-white shadow-sm shadow-[#EA4335]/20"
             >
               <a href="/api/engage/gmail/connect?returnTo=/engage/settings">
-                <PlugZap className="h-4 w-4 mr-2" />
-                {connectedMailboxes.length > 0 ? 'Connect another account' : 'Connect Gmail'}
+                <svg className="h-4 w-4 mr-2" viewBox="0 0 24 24" fill="none">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#fff"/>
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#fff" fillOpacity=".9"/>
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#fff" fillOpacity=".8"/>
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#fff" fillOpacity=".6"/>
+                </svg>
+                {connectedMailboxes.length > 0 ? 'Connect another Gmail account' : 'Connect Gmail'}
               </a>
             </Button>
             <Button
@@ -197,16 +202,16 @@ export default function EngageSettingsClient({
           </CardContent>
         </Card>
 
-        <Card className="rounded-2xl">
-          <CardHeader className="pb-2"><CardTitle>Outlook</CardTitle></CardHeader>
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2"><CardTitle className="text-base">Outlook</CardTitle></CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-sm text-muted-foreground">UI placeholder for Microsoft Graph integration.</p>
+            <p className="text-sm text-muted-foreground">Microsoft Graph integration coming soon.</p>
             <Button type="button" variant="outline" className="w-full" disabled>Connect Outlook</Button>
           </CardContent>
         </Card>
 
-        <Card className="rounded-2xl">
-          <CardHeader className="pb-2"><CardTitle>SMTP</CardTitle></CardHeader>
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2"><CardTitle className="text-base">SMTP</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <p className="text-sm text-muted-foreground">UI placeholder for custom SMTP provider setup.</p>
             <SmtpConnectDialog />
@@ -214,10 +219,10 @@ export default function EngageSettingsClient({
         </Card>
       </div>
 
-      <Card className="rounded-2xl">
+      <Card className="rounded-xl">
         <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2">
-            <CalendarClock className="h-4 w-4" /> Daily lead automation
+          <CardTitle className="flex items-center gap-2 text-base">
+            <CalendarClock className="h-4 w-4 text-muted-foreground" /> Daily lead automation
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -290,7 +295,7 @@ export default function EngageSettingsClient({
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center justify-between rounded-xl border p-3">
+          <div className="flex items-center justify-between rounded-lg border border-border/50 p-3">
               <div>
                 <p className="text-sm font-medium">Auto-send emails</p>
                 <p className="text-xs text-muted-foreground">Off = pipeline runs in dry-run mode, no emails are sent.</p>
@@ -316,10 +321,10 @@ export default function EngageSettingsClient({
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl">
+      <Card className="rounded-xl">
         <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2">
-            <Ban className="h-4 w-4" /> Unsubscribes
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Ban className="h-4 w-4 text-muted-foreground" /> Unsubscribes
             <Badge variant="secondary">{unsubscribes.length}</Badge>
           </CardTitle>
         </CardHeader>

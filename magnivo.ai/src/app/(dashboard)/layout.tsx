@@ -43,9 +43,9 @@ export default async function DashboardLayout({
             userRole={user?.role}
             permissions={user?.permissions || {}}
         >
-            <div className="flex h-screen overflow-hidden bg-white dark:bg-background text-slate-900 dark:text-foreground selection:bg-blue-500/30">
+            <div className="flex h-screen overflow-hidden bg-background text-foreground selection:bg-primary/20">
                 <Sidebar workspaceName={org?.name || 'Workspace'} />
-                <div className="flex flex-col flex-1 overflow-hidden bg-slate-50 dark:bg-background">
+                <div className="flex flex-col flex-1 overflow-hidden bg-background">
                     <GlobalHeader />
                     <MainContent>
                         {children}
@@ -55,5 +55,3 @@ export default async function DashboardLayout({
         </WorkspaceProvider>
     )
 }
-
-

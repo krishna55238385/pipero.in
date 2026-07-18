@@ -301,9 +301,11 @@ export default function ForwardedLeadsClient({
 
             {/* List */}
             {displayList.length === 0 ? (
-                <div className="text-center py-20 border border-dashed border-slate-200 dark:border-border rounded-2xl">
-                    <Share2 className="h-12 w-12 mx-auto text-slate-200 dark:text-slate-700 mb-3" />
-                    <p className="text-slate-500 font-medium text-sm">
+                <div className="text-center py-20 rounded-xl bg-muted/20">
+                    <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-3">
+                        <Share2 className="h-5 w-5 text-primary" />
+                    </div>
+                    <p className="text-foreground font-medium text-sm">
                         {search
                             ? 'No results match your search.'
                             : activeTab === 'received'
@@ -311,7 +313,7 @@ export default function ForwardedLeadsClient({
                                 : 'You haven\'t forwarded any leads yet.'}
                     </p>
                     {activeTab === 'sent' && !search && (
-                        <p className="text-xs text-slate-400 mt-1">
+                        <p className="text-xs text-muted-foreground mt-1">
                             Use the "Forward a Lead" button above or forward from the Leads page.
                         </p>
                     )}

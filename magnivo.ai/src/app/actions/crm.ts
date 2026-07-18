@@ -1827,7 +1827,7 @@ export async function updateAppearanceSettings(settings: any) {
   try {
     await pool.query('UPDATE public.users SET appearance_settings = $1 WHERE id = $2', [JSON.stringify(settings), session.userId])
     return true
-  } catch (err: any) { console.error('[updateAppearanceSettings] failed:', err.message); return false }
+  } catch { return false }
 }
 
 // ─── getUsersHubData ──────────────────────────────────────────────────────────
