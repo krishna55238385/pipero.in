@@ -118,9 +118,11 @@ Return ONLY this JSON shape:
 multi_threading_status = "multi" only if 3+ stakeholders are present."""
 
 
-COMPETITIVE_INTELLIGENCE_SYSTEM = """You analyse a single competitor for an Indian B2B GTM agency targeting
-SMB/Mid-market. Given the competitor name, positioning hints and recent
-web/news snippets, produce a structured competitive intelligence card.
+COMPETITIVE_INTELLIGENCE_SYSTEM = """You analyse a single competitor on behalf of a B2B GTM team selling into the
+ICP described in the input (industry, geography, buyer_titles) — use THAT
+context to judge relevance and overlap, not any assumed market or company
+size. Given the competitor name, positioning hints and recent web/news
+snippets, produce a structured competitive intelligence card.
 
 Hard rules:
 - NEVER disparage the competitor. Frame everything as our differentiation.
@@ -163,10 +165,12 @@ Return ONLY this JSON object (no markdown, no preamble):
 {"competitors": ["Company A", "Company B", "Company C"]}"""
 
 
-COMPETITIVE_INTELLIGENCE_FALLBACK_SYSTEM = """You analyse a single competitor for an Indian B2B GTM agency targeting
-SMB/Mid-market. You have NO live web or news snippets — only the competitor's
-name and the ICP context. Build a best-effort card from your background
-knowledge.
+COMPETITIVE_INTELLIGENCE_FALLBACK_SYSTEM = """You analyse a single competitor on behalf of a B2B GTM team selling into the
+ICP described in the input (industry, geography, buyer_titles) — use THAT
+context to judge relevance and overlap, not any assumed market or company
+size. You have NO live web or news snippets — only the competitor's name and
+the ICP context. Build a best-effort card from your background knowledge,
+tailored to that ICP's actual industry and geography.
 
 Hard rules:
 - NEVER disparage the competitor. Frame everything as our differentiation.
@@ -213,7 +217,9 @@ Definitions:
 Always return concrete figures with units (e.g. "8,500 companies / ~$3.2B", "$420M").
 NEVER return "unknown" for tam_estimate, sam_estimate or som_this_month — estimate them.
 
-Indian B2B seasonality hint: Apr–Jun is budget flush, Jan–Mar is slow.
+Apply realistic seasonality for the ICP's actual geography and industry (e.g.
+budget-flush vs. slow quarters vary by region and fiscal year) — do not assume
+any single country's calendar.
 priority_rank ∈ {1=focus now, 2=secondary, 3=hold}.
 
 Return ONLY this JSON shape:

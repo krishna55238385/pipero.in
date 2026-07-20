@@ -5,6 +5,7 @@ Pipeline: SerpAPI text search per industry × geography → LLM normalize →
 discover/extract domain → dedupe within run + against DB → insert.
 """
 import json
+import re
 
 from gtm_backend.phase1.connectors import dns as dns_lookup
 from gtm_backend.phase1.connectors import openai as llm
@@ -331,16 +332,50 @@ def _dedupe_raw_by_domain(raw_results: list[dict]) -> list[dict]:
     return out
 
 
+# Matches listicle/ranking-style titles ("Top 100 VARs 2024", "Best 25 SaaS
+# tools") which are never a company's own name — even when the *link* is the
+# company's own domain (e.g. a company's own blog post announcing they made
+# such a list). This is the fallback-only path (used when the LLM normalize
+# call fails), so it has no LLM reasoning to catch this the way
+# LEAD_NORMALIZATION_SYSTEM's rejection rule does for the primary path.
+_LISTICLE_TITLE_RE = re.compile(r"^\s*(top|best)\s+\d+\b", re.IGNORECASE)
+
+
+def _company_name_from_domain(url: str) -> str | None:
+    """Best-effort company name derived from a domain ("netatwork.com" ->
+    "Netatwork", "acme-hr.com" -> "Acme Hr"). Used only as a fallback-of-the-
+    fallback when the page title itself looks unusable as a company name.
+    """
+    domain = dns_lookup.extract_domain_from_url(url)
+    if not domain:
+        return None
+    label = domain.split(".")[0]
+    parts = [p for p in re.split(r"[-_]", label) if p]
+    if not parts:
+        return None
+    return " ".join(p.capitalize() for p in parts)
+
+
 def _fallback_normalize(raw_results: list[dict]) -> list[dict]:
     out = []
     for result in raw_results:
         title = result.get("title") or ""
+        link = result.get("link") or ""
         if not title or "..." in title[:5]:
             continue
+        cleaned = title.split(" - ")[0].split(" | ")[0].strip()[:120]
+        if _LISTICLE_TITLE_RE.match(cleaned):
+            # The title is a ranking/listicle headline, not a company name
+            # (this is what previously produced garbage rows like
+            # company_name="Top 100 Vars" for a lead whose real domain,
+            # netatwork.com, belongs to a company called NetAtWork).
+            domain_name = _company_name_from_domain(link)
+            if domain_name:
+                cleaned = domain_name
         out.append({
-            "company_name": title.split(" - ")[0].split(" | ")[0].strip()[:120],
-            "company_website": result.get("link"),
-            "source_url": result.get("link"),
+            "company_name": cleaned,
+            "company_website": link,
+            "source_url": link,
         })
     return out
 
