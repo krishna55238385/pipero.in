@@ -462,6 +462,39 @@ def get_competitors_for_icp(icp_id: int) -> list[dict]:
         raise
 
 
+def delete_stale_competitors(icp_id: int, keep_names: list[str]) -> int:
+    """Remove competitor_intel rows for this ICP not in the current run's set.
+
+    Agent 08's competitor discovery is LLM-driven and can pick a different
+    set of names on each re-run. upsert_competitor() only overwrites rows
+    whose name matches the new set, so without this, a competitor dropped
+    from one run to the next (e.g. "Salesforce Commerce Cloud" swapped for
+    "Magento") would linger in the table forever. Called once per ICP after
+    the current run's names are known and before/after writing new cards.
+    """
+    names = [n for n in keep_names if n]
+    table = _table_from_path("/competitor_intel")
+    values: list = [icp_id]
+    if names:
+        placeholders = ", ".join(["%s"] * len(names))
+        values.extend(names)
+        sql = (
+            f"DELETE FROM {table} WHERE icp_id = %s "
+            f"AND competitor_name NOT IN ({placeholders})"
+        )
+    else:
+        sql = f"DELETE FROM {table} WHERE icp_id = %s"
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                deleted = cur.rowcount
+                conn.commit()
+                return deleted
+    except pg_errors.UndefinedTable:
+        return 0
+
+
 def upsert_lead_competitor_usage(usage: LeadCompetitorUsage) -> int:
     """Insert or update a 'lead already uses competitor X' flag (by lead+name)."""
     payload = {

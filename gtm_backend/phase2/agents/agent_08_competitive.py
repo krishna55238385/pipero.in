@@ -70,6 +70,12 @@ def gather_competitive_intel(icp_id: int | None = None, max_competitors: int = 5
                 continue
             supabase.upsert_competitor(card)
             cards_written += 1
+        # Drop any competitor rows from a prior run of this ICP that aren't in
+        # today's discovered set (LLM discovery can pick a different mix of
+        # names run-to-run — without this, stale competitors pile up forever).
+        removed = supabase.delete_stale_competitors(icp["id"], names)
+        if removed:
+            print(f"  [Agent 08] ICP #{icp['id']} → removed {removed} stale competitor row(s)")
         # Flag any of this ICP's leads whose account brief already mentions one
         # of the tracked competitors (PDF: "flag when a target lead is already
         # using a competitor").

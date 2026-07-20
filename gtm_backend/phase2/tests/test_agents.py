@@ -443,6 +443,10 @@ def test_agent_08_writes_competitor_card_per_discovery(mocker, fake_icp):
         "gtm_backend.phase2.agents.agent_08_competitive.supabase.upsert_competitor",
         return_value=1,
     )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_08_competitive.supabase.delete_stale_competitors",
+        return_value=0,
+    )
 
     summary = gather_competitive_intel(icp_id=None, max_competitors=5)
 
@@ -497,6 +501,10 @@ def test_agent_08_falls_back_to_llm_when_search_empty(mocker, fake_icp):
     upsert_mock = mocker.patch(
         "gtm_backend.phase2.agents.agent_08_competitive.supabase.upsert_competitor",
         return_value=1,
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_08_competitive.supabase.delete_stale_competitors",
+        return_value=0,
     )
 
     summary = gather_competitive_intel(icp_id=None, max_competitors=5)
@@ -838,6 +846,10 @@ def test_agent_08_flags_lead_using_competitor(mocker, fake_icp, fake_lead):
     )
     mocker.patch(
         "gtm_backend.phase2.agents.agent_08_competitive.supabase.upsert_competitor", return_value=1,
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_08_competitive.supabase.delete_stale_competitors",
+        return_value=0,
     )
     mocker.patch(
         "gtm_backend.phase2.agents.agent_08_competitive.supabase.get_leads_for_account_intel",

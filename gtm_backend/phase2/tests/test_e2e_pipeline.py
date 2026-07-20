@@ -273,6 +273,10 @@ def test_phase2_pipeline_end_to_end(
         "gtm_backend.phase2.agents.agent_08_competitive.supabase.upsert_competitor",
         return_value=1,
     )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_08_competitive.supabase.delete_stale_competitors",
+        return_value=0,
+    )
     upsert_segments = mocker.patch(
         "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.upsert_market_segments",
         return_value=[10],
