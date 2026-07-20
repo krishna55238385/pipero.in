@@ -1,9 +1,17 @@
-"""Phase 2 OpenAI client. Behaves identically to phase1.connectors.openai but
-tags every usage row with phase='phase2' and routes the row to the SAME
-llm_usage Supabase table (so the dashboard's 'By Phase' view auto-discovers
-phase2 with zero changes).
+"""Phase 2 LLM client — routed through Groq (same account/model as phase1 and
+phase3), not real OpenAI. Tags every usage row with phase='phase2' and routes
+the row to the SAME llm_usage table (so the dashboard's 'By Phase' view
+auto-discovers phase2 with zero changes).
+
+Points at Groq's OpenAI-compatible endpoint using the same GROQ_API_KEY
+phase1/phase3 use — phase1/2/3 currently share one Groq account and its daily
+quota (1,000 req/day, 100,000 tokens/day; resets every 24h). This was the root
+cause of account_intelligence rows getting stuck at status='scrape_failed':
+Agent 06 correctly worked through both SerpAPI and website-read fallbacks, but
+the final structuring step called real OpenAI, which was quota-exhausted.
 """
 import json
+import os
 
 from openai import OpenAI
 
@@ -12,7 +20,11 @@ from gtm_backend.phase2.core.retries import retry_on_transient
 
 
 _settings = get_settings()
-_client = OpenAI(api_key=_settings.openai_api_key)
+_client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.getenv("GROQ_API_KEY", ""),
+    timeout=30.0,
+)
 
 
 
@@ -57,16 +69,17 @@ def chat_json(
     icp_id: int | None = None,
     phase: str = "phase2",
 ) -> dict:
-    """Call OpenAI with JSON mode. Returns parsed dict. Raises on failure.
+    """Call Groq with JSON mode. Returns parsed dict. Raises on failure.
 
-    The model defaults to OPENAI_MODEL from the root .env (the project's single
-    source of truth); callers may still pass an explicit override.
+    The model defaults to GROQ_MODEL from the root .env; falls back to
+    llama-3.3-70b-versatile if unset. Callers may still pass an explicit
+    override.
     """
-    model = model or _settings.openai_model
+    model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     response = _client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": system},
+            {"role": "system", "content": f"{system}\n\nRespond only in valid JSON format."},
             {"role": "user", "content": user},
         ],
         temperature=temperature,
@@ -79,8 +92,8 @@ def chat_json(
     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
     total_tokens = getattr(usage, "total_tokens", 0) or 0
     cost = (
-        prompt_tokens * _settings.openai_input_cost_per_1m
-        + completion_tokens * _settings.openai_output_cost_per_1m
+        prompt_tokens * _settings.groq_input_cost_per_1m
+        + completion_tokens * _settings.groq_output_cost_per_1m
     ) / 1_000_000
     log_usage(agent=agent, model=model, usage=usage, cost=cost, icp_id=icp_id, phase=phase)
 

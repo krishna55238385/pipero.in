@@ -23,7 +23,9 @@ if str(REPO_ROOT) not in sys.path:
 
 os.environ.setdefault("OPENAI_API_KEY", "test")
 os.environ.setdefault("OPENAI_MODEL", "gpt-4o-mini")
+os.environ.setdefault("GROQ_API_KEY", "test")  # phase2/connectors/openai.py now routes through Groq
 os.environ.setdefault("SERP_API_KEY", "test")
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 os.environ.setdefault("SUPABASE_URL", "https://stub.supabase.co")
 os.environ.setdefault("SUPABASE_KEY", "test")
 os.environ.pop("HUNTER_API_KEY", None)

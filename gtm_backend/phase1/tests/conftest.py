@@ -21,7 +21,9 @@ if str(REPO_ROOT) not in sys.path:
 
 os.environ["OPENAI_API_KEY"] = "test-openai"
 os.environ["OPENAI_MODEL"] = "gpt-4o-mini"
+os.environ["GROQ_API_KEY"] = "test-groq"  # phase1/connectors/openai.py routes through Groq
 os.environ["SERP_API_KEY"] = "test-serp"
+os.environ["DATABASE_URL"] = "postgresql://test:test@localhost/test"
 os.environ["SUPABASE_URL"] = "https://fake.supabase.co"
 os.environ["SUPABASE_KEY"] = "test-supabase"
 os.environ.pop("HUNTER_API_KEY", None)
