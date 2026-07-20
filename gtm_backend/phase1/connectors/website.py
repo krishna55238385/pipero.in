@@ -11,7 +11,7 @@ import httpx
 
 # A handful of paths most likely to carry HQ address / phone / company facts.
 _PATHS = ("", "/about", "/contact")
-_MAX_CHARS = 6000  # cap text sent downstream to keep the LLM call cheap
+_MAX_CHARS = 2200  # cap text sent downstream to keep the LLM call cheap (was 6000 — HQ/size/industry signal lives in the first ~2k chars)
 
 _client = httpx.Client(
     timeout=6.0,

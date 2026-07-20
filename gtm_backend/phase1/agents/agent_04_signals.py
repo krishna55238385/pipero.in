@@ -25,7 +25,7 @@ _INTENT_WEIGHT_SCALE = {"high": 1.0, "low": 0.5}
 _VALID_ENGINES = {"google_news", "google"}
 _MAX_TEXT_LEN = 600
 _MAX_CANDIDATES_PER_LEAD = 12
-_MAX_QUERIES_PER_LEAD = 8
+_MAX_QUERIES_PER_LEAD = 5  # was 8 — each query is a SerpAPI credit; blueprint only asks for 5-7
 
 
 def detect_signals(icp_id: int | None = None, lookback_days: int = 90, limit: int = 50) -> dict:

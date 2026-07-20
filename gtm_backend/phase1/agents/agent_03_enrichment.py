@@ -195,7 +195,7 @@ def _location_snippets(company_name: str) -> list[dict]:
         return []
     return [
         {"title": r.get("title"), "link": r.get("link"), "snippet": r.get("snippet")}
-        for r in results[:5]
+        for r in results[:3]
     ]
 
 
@@ -206,7 +206,7 @@ def _size_snippets(company_name: str) -> list[dict]:
         return []
     return [
         {"title": r.get("title"), "link": r.get("link"), "snippet": r.get("snippet")}
-        for r in results[:5]
+        for r in results[:3]
     ]
 
 
@@ -297,7 +297,7 @@ def _find_contact(
         "preferred_titles": role_keywords,
         "linkedin_snippets": [
             {"title": s.get("title"), "link": s.get("link"), "snippet": s.get("snippet")}
-            for s in snippets[:8]
+            for s in snippets[:5]
         ],
     })
     try:

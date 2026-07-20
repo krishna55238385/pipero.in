@@ -1,4 +1,4 @@
-"""Phase 3 Supabase REST client.
+"""Phase 3 RDS (direct Postgres) client.
 
 Reads from phase1 tables (icp_profiles, leads_raw) and phase2 tables
 (account_intelligence, gtm_insights), and writes to five new phase3 tables:
@@ -10,16 +10,23 @@ Reads from phase1 tables (icp_profiles, leads_raw) and phase2 tables
 
 Also pushes phase3 LLM usage to the shared llm_usage table.
 
-Mirrors phase2/connectors/supabase.py exactly for structure: module-level
-httpx.Client, _get/_post/_patch with @retry_on_transient(), SupabaseError,
-and a local JSONL fallback under phase3/data/fallbacks/ when a phase3 table
-is missing in the live database.
+Migrated from the Supabase REST client to direct psycopg2/RDS access,
+mirroring phase1/connectors/supabase.py's migration exactly: every call site
+in this codebase already builds params PostgREST-style (eq., is.null,
+not.is.null, in.(...), or=(...), order=col.desc, select=col1,col2, limit=N),
+so only the internals of _get/_post/_patch changed — no agent file needed to
+change. The one addition phase1 didn't need is a real SQL upsert (INSERT ...
+ON CONFLICT ... DO UPDATE) since several phase3 tables are upserted by a
+natural key (lead_id, or campaign_id+step_number+variant_subject) rather than
+just inserted.
 """
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import httpx
+import psycopg2
+from psycopg2 import errors as pg_errors
+from psycopg2.extras import RealDictCursor
 
 from gtm_backend.phase3.core.config import get_settings
 from gtm_backend.phase3.core.retries import retry_on_transient
@@ -34,29 +41,33 @@ from gtm_backend.phase3.core.schemas import (
 
 _FALLBACK_DIR = Path(__file__).resolve().parent.parent / "data" / "fallbacks"
 
-
 _settings = get_settings()
-_client = httpx.Client(
-    base_url=f"{_settings.supabase_url}/rest/v1",
-    headers={
-        "apikey": _settings.supabase_key,
-        "Authorization": f"Bearer {_settings.supabase_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    },
-    timeout=30.0,
-)
 
 
-class SupabaseError(httpx.HTTPError):
-    """Raised when Supabase REST returns a non-2xx response."""
+def _get_connection():
+    return psycopg2.connect(_settings.database_url, cursor_factory=RealDictCursor)
+
+
+# Columns whose Postgres type is jsonb and therefore need an explicit
+# json.dumps(...) + ::jsonb cast (see phase3/data/schema.sql). Everything else
+# is a plain scalar column — psycopg2 adapts it directly.
+_JSONB_COLUMNS = {"angles", "steps", "channel_sequence"}
+
+
+class SupabaseError(RuntimeError):
+    """Raised when a query fails against a missing/broken table.
+
+    Keeps the same shape (`status`, `body`) the old REST-based version had so
+    the 404-detection helpers below (`_missing_table`) and any caller's
+    `except SupabaseError` blocks don't need to change.
+    """
 
     def __init__(self, method: str, path: str, status: int, body: str) -> None:
         self.method = method
         self.path = path
         self.status = status
         self.body = body
-        super().__init__(f"Supabase {method} {path} -> {status}: {body}")
+        super().__init__(f"{method} {path} -> {status}: {body}")
 
 
 _ORG_ID = _settings.gtm_org_id or None
@@ -65,7 +76,8 @@ _ORG_ID = _settings.gtm_org_id or None
 def _inject_org(body: list | dict) -> list | dict:
     """Tag insert payloads with organization_id (GTM_ORG_ID) for CRM tenancy.
 
-    No-op when GTM_ORG_ID is unset; setdefault never clobbers an explicit value.
+    No-op when GTM_ORG_ID is unset. setdefault never clobbers an explicit
+    value already on the row.
     """
     if not _ORG_ID:
         return body
@@ -80,46 +92,200 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _raise_for_status(method: str, path: str, response: httpx.Response) -> None:
-    if response.is_success:
-        return
-    body = response.text
-    if response.status_code == 404 and "Could not find the table" in body:
-        body += (
-            "\n\n[hint] One or more phase3 tables are missing. Apply the schema via "
-            "the Supabase SQL editor:\n  python -m phase3 print-schema | pbcopy   "
-            "(then paste into Supabase → SQL editor → Run)\n"
-            "Or copy directly: phase3/data/schema.sql"
-        )
-    raise SupabaseError(method, path, response.status_code, body)
+def _table_from_path(path: str) -> str:
+    return path.lstrip("/")
+
+
+def _missing_table_error(method: str, path: str, exc: Exception) -> SupabaseError:
+    table = _table_from_path(path)
+    body = (
+        f"Could not find the table '{table}' in the schema cache: {exc}\n\n"
+        f"[hint] Apply the schema for this table in RDS "
+        f"(phase3/data/schema.sql), then retry."
+    )
+    return SupabaseError(method, path, 404, body)
+
+
+# --------------------------------------------------------------------------- #
+# PostgREST-style filter/order translation
+#
+# Every call site in this file builds params exactly like it did against the
+# old Supabase REST client (eq., is.null, not.is.null, in.(...), or=(...),
+# order=col.desc, select=col1,col2, limit=N) — only these helpers, plus the
+# request functions below, changed.
+# --------------------------------------------------------------------------- #
+
+def _parse_filter(column: str, expr: str, values: list) -> str:
+    if expr == "is.null":
+        return f"{column} IS NULL"
+    if expr == "not.is.null":
+        return f"{column} IS NOT NULL"
+    if expr.startswith("eq."):
+        values.append(expr[len("eq."):])
+        return f"{column} = %s"
+    if expr.startswith("gte."):
+        values.append(expr[len("gte."):])
+        return f"{column} >= %s"
+    if expr.startswith("in.(") and expr.endswith(")"):
+        inner = expr[len("in.("):-1]
+        items = [v.strip() for v in inner.split(",") if v.strip() != ""]
+        values.extend(items)
+        placeholders = ", ".join(["%s"] * len(items))
+        return f"{column} IN ({placeholders})"
+    raise ValueError(f"Unsupported filter for column {column!r}: {expr!r}")
+
+
+def _parse_or(expr: str, values: list) -> str:
+    """Translate or=(col1.is.null,col2.is.null,...) into (col1 IS NULL OR ...)."""
+    inner = expr[1:-1]  # strip outer ( )
+    conditions = []
+    for part in inner.split(","):
+        column, _, rest = part.partition(".")
+        conditions.append(_parse_filter(column, rest, values))
+    return "(" + " OR ".join(conditions) + ")"
+
+
+def _build_where(params: dict, values: list) -> str:
+    conditions = []
+    for key, expr in params.items():
+        if key in ("select", "order", "limit"):
+            continue
+        if key == "or":
+            conditions.append(_parse_or(expr, values))
+        else:
+            conditions.append(_parse_filter(key, expr, values))
+    if not conditions:
+        return ""
+    return "WHERE " + " AND ".join(conditions)
+
+
+def _build_order(params: dict) -> str:
+    order = params.get("order")
+    if not order:
+        return ""
+    parts = []
+    for item in order.split(","):
+        column, _, direction = item.partition(".")
+        parts.append(f"{column} {'DESC' if direction == 'desc' else 'ASC'}")
+    return "ORDER BY " + ", ".join(parts)
+
+
+def _build_limit(params: dict, values: list) -> str:
+    limit = params.get("limit")
+    if limit is None:
+        return ""
+    values.append(int(limit))
+    return "LIMIT %s"
+
+
+def _value_placeholder(column: str, value: object, values: list) -> str:
+    if column in _JSONB_COLUMNS and isinstance(value, (dict, list)):
+        values.append(json.dumps(value))
+        return "%s::jsonb"
+    values.append(value)
+    return "%s"
 
 
 @retry_on_transient()
 def _get(path: str, params: dict | None = None) -> list[dict]:
-    response = _client.get(path, params=params)
-    _raise_for_status("GET", path, response)
-    return response.json()
+    table = _table_from_path(path)
+    params = params or {}
+    select_cols = params.get("select", "*")
+    values: list = []
+    where_clause = _build_where(params, values)
+    order_clause = _build_order(params)
+    limit_clause = _build_limit(params, values)
+    sql = f"SELECT {select_cols} FROM {table} {where_clause} {order_clause} {limit_clause}".strip()
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("GET", path, exc) from exc
 
 
 @retry_on_transient()
-def _post(path: str, json_body: list | dict, headers: dict | None = None) -> list[dict]:
-    response = _client.post(path, json=_inject_org(json_body), headers=headers)
-    _raise_for_status("POST", path, response)
-    return response.json() if response.content else []
+def _post(path: str, json_body: list | dict) -> list[dict]:
+    table = _table_from_path(path)
+    json_body = _inject_org(json_body)
+    rows = json_body if isinstance(json_body, list) else [json_body]
+    if not rows:
+        return []
+    columns = list(rows[0].keys())
+    col_list = ", ".join(columns)
+    values: list = []
+    value_groups = []
+    for row in rows:
+        placeholders = [_value_placeholder(col, row.get(col), values) for col in columns]
+        value_groups.append("(" + ", ".join(placeholders) + ")")
+    sql = f"INSERT INTO {table} ({col_list}) VALUES {', '.join(value_groups)} RETURNING *"
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("POST", path, exc) from exc
 
 
 @retry_on_transient()
 def _patch(path: str, params: dict, json_body: dict) -> list[dict]:
-    response = _client.patch(path, params=params, json=json_body)
-    _raise_for_status("PATCH", path, response)
-    return response.json() if response.content else []
+    table = _table_from_path(path)
+    values: list = []
+    set_parts = [f"{col} = {_value_placeholder(col, val, values)}" for col, val in json_body.items()]
+    set_clause = ", ".join(set_parts)
+    where_clause = _build_where(params, values)
+    sql = f"UPDATE {table} SET {set_clause} {where_clause} RETURNING *"
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("PATCH", path, exc) from exc
 
 
+@retry_on_transient()
 def _upsert(path: str, json_body: list | dict, on_conflict: str) -> list[dict]:
-    """PostgREST upsert: POST + Prefer: resolution=merge-duplicates on a unique key."""
-    headers = {"Prefer": "resolution=merge-duplicates,return=representation"}
-    full_path = f"{path}?on_conflict={on_conflict}"
-    return _post(full_path, json_body, headers=headers)
+    """SQL equivalent of the old PostgREST upsert (POST + Prefer: resolution=
+    merge-duplicates): INSERT ... ON CONFLICT (key) DO UPDATE SET col = EXCLUDED.col
+    for every non-key column.
+    """
+    table = _table_from_path(path)
+    json_body = _inject_org(json_body)
+    rows = json_body if isinstance(json_body, list) else [json_body]
+    if not rows:
+        return []
+    conflict_cols = [c.strip() for c in on_conflict.split(",")]
+    columns = list(rows[0].keys())
+    update_cols = [c for c in columns if c not in conflict_cols]
+    col_list = ", ".join(columns)
+    conflict_list = ", ".join(conflict_cols)
+    values: list = []
+    value_groups = []
+    for row in rows:
+        placeholders = [_value_placeholder(col, row.get(col), values) for col in columns]
+        value_groups.append("(" + ", ".join(placeholders) + ")")
+    if update_cols:
+        update_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+        conflict_clause = f"DO UPDATE SET {update_clause}"
+    else:
+        conflict_clause = "DO NOTHING"
+    sql = (
+        f"INSERT INTO {table} ({col_list}) VALUES {', '.join(value_groups)} "
+        f"ON CONFLICT ({conflict_list}) {conflict_clause} RETURNING *"
+    )
+    try:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
+                return [dict(row) for row in cur.fetchall()]
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("POST", path, exc) from exc
 
 
 # -- Reads from phase1 tables ---------------------------------------------
@@ -145,8 +311,8 @@ def get_leads_for_personalisation(
 
     Returns lead rows where `company_domain` is set and the lead is not an
     existing customer, each enriched with `_gtm_insight` and `_account_intel`
-    dicts (or None) keyed off lead_id. Done as separate fetches to keep the
-    PostgREST query simple.
+    dicts (or None) keyed off lead_id. Done as separate fetches to keep each
+    query simple.
     """
     params: dict = {
         "company_domain": "not.is.null",
@@ -614,7 +780,7 @@ def insert_llm_usage(
         if exc.status == 404:
             print(
                 "[supabase] llm_usage table missing — usage not persisted. "
-                "Apply schema: python -m phase3 print-schema"
+                "Apply schema: phase3/data/schema.sql"
             )
 
 
@@ -666,7 +832,7 @@ def _local_fallback_append_many(table_name: str, rows: list[dict]) -> list[int]:
 
 
 def _local_fallback_upsert(table_name: str, row: dict, key: list[str]) -> int:
-    """Mirror a PostgREST upsert in the JSONL fallback.
+    """Mirror a SQL upsert in the JSONL fallback.
 
     Replaces the existing row whose ``key`` columns all match (keeping its id),
     otherwise appends a new row. This keeps fallback behaviour consistent with

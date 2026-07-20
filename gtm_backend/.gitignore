@@ -1,0 +1,7 @@
+# SerpAPI disk cache (phase1/connectors/serpapi.py) — local only, never commit.
+.cache/
+
+# Local JSONL fallback storage used when a phaseN table is missing in RDS
+# (phase1/phase3 connectors/supabase.py). Runtime artifact, never commit.
+phase1/data/*.jsonl
+phase3/data/fallbacks/

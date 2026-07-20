@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     openai_input_cost_per_1m: float = 0.15
     openai_output_cost_per_1m: float = 0.60
     serp_api_key: str
+    database_url: str
     supabase_url: str
     supabase_key: str
     hunter_api_key: str | None = None

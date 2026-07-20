@@ -1,6 +1,11 @@
+import hashlib
+import json
+import time
+from pathlib import Path
+
 import httpx
 
-from gtm_backend.phase1.core.config import get_settings
+from gtm_backend.phase1.core.config import REPO_ROOT, get_settings
 from gtm_backend.phase1.core.retries import retry_on_transient
 
 
@@ -13,18 +18,61 @@ _client = httpx.Client(timeout=15.0)
 # backoff — which only adds latency once the quota is gone.
 _quota_exhausted = False
 
+# Disk-backed cache so a re-run against the same ICP/company within a few days
+# (repeat testing, an accidental duplicate "Find Leads" click, a retried pipeline
+# stage) reuses results instead of spending fresh SerpAPI credits. Query results
+# for a given company/topic don't meaningfully change hour to hour, so a short
+# TTL is safe and buys real quota headroom on the 250/month free tier.
+_CACHE_DIR = REPO_ROOT / ".cache" / "serpapi"
+_CACHE_TTL_SECONDS = 4 * 24 * 60 * 60  # 4 days
+
 
 class SerpQuotaError(RuntimeError):
     """Raised when SerpAPI has no searches left, so callers skip cleanly."""
 
 
+def _cache_key(params: dict) -> str:
+    # Stable key across dict ordering; excludes the api_key itself.
+    normalized = json.dumps(params, sort_keys=True)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _cache_path(key: str) -> Path:
+    return _CACHE_DIR / f"{key}.json"
+
+
+def _cache_get(params: dict) -> dict | None:
+    path = _cache_path(_cache_key(params))
+    if not path.exists():
+        return None
+    try:
+        if time.time() - path.stat().st_mtime > _CACHE_TTL_SECONDS:
+            return None
+        return json.loads(path.read_text())
+    except Exception:
+        return None  # corrupt/unreadable cache entry — fall through to a live call
+
+
+def _cache_set(params: dict, data: dict) -> None:
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _cache_path(_cache_key(params)).write_text(json.dumps(data))
+    except Exception:
+        pass  # caching is best-effort — never let a disk issue break a search
+
+
 @retry_on_transient(max_attempts=2)
 def _request(params: dict) -> dict:
     global _quota_exhausted
+
+    cached = _cache_get(params)
+    if cached is not None:
+        return cached
+
     if _quota_exhausted:
         raise SerpQuotaError("SerpAPI quota exhausted earlier this run — skipping search")
-    params = {**params, "api_key": _settings.serp_api_key}
-    response = _client.get(_BASE_URL, params=params)
+    live_params = {**params, "api_key": _settings.serp_api_key}
+    response = _client.get(_BASE_URL, params=live_params)
     if response.status_code == 429:
         _quota_exhausted = True
         print(
@@ -33,7 +81,9 @@ def _request(params: dict) -> dict:
         )
         raise SerpQuotaError("SerpAPI returned 429 (out of searches)")
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    _cache_set(params, data)
+    return data
 
 
 def _days_to_tbs(days: int) -> str:

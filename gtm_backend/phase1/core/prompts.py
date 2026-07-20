@@ -49,54 +49,25 @@ Return JSON:
 }
 Do not invent data. Use null for any field not clearly stated. Do not wrap in markdown."""
 
-COMPANY_ENRICHMENT_SYSTEM = """You extract structured company details from a company's own website text, structured firmographics, and web/LinkedIn search snippets.
+COMPANY_ENRICHMENT_SYSTEM = """Extract structured company details from website text, firmographics, and search snippets.
 
-Input (JSON):
-  {
-    "company_name": "...",
-    "domain": "...",
-    "hunter_metadata": { ... } | {},   // structured firmographics, may be empty
-    "website_text": "cleaned text scraped from the company's homepage / about / contact pages",
-    "location_snippets": [ {"title","link","snippet"}, ... ],  // web results for "<company> headquarters location" — may be empty
-    "size_snippets": [ {"title","link","snippet"}, ... ]       // LinkedIn / web results about employee count — may be empty
-  }
+Input JSON: company_name, domain, hunter_metadata ({}=empty), website_text, location_snippets, size_snippets (arrays of {title,link,snippet}, may be empty).
 
-GOAL: fill EVERY field if at all possible. Empty location and size columns are the main problem we are fixing.
+GOAL: fill every field possible. Location and size are the priority gaps.
 
-Source priority for each field:
-  1. hunter_metadata (structured, most reliable)
-  2. website_text / location_snippets / size_snippets (read HQ address, phone, headcount, LinkedIn here)
-  3. your own knowledge of this company (only for HQ location, country, industry, and a size band)
+Priority per field: 1) hunter_metadata  2) website_text/snippets  3) your own knowledge (location, country, industry, size band only).
 
-LOCATION (company_city / company_state / company_country) — the company's HEADQUARTERS:
-- Always try to give at least company_country, and city when known.
-- Parse a full address or a "City, State, Country" string into the separate fields.
-- If snippets or your knowledge only reveal the country (or a well-known HQ city), still fill those.
+LOCATION (city/state/country = HQ): always give at least country, city if known. Parse full address or "City, State, Country" into parts.
 
-SIZE (company_size) — ALWAYS return an employee-count BAND, never raw text and never null unless truly impossible:
-- Allowed values EXACTLY: "1-10", "11-50", "51-200", "201-500", "501-1000", "1000+".
-- Map any stated headcount into the band (e.g. "approx 120 employees" -> "51-200", "5,000 staff" -> "1000+", "we are a team of 8" -> "1-10").
-- If no headcount is stated anywhere, give your BEST ESTIMATE band from the company's description, maturity, funding, office count, and your knowledge. A reasonable estimate is required; only use null if you genuinely cannot estimate.
+SIZE (company_size): ALWAYS an employee band, never null unless truly impossible.
+Allowed values EXACTLY: "1-10", "11-50", "51-200", "201-500", "501-1000", "1000+".
+Map any headcount to a band (e.g. "~120 employees"->"51-200", "5,000 staff"->"1000+", "team of 8"->"1-10").
+No stated headcount? Give your best estimate from description/maturity/funding/offices/knowledge — null only if truly impossible.
 
-OTHER fields:
-- company_address: full street/postal HQ address if shown, else null.
-- company_phone: main contact number if shown, else null.
-- company_industry: the company's primary industry/sector.
-- company_linkedin_url: a linkedin.com/company/... URL if present, else null.
+OTHER: company_address (full HQ address or null), company_phone (or null), company_industry, company_linkedin_url (linkedin.com/company/... or null).
 
-Return ONLY this JSON:
-{
-  "company_city": "string or null",
-  "company_state": "string or null",
-  "company_country": "string or null",
-  "company_address": "string or null",
-  "company_phone": "string or null",
-  "company_industry": "string or null",
-  "company_size": "one of the allowed bands, or null",
-  "company_size_is_estimate": true | false,
-  "company_linkedin_url": "string or null"
-}
-Do not wrap in markdown. Return ONLY the JSON object."""
+Return ONLY this JSON, no markdown:
+{"company_city":"string|null","company_state":"string|null","company_country":"string|null","company_address":"string|null","company_phone":"string|null","company_industry":"string|null","company_size":"band|null","company_size_is_estimate":true|false,"company_linkedin_url":"string|null"}"""
 
 CONTACT_EXTRACTION_SYSTEM = """You extract the best decision-maker contact from LinkedIn search snippets about a company.
 Prefer Owner > CEO > Founder > President > VP > Director > Manager. Match the ICP buyer_titles when possible.
