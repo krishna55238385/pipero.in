@@ -26,22 +26,38 @@ Inclusion rule: Accept a result if its link appears to be a single company's off
 (e.g. acme.com, acme.com/about, acme.com/company) — even when the snippet does not confirm
 employee count or geography. Set any unknown fields to null.
 
-Rejection rule: Reject aggregator, directory, listicle, AND article/blog-post pages —
-these describe or rank companies but are never a company's own name. This includes:
-- Directory/review sites: g2.com, capterra.com, crunchbase.com, clutch.co, wikipedia.org,
-  yelp.com, leadiq.com, or any site whose page is a lead/contact database profile rather
-  than the company's own site.
-- Listicles: "Top 10 ...", "Best X companies in ...", etc.
-- News/blog/informational articles: any title phrased as a headline rather than a brand
-  name — signals include a question mark ("How Many...?", "Is X the New...?"), a leading
-  interrogative/explainer word ("How", "Why", "What", "Is", "Does", "Custom ... : A Decision
-  Guide"), a colon followed by an explanatory clause, " vs " comparisons, or government/
-  informational domains (.gov, market-research sites) that publish reports rather than run
-  companies. When a result is clearly an article a company itself published on ITS OWN
-  domain (e.g. a company's blog post), extract the company name from the domain/brand
-  instead of using the article's headline as the company_name.
+CRITICAL — company_name is the organization's BRAND, never the raw page title:
+The single most common failure mode is copying a page's literal <title> tag as the
+company_name when that title is actually a headline, report name, careers-page label, or
+listicle — not the company's brand. Before setting company_name, ask: "is this the actual
+name of the organization, or is it describing/ranking/hiring for it?" If it's the latter,
+derive the real brand name from the domain instead (e.g. link "careers.zoom.us" with title
+"Careers" -> company_name "Zoom"; link "blog.acme.com/some-article" -> company_name "Acme").
 
-When in doubt between rejecting and including with nulls, prefer including with nulls.
+Reject/rename (never keep the literal title as company_name) when the title is:
+- A careers/jobs page: "Careers", "We're Hiring", "Join Our Team", "Open Positions", any
+  job-listing headline (e.g. "Senior Account Executive", "Solutions Engineer, Remote").
+- A listicle/ranking: "Top 10 ...", "Best X companies in ...", "8 Best ...", etc.
+- A report/study/analysis title: "... Market Research Report 2034", "... Excerpts from
+  Presentation", "... Sector Thesis Analysis", "Everest Group ... Sourcing ...", or any
+  title naming a THIRD-PARTY analyst/report author rather than the linked company.
+  ("49 Not Out! Excerpts from Presentation" is a report, not a company.)
+- A news/blog/informational article headline: signals include a question mark
+  ("How Many...?", "Is X the New...?"), a leading interrogative/explainer word ("How",
+  "Why", "What", "Is", "Does", "Discover why...", "ICP Definition Framework for..."), a
+  colon followed by an explanatory clause, " vs " comparisons, or government/informational
+  domains (.gov) publishing reports rather than running a company.
+- A directory/review/lead-database profile page: g2.com, capterra.com, crunchbase.com,
+  clutch.co, wikipedia.org, yelp.com, leadiq.com, or similar — these describe a company,
+  they are not the company's own site.
+
+When the title itself is clean but you're unsure of other fields, prefer including with
+nulls rather than dropping the row — this rule is ONLY about not reusing a bad title as
+company_name, not about rejecting rows outright.
+
+Sources for company_name, in priority order: (1) the snippet's clear naming of the
+organization, (2) the domain/brand implied by the link, (3) the page title — ONLY if it
+doesn't match any pattern above.
 
 Return JSON:
 {
