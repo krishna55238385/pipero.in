@@ -372,7 +372,16 @@ def _dedupe_raw_by_domain(raw_results: list[dict]) -> list[dict]:
 # such a list). This is the fallback-only path (used when the LLM normalize
 # call fails), so it has no LLM reasoning to catch this the way
 # LEAD_NORMALIZATION_SYSTEM's rejection rule does for the primary path.
-_LISTICLE_TITLE_RE = re.compile(r"^\s*(top|best)\s+\d+\b", re.IGNORECASE)
+_LISTICLE_TITLE_RE = re.compile(
+    r"^\s*(top|best)\s+\d+\b"    # "Top 10 ...", "Best 25 ..."
+    r"|^\s*\d+\s+(top|best)\b",  # "8 Best ...", "10 Top ..." (number-first phrasing)
+    re.IGNORECASE,
+)
+
+# Generic career/marketing phrases that are titles of a company's own page but
+# never the company name itself ("We're Hiring!", "Careers at ...", "Join Our
+# Team"). Fallback-only, same scope as the two regexes above.
+_GENERIC_PHRASE_TITLES = {"we're hiring", "we are hiring", "join our team", "careers"}
 
 # Broader companion to _LISTICLE_TITLE_RE: catches general article/blog
 # headlines ("How Many U.S. Businesses Offer Health Insurance...", "Custom
@@ -423,7 +432,8 @@ def _fallback_normalize(raw_results: list[dict]) -> list[dict]:
         if not title or "..." in title[:5]:
             continue
         cleaned = title.split(" - ")[0].split(" | ")[0].strip()[:120]
-        if _LISTICLE_TITLE_RE.match(cleaned) or _ARTICLE_TITLE_RE.search(cleaned):
+        is_generic_phrase = cleaned.strip().lower().rstrip("!.") in _GENERIC_PHRASE_TITLES
+        if _LISTICLE_TITLE_RE.match(cleaned) or _ARTICLE_TITLE_RE.search(cleaned) or is_generic_phrase:
             # The title is a ranking/listicle or article/blog headline, not a
             # company name (this is what previously produced garbage rows like
             # company_name="Top 100 Vars" for a lead whose real domain,
