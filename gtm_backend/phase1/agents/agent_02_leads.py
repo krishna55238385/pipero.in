@@ -334,6 +334,10 @@ _AGGREGATOR_DOMAINS = {
     "techcrunch.com", "yourstory.com", "inc42.com", "forbes.com", "bloomberg.com",
     "thesaasnews.com", "entrackr.com", "moneycontrol.com", "retailwire.com",
     "census.gov", "trade.gov", "sba.gov",
+    # Content/document/job-board aggregators — never a company's own site,
+    # regardless of which country subdomain they're on (fr.scribd.com,
+    # us.trabajo.org, etc. all still describe/aggregate, not sell).
+    "scribd.com", "trabajo.org", "slideshare.net", "academia.edu",
 }
 
 
