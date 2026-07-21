@@ -1,7 +1,7 @@
 import json
 import os
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 from gtm_backend.phase1.core.config import get_settings
 from gtm_backend.phase1.core.retries import retry_on_transient
@@ -13,6 +13,19 @@ _client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY", ""),
     timeout=30.0,
 )
+
+# Optional second Groq account/key — used as a fallback when the primary key's
+# daily token quota (TPD) is exhausted. Unset = no fallback, same behaviour as
+# before (RateLimitError propagates to the caller's own fallback logic, if
+# any). Mirrors the SerpAPI -> Serper.dev fallback pattern.
+_FALLBACK_KEY = os.getenv("GROQ_API_KEY_2", "")
+_client_fallback = (
+    OpenAI(base_url="https://api.groq.com/openai/v1", api_key=_FALLBACK_KEY, timeout=30.0)
+    if _FALLBACK_KEY else None
+)
+# Once the primary key hits its daily quota, stop retrying it for the rest of
+# this process — go straight to the fallback client on every subsequent call.
+_use_fallback = False
 
 _ORG_ID = _settings.gtm_org_id or None
 
@@ -50,6 +63,39 @@ def log_usage(
         )
 
 
+def _chat_completion_with_fallback(model: str, system: str, user: str, temperature: float):
+    """Call Groq, switching to the fallback key on a daily-quota rate limit.
+
+    Once the primary key's TPD (tokens-per-day) limit is hit, every later call
+    in this process goes straight to the fallback client — no point re-trying
+    a key that's already known to be exhausted for the day.
+    """
+    global _use_fallback
+    messages = [
+        {"role": "system", "content": f"{system}\n\nRespond only in valid JSON format."},
+        {"role": "user", "content": user},
+    ]
+    if _use_fallback and _client_fallback is not None:
+        return _client_fallback.chat.completions.create(
+            model=model, messages=messages, temperature=temperature,
+            response_format={"type": "json_object"},
+        )
+    try:
+        return _client.chat.completions.create(
+            model=model, messages=messages, temperature=temperature,
+            response_format={"type": "json_object"},
+        )
+    except RateLimitError:
+        if _client_fallback is None:
+            raise
+        print("  [Groq] ⚠ primary key rate-limited (daily quota) — switching to fallback key.")
+        _use_fallback = True
+        return _client_fallback.chat.completions.create(
+            model=model, messages=messages, temperature=temperature,
+            response_format={"type": "json_object"},
+        )
+
+
 @retry_on_transient(max_attempts=2)
 def chat_json(
     system: str,
@@ -66,15 +112,7 @@ def chat_json(
     single source of truth); callers may still pass an explicit override.
     """
     model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-    response = _client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": f"{system}\n\nRespond only in valid JSON format."},
-            {"role": "user", "content": user},
-        ],
-        temperature=temperature,
-        response_format={"type": "json_object"},
-    )
+    response = _chat_completion_with_fallback(model, system, user, temperature)
     # Record usage for EVERY completed API call — before any content validation
     # that could raise — so even a malformed/empty response logs the spend.
     usage = response.usage
