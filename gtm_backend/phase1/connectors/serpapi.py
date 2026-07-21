@@ -57,6 +57,8 @@ def _serper_request(params: dict) -> dict:
     body: dict = {"q": params["q"], "num": min(params.get("num", 10), 10)}
     if params.get("location"):
         body["location"] = params["location"]
+    if params.get("gl"):
+        body["gl"] = params["gl"]
     headers = {"X-API-KEY": _settings.serper_api_key, "Content-Type": "application/json"}
     response = _client.post(url, json=body, headers=headers)
     response.raise_for_status()
@@ -162,11 +164,19 @@ def _days_to_tbs(days: int) -> str:
 
 
 def search(
-    query: str, num: int = 10, location: str | None = None, start: int = 0
+    query: str, num: int = 10, location: str | None = None, start: int = 0,
+    country: str | None = None,
 ) -> list[dict]:
     params: dict = {"engine": "google", "q": query, "num": num}
     if location:
         params["location"] = location
+    if country:
+        # Hard country restriction (SerpAPI's `gl` param). `location` alone is
+        # only a soft ranking hint — Google organic search still surfaces
+        # globally-ranking content for broad terms even with a location set.
+        # This is what let US/global results leak into geography-scoped ICPs
+        # (e.g. "software companies in India" still returning mostly US pages).
+        params["gl"] = country
     if start:
         # Google result offset for pagination (0, num, 2*num, ...).
         params["start"] = start

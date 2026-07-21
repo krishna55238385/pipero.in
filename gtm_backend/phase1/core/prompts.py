@@ -26,9 +26,20 @@ Inclusion rule: Accept a result if its link appears to be a single company's off
 (e.g. acme.com, acme.com/about, acme.com/company) — even when the snippet does not confirm
 employee count or geography. Set any unknown fields to null.
 
-Rejection rule: Reject only pure aggregator, directory, or listicle pages — for example
-links on g2.com, capterra.com, crunchbase.com, clutch.co, wikipedia.org, yelp.com, or
-pages whose title matches patterns like "Top 10 ...", "Best X companies in ...", etc.
+Rejection rule: Reject aggregator, directory, listicle, AND article/blog-post pages —
+these describe or rank companies but are never a company's own name. This includes:
+- Directory/review sites: g2.com, capterra.com, crunchbase.com, clutch.co, wikipedia.org,
+  yelp.com, leadiq.com, or any site whose page is a lead/contact database profile rather
+  than the company's own site.
+- Listicles: "Top 10 ...", "Best X companies in ...", etc.
+- News/blog/informational articles: any title phrased as a headline rather than a brand
+  name — signals include a question mark ("How Many...?", "Is X the New...?"), a leading
+  interrogative/explainer word ("How", "Why", "What", "Is", "Does", "Custom ... : A Decision
+  Guide"), a colon followed by an explanatory clause, " vs " comparisons, or government/
+  informational domains (.gov, market-research sites) that publish reports rather than run
+  companies. When a result is clearly an article a company itself published on ITS OWN
+  domain (e.g. a company's blog post), extract the company name from the domain/brand
+  instead of using the article's headline as the company_name.
 
 When in doubt between rejecting and including with nulls, prefer including with nulls.
 

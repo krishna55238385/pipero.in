@@ -185,9 +185,30 @@ _GEOGRAPHY_LOCATION_MAP = {
     "singapore": "Singapore",
 }
 
+# ISO 3166-1 alpha-2 country codes for SerpAPI's `gl` param — a HARD country
+# restriction, unlike `location` above which is only a soft ranking hint.
+# Without this, broad queries like "software companies in India" kept
+# surfacing mostly US/global results since Google organic search doesn't
+# strictly geo-filter on location text alone.
+_GEOGRAPHY_COUNTRY_CODE_MAP = {
+    "north america": "us",
+    "united states": "us",
+    "usa": "us",
+    "us": "us",
+    "canada": "ca",
+    "europe": "gb",
+    "uk": "gb",
+    "united kingdom": "gb",
+    "india": "in",
+    "australia": "au",
+    "germany": "de",
+    "france": "fr",
+    "singapore": "sg",
+}
 
-def _build_queries(icp: dict, max_leads: int) -> list[tuple[str, str | None]]:
-    """Return a list of (query_string, serpapi_location_or_None) tuples.
+
+def _build_queries(icp: dict, max_leads: int) -> list[tuple[str, str | None, str | None]]:
+    """Return a list of (query_string, serpapi_location_or_None, country_code_or_None) tuples.
 
     Business-stage keywords (``"Series A" OR ...``) are deliberately *not* added:
     they bias Google toward funding-news articles instead of company homepages,
@@ -204,7 +225,15 @@ def _build_queries(icp: dict, max_leads: int) -> list[tuple[str, str | None]]:
                 return mapped
         return None
 
+    def _country_for(geos: list[str]) -> str | None:
+        for geo in geos:
+            mapped = _GEOGRAPHY_COUNTRY_CODE_MAP.get(geo.strip().lower())
+            if mapped:
+                return mapped
+        return None
+
     location = _location_for(geographies)
+    country = _country_for(geographies)
     # Aim for ~half the requested leads in distinct queries (each page then
     # returns up to _PER_QUERY_NUM results), bounded to a sane range.
     target = max(_MIN_QUERIES, min(_MAX_QUERIES, max_leads // 2))
@@ -219,15 +248,15 @@ def _build_queries(icp: dict, max_leads: int) -> list[tuple[str, str | None]]:
         pairs = [(None, geo) for geo in geographies[:5]]
         templates = _GEO_ONLY_TEMPLATES
     else:
-        return [(f"b2b saas companies {_AGGREGATOR_EXCLUSIONS}", None)]
+        return [(f"b2b saas companies {_AGGREGATOR_EXCLUSIONS}", None, None)]
 
     # Template-major order interleaves templates across pairs, so we get breadth
     # (every industry/geo combo) before depth (more phrasings of the same combo).
-    raw_queries: list[tuple[str, str | None]] = []
+    raw_queries: list[tuple[str, str | None, str | None]] = []
     for template in templates:
         for ind, geo in pairs:
             core = template.format(ind=ind, geo=geo)
-            raw_queries.append((f"{core}{size_clause} {_AGGREGATOR_EXCLUSIONS}", location))
+            raw_queries.append((f"{core}{size_clause} {_AGGREGATOR_EXCLUSIONS}", location, country))
             if len(raw_queries) >= target:
                 return raw_queries
     return raw_queries
@@ -240,13 +269,13 @@ def _size_clause(size_min: int | None, size_max: int | None) -> str:
 
 
 def _run_searches(
-    queries: list[tuple[str, str | None]], per_query_num: int, start: int = 0
+    queries: list[tuple[str, str | None, str | None]], per_query_num: int, start: int = 0
 ) -> list[dict]:
     out = []
-    for query, location in queries:
+    for query, location, country in queries:
         try:
             results = serpapi.search(
-                query, num=per_query_num, location=location, start=start
+                query, num=per_query_num, location=location, start=start, country=country
             )
         except Exception as exc:
             print(f"  [Agent 02] serpapi error on '{query}': {exc}")
@@ -294,12 +323,17 @@ _AGGREGATOR_DOMAINS = {
     "trustradius.com", "getapp.com", "softwareadvice.com", "clutch.co",
     "wellfound.com", "angel.co", "glassdoor.com", "indeed.com", "ambitionbox.com",
     "marketresearchfuture.com", "technologycounter.com",
+    # Lead/contact databases — profile pages *about* a company, not its own site.
+    "leadiq.com", "zoominfo.com", "apollo.io", "rocketreach.co", "lusha.com",
+    "owler.com", "dnb.com",
     # Social platforms — never a company's primary site
     "facebook.com", "instagram.com", "twitter.com", "x.com", "youtube.com",
     "reddit.com", "medium.com", "quora.com", "pinterest.com", "tiktok.com",
-    # News / press — describe companies, but aren't their homepages
+    # News / press / trade / government / market-research — describe or report
+    # on companies and industries, but are never a company's own homepage.
     "techcrunch.com", "yourstory.com", "inc42.com", "forbes.com", "bloomberg.com",
-    "thesaasnews.com", "entrackr.com", "moneycontrol.com",
+    "thesaasnews.com", "entrackr.com", "moneycontrol.com", "retailwire.com",
+    "census.gov", "trade.gov", "sba.gov",
 }
 
 
@@ -340,16 +374,41 @@ def _dedupe_raw_by_domain(raw_results: list[dict]) -> list[dict]:
 # LEAD_NORMALIZATION_SYSTEM's rejection rule does for the primary path.
 _LISTICLE_TITLE_RE = re.compile(r"^\s*(top|best)\s+\d+\b", re.IGNORECASE)
 
+# Broader companion to _LISTICLE_TITLE_RE: catches general article/blog
+# headlines ("How Many U.S. Businesses Offer Health Insurance...", "Custom
+# Software Development for Startups: A Decision Guide", "Is Bentonville the
+# New Retail Innovation Capital?") that aren't "Top N" listicles but are still
+# never a company's own name. Same fallback-only scope as above.
+_ARTICLE_TITLE_RE = re.compile(
+    r"^\s*(how|why|what|is|does|are|can|should)\b.*[?:]"  # interrogative/explainer headline
+    r"|\?\s*$"                                             # ends in a question mark
+    r"|:\s*a\s+(decision|complete|beginner'?s?)\s+guide"   # "...: A Decision Guide"
+    r"|\bvs[.]?\s"                                          # "X vs Traditional Y" comparisons
+    , re.IGNORECASE,
+)
+
+
+# Generic subdomains that are never the brand itself ("blog.cimcloud.com"
+# should yield "Cimcloud", not "Blog").
+_GENERIC_SUBDOMAINS = {"www", "blog", "shop", "app", "get", "info", "news", "support", "help"}
+
 
 def _company_name_from_domain(url: str) -> str | None:
     """Best-effort company name derived from a domain ("netatwork.com" ->
-    "Netatwork", "acme-hr.com" -> "Acme Hr"). Used only as a fallback-of-the-
-    fallback when the page title itself looks unusable as a company name.
+    "Netatwork", "acme-hr.com" -> "Acme Hr", "blog.cimcloud.com" -> "Cimcloud").
+    Used only as a fallback-of-the-fallback when the page title itself looks
+    unusable as a company name.
     """
     domain = dns_lookup.extract_domain_from_url(url)
     if not domain:
         return None
-    label = domain.split(".")[0]
+    labels = domain.split(".")
+    # Skip a leading generic subdomain (blog., www., ...) and the TLD, land on
+    # the actual brand label — e.g. ["blog","cimcloud","com"] -> "cimcloud".
+    if len(labels) > 2 and labels[0].lower() in _GENERIC_SUBDOMAINS:
+        label = labels[1]
+    else:
+        label = labels[0]
     parts = [p for p in re.split(r"[-_]", label) if p]
     if not parts:
         return None
@@ -364,11 +423,12 @@ def _fallback_normalize(raw_results: list[dict]) -> list[dict]:
         if not title or "..." in title[:5]:
             continue
         cleaned = title.split(" - ")[0].split(" | ")[0].strip()[:120]
-        if _LISTICLE_TITLE_RE.match(cleaned):
-            # The title is a ranking/listicle headline, not a company name
-            # (this is what previously produced garbage rows like
+        if _LISTICLE_TITLE_RE.match(cleaned) or _ARTICLE_TITLE_RE.search(cleaned):
+            # The title is a ranking/listicle or article/blog headline, not a
+            # company name (this is what previously produced garbage rows like
             # company_name="Top 100 Vars" for a lead whose real domain,
-            # netatwork.com, belongs to a company called NetAtWork).
+            # netatwork.com, belongs to a company called NetAtWork — and more
+            # broadly any "How Many...?"/"X vs Y"/"...: A Decision Guide" title).
             domain_name = _company_name_from_domain(link)
             if domain_name:
                 cleaned = domain_name
