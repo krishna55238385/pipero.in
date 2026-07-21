@@ -65,7 +65,7 @@ def chat_json(
     The model defaults to OPENROUTER_MODEL from the root .env (the project's
     single source of truth); callers may still pass an explicit override.
     """
-    model = model or os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+    model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     response = _client.chat.completions.create(
         model=model,
         messages=[
@@ -73,6 +73,7 @@ def chat_json(
             {"role": "user", "content": user},
         ],
         temperature=temperature,
+        response_format={"type": "json_object"},
     )
     # Record usage for EVERY completed API call — before any content validation
     # that could raise — so even a malformed/empty response logs the spend.
