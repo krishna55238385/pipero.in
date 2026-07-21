@@ -466,15 +466,29 @@ function OutreachTab({ outreach }: { outreach: OutreachBundle }) {
             <div className="space-y-2">
               {sequence.steps.map((step, i) => {
                 const s = step as Record<string, unknown>
-                const subject = s.subject ?? s.title ?? s.channel ?? `Step ${i + 1}`
-                const body = s.body ?? s.message ?? s.text ?? ''
+                // Agent 12 (phase3 copywriter) writes each step as
+                // {step_number, step_type, delay_days, variants: [{subject, body}, ...]}
+                // — subject/body live inside variants, not on the step itself. Fall
+                // back to legacy flat {subject, body, channel} shape if present, for
+                // any older rows written before this shape existed.
+                const variants = Array.isArray(s.variants) ? (s.variants as Record<string, unknown>[]) : []
+                const primary = variants[0] ?? {}
+                const stepType = (s.step_type as string) ?? null
+                const subject = primary.subject ?? s.subject ?? s.title ?? s.channel ?? `Step ${i + 1}`
+                const body = primary.body ?? s.body ?? s.message ?? s.text ?? ''
                 return (
                   <div key={i} className="rounded-lg border bg-card p-3 space-y-1">
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className="text-[10px]">Step {i + 1}</Badge>
+                      {stepType && <Badge variant="secondary" className="text-[10px] capitalize">{stepType.replace('_', ' ')}</Badge>}
                       <span className="text-sm font-medium text-foreground">{String(subject)}</span>
                     </div>
                     {body ? <p className="text-sm text-muted-foreground whitespace-pre-wrap">{String(body)}</p> : null}
+                    {variants.length > 1 && (
+                      <p className="text-xs text-muted-foreground italic">
+                        +{variants.length - 1} more variant{variants.length - 1 > 1 ? 's' : ''} for A/B testing
+                      </p>
+                    )}
                   </div>
                 )
               })}
