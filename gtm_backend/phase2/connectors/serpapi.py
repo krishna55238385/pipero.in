@@ -23,10 +23,62 @@ class SerpQuotaError(RuntimeError):
     """Raised when SerpAPI has no searches left, so callers skip cleanly."""
 
 
+_SERPER_SEARCH_URL = "https://google.serper.dev/search"
+_SERPER_NEWS_URL = "https://google.serper.dev/news"
+
+
+def _serper_available() -> bool:
+    return bool(_settings.serper_api_key)
+
+
+def _serper_request(params: dict) -> dict:
+    """Call Serper.dev and translate its response into SerpAPI's shape.
+
+    Mirrors phase1/connectors/serpapi.py's fallback — only used when SerpAPI
+    returns 429 and SERPER_API_KEY is set. Callers (search/search_news/
+    search_linkedin_people) need zero changes since the returned shape
+    matches SerpAPI's organic_results/news_results keys.
+    """
+    is_news = params.get("engine") == "google_news"
+    url = _SERPER_NEWS_URL if is_news else _SERPER_SEARCH_URL
+    body: dict = {"q": params["q"], "num": params.get("num", 10)}
+    if params.get("location"):
+        body["location"] = params["location"]
+    headers = {"X-API-KEY": _settings.serper_api_key, "Content-Type": "application/json"}
+    response = _client.post(url, json=body, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+
+    if is_news:
+        return {
+            "news_results": [
+                {
+                    "title": item.get("title"),
+                    "link": item.get("link"),
+                    "snippet": item.get("snippet"),
+                    "date": item.get("date"),
+                }
+                for item in data.get("news", [])
+            ]
+        }
+    return {
+        "organic_results": [
+            {
+                "title": item.get("title"),
+                "link": item.get("link"),
+                "snippet": item.get("snippet"),
+            }
+            for item in data.get("organic", [])
+        ]
+    }
+
+
 @retry_on_transient()
 def _request(params: dict) -> dict:
     global _quota_exhausted
     if _quota_exhausted:
+        if _serper_available():
+            return _serper_request(params)
         raise SerpQuotaError("SerpAPI quota exhausted earlier this run — skipping search")
     params = {**params, "api_key": _settings.serp_api_key}
     response = _client.get(_BASE_URL, params=params)
@@ -34,9 +86,12 @@ def _request(params: dict) -> dict:
         _quota_exhausted = True
         print(
             "  [SerpAPI] ⚠ HTTP 429 — out of searches / rate-limited. "
-            "Disabling web search for the rest of this run; agents will use free "
-            "fallbacks (direct website reads / model knowledge)."
+            + ("Falling back to Serper.dev." if _serper_available()
+               else "Disabling web search for the rest of this run; agents will use free "
+                    "fallbacks (direct website reads / model knowledge).")
         )
+        if _serper_available():
+            return _serper_request(params)
         raise SerpQuotaError("SerpAPI returned 429 (out of searches)")
     response.raise_for_status()
     return response.json()

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     groq_input_cost_per_1m: float = 0.59
     groq_output_cost_per_1m: float = 0.79
     serp_api_key: str
+    # Optional fallback search provider — used when SerpAPI returns 429 (quota
+    # exhausted). Unset = no fallback, same behaviour as before (SerpQuotaError
+    # propagates and callers use their existing LLM-knowledge fallback, if any).
+    serper_api_key: str | None = None
     database_url: str
     supabase_url: str
     supabase_key: str
