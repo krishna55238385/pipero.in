@@ -41,7 +41,11 @@ def _serper_request(params: dict) -> dict:
     """
     is_news = params.get("engine") == "google_news"
     url = _SERPER_NEWS_URL if is_news else _SERPER_SEARCH_URL
-    body: dict = {"q": params["q"], "num": params.get("num", 10)}
+    # Serper's free tier rejects num > 10 with a 400 ("Query pattern not
+    # allowed for free accounts" — misleading wording, it's actually a num
+    # cap). SerpAPI has no such limit, so callers can request more; clamp here
+    # rather than trusting every caller to stay under it.
+    body: dict = {"q": params["q"], "num": min(params.get("num", 10), 10)}
     if params.get("location"):
         body["location"] = params["location"]
     headers = {"X-API-KEY": _settings.serper_api_key, "Content-Type": "application/json"}
@@ -128,32 +132,13 @@ def search_news(query: str, days: int = 90, num: int = 10) -> list[dict]:
     return data.get("news_results", []) or []
 
 
-_LINKEDIN_ROLE_CAP = 3
-
-
 def search_linkedin_people(
     company_name: str,
     role_keywords: list[str] | None = None,
     num: int = 10,
 ) -> list[dict]:
-    """Find LinkedIn profile snippets at a company, biased toward decision-makers.
-
-    One plain query per role rather than a single `("A" OR "B" OR ...)` boolean
-    query — Serper's free tier rejects that compound pattern with a 400
-    ("Query pattern not allowed for free accounts"), while SerpAPI accepted it
-    fine. Capped at the first few roles so a fallback run doesn't multiply
-    quota use per lead.
-    """
-    role_keywords = (role_keywords or ["CEO", "Founder", "VP", "Director", "Head"])
-    role_keywords = role_keywords[:_LINKEDIN_ROLE_CAP]
-
-    seen_links: set[str] = set()
-    merged: list[dict] = []
-    for role in role_keywords:
-        query = f'site:linkedin.com/in "{company_name}" {role}'
-        for result in search(query, num=num):
-            link = result.get("link")
-            if link and link not in seen_links:
-                seen_links.add(link)
-                merged.append(result)
-    return merged[:num]
+    """Find LinkedIn profile snippets at a company, biased toward decision-makers."""
+    role_keywords = role_keywords or ["CEO", "Founder", "VP", "Director", "Head"]
+    roles_clause = " OR ".join(f'"{role}"' for role in role_keywords)
+    query = f'site:linkedin.com/in "{company_name}" ({roles_clause})'
+    return search(query, num=num)

@@ -50,7 +50,11 @@ def _serper_request(params: dict) -> dict:
     """
     is_news = params.get("engine") == "google_news"
     url = _SERPER_NEWS_URL if is_news else _SERPER_SEARCH_URL
-    body: dict = {"q": params["q"], "num": params.get("num", 10)}
+    # Serper's free tier rejects num > 10 with a 400 ("Query pattern not
+    # allowed for free accounts" — misleading wording, it's actually a num
+    # cap). SerpAPI has no such limit, so callers can request more; clamp here
+    # rather than trusting every caller to stay under it.
+    body: dict = {"q": params["q"], "num": min(params.get("num", 10), 10)}
     if params.get("location"):
         body["location"] = params["location"]
     headers = {"X-API-KEY": _settings.serper_api_key, "Content-Type": "application/json"}
