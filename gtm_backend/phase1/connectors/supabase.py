@@ -8,7 +8,7 @@ from psycopg2.extras import RealDictCursor
 
 from gtm_backend.phase1.core.config import get_settings
 from gtm_backend.phase1.core.retries import retry_on_transient
-from gtm_backend.phase1.core.schemas import ICP, BuyingSignal, Lead, ScoreResult
+from gtm_backend.phase1.core.schemas import ICP, BuyingSignal, Lead, ScoreResult, SocialListeningLead
 
 _LOCAL_SIGNALS_PATH = Path(__file__).resolve().parent.parent / "data" / "buying_signals.jsonl"
 
@@ -526,3 +526,44 @@ def insert_llm_usage(
                 "Apply schema: python -m phase1 print-schema"
             )
         # always swallow — never break the pipeline
+
+
+def get_social_listening_source_urls(icp_id: int | None) -> set[str]:
+    """Existing source_urls for this ICP, so a re-run never re-inserts the same
+    post twice (unique index on (icp_id, source_url) also enforces this at the
+    DB level; this check just avoids a noisy constraint-violation round trip).
+    """
+    params: dict = {"select": "source_url"}
+    if icp_id is not None:
+        params["icp_id"] = f"eq.{icp_id}"
+    try:
+        rows = _get("/social_listening_leads", params=params)
+    except SupabaseError as exc:
+        if exc.status == 404:
+            return set()
+        raise
+    return {r["source_url"] for r in rows if r.get("source_url")}
+
+
+def insert_social_listening_leads(rows: list[SocialListeningLead]) -> list[int]:
+    """Insert new social-listening candidates. Silently skipped (not raised) if
+    the table is missing, so Agent 20 never breaks a phase1 run-all — it's an
+    additive/optional agent, not a required step in the pipeline yet."""
+    if not rows:
+        return []
+    payload = []
+    for row in rows:
+        d = row.model_dump(exclude_none=False)
+        d["discovered_at"] = row.discovered_at.isoformat()
+        payload.append(d)
+    try:
+        inserted = _post("/social_listening_leads", payload)
+    except SupabaseError as exc:
+        if exc.status == 404:
+            print(
+                "[supabase] social_listening_leads table missing — candidates not persisted. "
+                "Apply schema: python -m phase1 print-schema"
+            )
+            return []
+        raise
+    return [r["id"] for r in inserted]

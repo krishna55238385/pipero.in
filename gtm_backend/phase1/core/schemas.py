@@ -109,6 +109,26 @@ class BuyingSignal(BaseModel):
     detected_at: datetime = Field(default_factory=_utc_now)
 
 
+class SocialListeningLead(BaseModel):
+    """A public-signal candidate detected by Agent 20. Stored in
+    social_listening_leads, always as a human-review candidate — never
+    auto-promoted into leads_raw (mirrors the "no blind automation on
+    unverified data" pattern the rest of phase1 follows for company names).
+    """
+
+    icp_id: int | None = None
+    platform: str = "web"  # reddit | twitter | forum | news | web
+    signal_text: str
+    source_url: str
+    candidate_company: str | None = None
+    candidate_person: str | None = None
+    candidate_title: str | None = None
+    matched_pain_point: str | None = None
+    confidence: str = "low"  # high | medium | low
+    status: str = "candidate"  # candidate | promoted | dismissed
+    discovered_at: datetime = Field(default_factory=_utc_now)
+
+
 class ScoreResult(BaseModel):
     lead_id: int
     icp_score: int = Field(ge=0, le=100)

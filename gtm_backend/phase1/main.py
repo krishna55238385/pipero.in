@@ -9,6 +9,7 @@ from gtm_backend.phase1.agents.agent_02_leads import generate_leads
 from gtm_backend.phase1.agents.agent_03_enrichment import enrich_leads
 from gtm_backend.phase1.agents.agent_04_signals import detect_signals
 from gtm_backend.phase1.agents.agent_05_scoring import score_leads
+from gtm_backend.phase1.agents.agent_20_social_listening import run_social_listening
 from gtm_backend.phase1.connectors import supabase
 
 _SCHEMA_PATH = Path(__file__).resolve().parent / "data" / "schema.sql"
@@ -42,6 +43,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_score.add_argument("--icp", type=int, default=None, dest="icp_id")
     p_score.add_argument("--lead-id", type=int, default=None, dest="lead_id")
     p_score.add_argument("--limit", type=int, default=500)
+
+    p_social = sub.add_parser(
+        "social-listening",
+        help="Agent 20: find NEW public-signal candidates for an ICP (--icp optional; omit to scan all active ICPs)",
+    )
+    p_social.add_argument("--icp", type=int, default=None, dest="icp_id")
+    p_social.add_argument("--limit", type=int, default=None, help="max ICPs to scan when --icp is omitted")
 
     p_all = sub.add_parser("run-all", help="Chain 01 → 02 → 03 → 04 → 05")
     p_all.add_argument("--prompt", type=str, required=True)
@@ -113,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         detect_signals(args.icp_id, args.lookback_days, args.limit)
     elif command == "score":
         score_leads(args.mode, args.lead_id, args.icp_id, args.limit)
+    elif command == "social-listening":
+        run_social_listening(args.icp_id, args.limit)
     elif command == "run-all":
         start = time.perf_counter()
         icp_id = define_icp(args.prompt)

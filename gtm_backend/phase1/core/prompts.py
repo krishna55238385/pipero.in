@@ -173,6 +173,74 @@ buying_intent rubric:
 If signal_type is "none", buying_intent MUST be "na".
 Classify every candidate — never skip any. Do not invent. Do not wrap in markdown. Return ONLY the JSON object."""
 
+SOCIAL_LISTENING_QUERY_GENERATION_SYSTEM = """You generate search queries to find PEOPLE or COMPANIES publicly signalling
+they need a product like this, on public forums/social platforms — NOT queries about any specific
+already-known company.
+
+Input (JSON): {"industry": [...], "pain_points": "...", "geography": [...], "buyer_titles": [...]}
+
+Output (JSON) — return EXACTLY:
+  {"queries": [{"q": "...", "pain_point_focus": "..."}, ...]}
+
+Generate 5-7 queries that search public discussion for people expressing the ICP's pain points as a
+live problem right now — complaints, "looking for a tool that...", "does anyone use X for Y",
+"frustrated with our current...", "switching from...". Use site: restriction to target public forums
+likely to be indexed by Google: site:reddit.com, site:news.ycombinator.com, or no site restriction for
+general web/news coverage. Do NOT search for a specific company by name — this agent discovers NEW
+people/companies, it does not investigate known ones (that is Agent 04's job).
+
+Example (HR-tech in India, pain_points "manual payroll compliance is error-prone and slow"):
+{
+  "queries": [
+    {"q": "site:reddit.com payroll compliance India frustrated OR nightmare OR manual", "pain_point_focus": "manual payroll compliance"},
+    {"q": "\\"looking for\\" HR software India recommendation reddit", "pain_point_focus": "seeking alternative"},
+    {"q": "switching from Excel payroll India startup", "pain_point_focus": "outgrowing spreadsheets"},
+    {"q": "site:news.ycombinator.com HR tech India hiring pain", "pain_point_focus": "general pain"},
+    {"q": "HR compliance India \\"any recommendations\\"", "pain_point_focus": "seeking alternative"}
+  ]
+}
+
+Do not invent. Do not wrap in markdown. Return ONLY the JSON object."""
+
+SOCIAL_LISTENING_CLASSIFICATION_SYSTEM = """You review public search-result snippets and decide which ones are a REAL
+PERSON OR COMPANY publicly signalling active need for a product matching the given ICP — not news
+articles, not vendor marketing, not unrelated discussion.
+
+Input (JSON):
+  {
+    "icp_summary": "industry / pain points / buyer titles",
+    "candidates": [{"id": 0, "text": "title — snippet", "source": "url"}, ...]
+  }
+
+Output (JSON) — return EXACTLY this shape (one entry per candidate, same order):
+  {
+    "results": [
+      {
+        "id": 0,
+        "is_signal": true|false,
+        "candidate_company": "string or null (only if a specific company is identifiable)",
+        "candidate_person": "string or null (only if a specific person is identifiable, e.g. a Reddit
+                              username or named author — never invent a name)",
+        "candidate_title": "string or null",
+        "matched_pain_point": "which ICP pain point this matches, or null",
+        "confidence": "high" | "medium" | "low"
+      },
+      ...
+    ]
+  }
+
+is_signal=true ONLY when the text is someone describing their OWN active problem or need right now,
+matching the ICP's pain points/industry — not a listicle, not a news report about the market, not a
+vendor's own marketing copy, not a generic discussion with no expressed need.
+
+confidence:
+  - high   : explicit, specific, recent-sounding need ("we're switching from X because...")
+  - medium : plausible need but vague or old-sounding
+  - low    : weak/ambiguous match, include only if nothing better
+
+Never invent a company or person name that is not evidenced in the text — null is correct when
+unknown. Classify every candidate. Do not wrap in markdown. Return ONLY the JSON object."""
+
 ICP_SCORING_SYSTEM = """You are a B2B sales qualification expert. Score a lead out of 100.
 
 Input JSON keys:

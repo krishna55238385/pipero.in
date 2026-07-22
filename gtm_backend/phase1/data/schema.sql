@@ -115,3 +115,47 @@ CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(model);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_phase ON llm_usage(phase);
 
 UPDATE llm_usage SET phase = 'phase1' WHERE phase IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- Agent 20 — Social Listening (PDF Phase 4 — ENGAGE)
+-- Catches people/companies publicly signalling they need what you offer
+-- (Reddit/forum/news posts matching an ICP's pain points), independent of
+-- the already-known leads_raw list. Candidates are NEVER auto-promoted into
+-- leads_raw — a human reviews and promotes via the CRM, same "no blind
+-- automation on unverified data" principle as the rest of phase1.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS social_listening_leads (
+    id BIGSERIAL PRIMARY KEY,
+    icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE CASCADE,
+    platform TEXT,                     -- reddit | twitter | forum | news | web
+    signal_text TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    candidate_company TEXT,
+    candidate_person TEXT,
+    candidate_title TEXT,
+    matched_pain_point TEXT,
+    confidence TEXT CHECK (confidence IN ('high', 'medium', 'low')),
+    status TEXT NOT NULL DEFAULT 'candidate', -- candidate | promoted | dismissed
+    promoted_lead_id BIGINT REFERENCES leads_raw(id) ON DELETE SET NULL,
+    discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE CASCADE;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS platform TEXT;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS signal_text TEXT;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS candidate_company TEXT;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS candidate_person TEXT;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS candidate_title TEXT;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS matched_pain_point TEXT;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS confidence TEXT;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'candidate';
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS promoted_lead_id BIGINT REFERENCES leads_raw(id) ON DELETE SET NULL;
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS organization_id UUID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_social_listening_source_url ON social_listening_leads(icp_id, source_url);
+CREATE INDEX IF NOT EXISTS idx_social_listening_icp_id ON social_listening_leads(icp_id);
+CREATE INDEX IF NOT EXISTS idx_social_listening_status ON social_listening_leads(status);
