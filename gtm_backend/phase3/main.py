@@ -46,6 +46,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ab = sub.add_parser("ab-test", help="Agent 15: score variants from Instantly analytics")
     p_ab.add_argument("--campaign-id", type=str, default=None, dest="campaign_id")
 
+    p_follow = sub.add_parser(
+        "followups", help="Agent 19: advance leads to the next due sequence step (steps 2..N)"
+    )
+    p_follow.add_argument("--icp", type=int, default=None, dest="icp_id")
+    p_follow.add_argument("--limit", type=int, default=None)
+    p_follow.add_argument("--dry-run", action="store_true", dest="dry_run")
+
     p_all = sub.add_parser("run-all", help="Chain 11 → 12 → 13 → 14 (15 skipped — needs live data)")
     p_all.add_argument("--icp", type=int, default=None, dest="icp_id")
     p_all.add_argument("--limit", type=int, default=None)
@@ -95,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "ab-test":
         from gtm_backend.phase3.agents.agent_15_ab_testing import run_ab_testing
         run_ab_testing(args.campaign_id)
+    elif command == "followups":
+        from gtm_backend.phase3.agents.agent_19_followup import run_followups
+        run_followups(args.icp_id, args.limit, args.dry_run)
     elif command == "run-all":
         from gtm_backend.phase3.agents.agent_11_personalisation import run_personalisation
         from gtm_backend.phase3.agents.agent_12_copywriter import run_copywriting
