@@ -47,11 +47,17 @@ def generate_leads(
     print(f"  → Built {len(queries)} SerpAPI queries")
     existing = supabase.get_existing_company_names(icp_id)
     existing_domains = supabase.get_existing_company_domains(icp_id)
+    # `gl=` on the search itself is only a Google ranking bias, not a hard
+    # filter — organic results still leak other countries through. This is
+    # the actual enforcement point: drop any candidate whose LLM-derived
+    # company_country is a KNOWN country that doesn't match the ICP.
+    expected_countries = _expected_country_codes(icp.get("geography") or [])
 
     candidates_by_key: dict[str, dict] = {}
     fresh: list[dict] = []
     raw_total = 0
     pages_used = 0
+    geo_rejected = 0
 
     for page in range(_MAX_PAGES):
         raw_results = _run_searches(
@@ -64,6 +70,9 @@ def generate_leads(
         raw_results = _dedupe_raw_by_domain(raw_results)
         page_cands = _attach_domains(_normalize_with_llm(raw_results, icp, icp_id))
         for cand in page_cands:
+            if _country_mismatch(cand.get("company_country"), expected_countries):
+                geo_rejected += 1
+                continue
             key = (cand.get("company_name") or "").strip().lower()
             if key and key not in candidates_by_key:
                 candidates_by_key[key] = cand
@@ -71,6 +80,7 @@ def generate_leads(
         print(
             f"  → page {page + 1}: {len(candidates_by_key)} unique candidates · "
             f"{len(fresh)} fresh (not in DB)"
+            + (f" · {geo_rejected} geo-rejected" if geo_rejected else "")
         )
         if len(fresh) >= min_leads:
             break
@@ -93,10 +103,12 @@ def generate_leads(
         "fresh_candidates": len(fresh),
         "leads_inserted": len(inserted_ids),
         "inserted_ids": inserted_ids,
+        "geo_rejected": geo_rejected,
     }
     print(
         f"  ✓ Agent 02 complete: {len(queries)} queries · {pages_used} page(s) · "
         f"{raw_total} raw · {len(inserted_ids)} leads inserted"
+        + (f" · {geo_rejected} geo-rejected" if geo_rejected else "")
     )
     return summary
 
@@ -205,6 +217,62 @@ _GEOGRAPHY_COUNTRY_CODE_MAP = {
     "france": "fr",
     "singapore": "sg",
 }
+
+# Region geographies legitimately span more than one ISO code (e.g. "North
+# America" covers both the US and Canada) — used only for the post-search
+# mismatch filter below, not for the single-value `gl` search param above.
+_GEOGRAPHY_ACCEPTABLE_CODES = {
+    "north america": {"us", "ca"},
+    "europe": {"gb", "de", "fr"},
+}
+
+# Free-text country names/abbreviations (as they actually show up in
+# company_country after LLM normalization or enrichment) -> ISO alpha-2.
+# Deliberately broad — anything NOT in this map is treated as "unknown" and
+# never rejected, so an unrecognized country string never silently drops a
+# real lead; it only rejects a CONFIDENT, KNOWN mismatch.
+_COUNTRY_NAME_TO_CODE = {
+    "india": "in",
+    "united states": "us", "united states of america": "us", "usa": "us", "us": "us",
+    "canada": "ca",
+    "united kingdom": "gb", "uk": "gb", "great britain": "gb", "england": "gb",
+    "germany": "de", "france": "fr", "australia": "au", "singapore": "sg",
+    "pakistan": "pk", "poland": "pl", "spain": "es", "estonia": "ee",
+    "netherlands": "nl", "brazil": "br", "mexico": "mx", "china": "cn",
+    "japan": "jp", "uae": "ae", "united arab emirates": "ae", "ireland": "ie",
+    "italy": "it", "sweden": "se", "switzerland": "ch", "nigeria": "ng",
+    "south africa": "za", "philippines": "ph", "indonesia": "id",
+    "vietnam": "vn", "israel": "il", "new zealand": "nz", "bangladesh": "bd",
+    "sri lanka": "lk", "nepal": "np", "malaysia": "my", "thailand": "th",
+}
+
+
+def _expected_country_codes(geographies: list[str]) -> set[str]:
+    """ISO codes acceptable for this ICP's geography, or empty if unresolvable.
+
+    Empty means "don't filter" (geography too vague/unmapped to judge safely)
+    — this must never reject a lead when we can't confidently say it's wrong.
+    """
+    codes: set[str] = set()
+    for geo in geographies:
+        key = geo.strip().lower()
+        if key in _GEOGRAPHY_ACCEPTABLE_CODES:
+            codes |= _GEOGRAPHY_ACCEPTABLE_CODES[key]
+        elif key in _GEOGRAPHY_COUNTRY_CODE_MAP:
+            codes.add(_GEOGRAPHY_COUNTRY_CODE_MAP[key])
+    return codes
+
+
+def _country_mismatch(company_country: str | None, expected_codes: set[str]) -> bool:
+    """True only when company_country is a KNOWN country that is NOT one of
+    the ICP's expected codes — never true for unknown/blank/unmapped values.
+    """
+    if not expected_codes or not company_country:
+        return False
+    code = _COUNTRY_NAME_TO_CODE.get(company_country.strip().lower())
+    if code is None:
+        return False
+    return code not in expected_codes
 
 
 def _build_queries(icp: dict, max_leads: int) -> list[tuple[str, str | None, str | None]]:

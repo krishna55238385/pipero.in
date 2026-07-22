@@ -65,6 +65,60 @@ def test_agent_02_dedups_and_inserts(sample_icp):
     assert inserted_leads[0].company_name == "Beta HR Tools"
 
 
+def test_agent_02_rejects_known_wrong_country(sample_icp):
+    """sample_icp geography includes 'India' — a candidate whose LLM-derived
+    company_country is a KNOWN different country (not just unresolved/blank)
+    must be dropped, since SerpAPI's gl= param is only a ranking bias and lets
+    other-country results leak through organic search."""
+    search_results = [
+        {"title": "Acme HR | Best HR Tech", "link": "https://acmehr.com", "snippet": "..."},
+        {"title": "Beta HR Tools", "link": "https://betahr.io", "snippet": "..."},
+        {"title": "Gamma HR", "link": "https://gammahr.com", "snippet": "..."},
+    ]
+    normalized = {
+        "companies": [
+            {"company_name": "Acme HR", "company_website": "https://acmehr.com", "source_url": "https://acmehr.com", "company_country": "India"},
+            {"company_name": "Beta HR Tools", "company_website": "https://betahr.io", "source_url": "https://betahr.io", "company_country": "United States"},
+            {"company_name": "Gamma HR", "company_website": "https://gammahr.com", "source_url": "https://gammahr.com", "company_country": None},
+        ]
+    }
+    with patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_icp", return_value=sample_icp), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.serpapi.search", return_value=search_results), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.llm.chat_json", return_value=normalized), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.extract_domain_from_url", side_effect=lambda u: u.replace("https://", "")), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.discover_domain", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_names", return_value=set()), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_domains", return_value=set()), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.insert_leads", return_value=[1, 2]) as inserter:
+        # min_leads=2 so the pagination loop stops after page 1 — otherwise it
+        # keeps re-fetching (mocked to return the same 3 results every page)
+        # trying to reach the default min_leads=8, inflating geo_rejected by
+        # re-processing the same candidates on each page.
+        summary = generate_leads(icp_id=1, max_leads=20, min_leads=2)
+
+    # Beta (United States) rejected; Acme (India) and Gamma (unknown/blank) kept.
+    assert summary["geo_rejected"] == 1
+    assert summary["leads_inserted"] == 2
+    inserted_leads = inserter.call_args[0][0]
+    inserted_names = {lead.company_name for lead in inserted_leads}
+    assert inserted_names == {"Acme HR", "Gamma HR"}
+    assert "Beta HR Tools" not in inserted_names
+
+
+def test_agent_02_region_geography_accepts_both_countries():
+    """geography=['North America'] must accept BOTH US and Canada, not just US
+    (the single-value SerpAPI gl='us' param is a separate, narrower concern)."""
+    from gtm_backend.phase1.agents.agent_02_leads import _expected_country_codes, _country_mismatch
+
+    codes = _expected_country_codes(["North America"])
+    assert codes == {"us", "ca"}
+    assert _country_mismatch("Canada", codes) is False
+    assert _country_mismatch("United States", codes) is False
+    assert _country_mismatch("Pakistan", codes) is True
+    assert _country_mismatch(None, codes) is False  # unknown never rejected
+    assert _country_mismatch("Freedonia", codes) is False  # unmapped never rejected
+
+
 # Agent 03 ---------------------------------------------------------------
 
 def test_agent_03_finds_contact_and_verifies_email(sample_icp):
