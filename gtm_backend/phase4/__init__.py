@@ -1,6 +1,6 @@
 """Phase 4 — CONVERT. Turns qualified conversation into a CRM pipeline.
 
-Agent 22: Deal Qualification
+Agent 24: Deal Qualification
 
 Deliberately thin: reuses phase3's proven Groq client (connectors/openai.py)
 and RDS client (connectors/supabase.py) rather than duplicating them — the

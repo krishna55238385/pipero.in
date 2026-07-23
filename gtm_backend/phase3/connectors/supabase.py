@@ -983,13 +983,13 @@ def get_replies_needing_objection_check(limit: int | None = None) -> list[dict]:
         raise
 
 
-# -- Agent 22 — Deal Qualification (phase4) -------------------------------
+# -- Agent 24 — Deal Qualification (phase4) -------------------------------
 #
 # NOTE: unlike everything above (which reads/writes gtm_backend's own
 # leads_raw/outreach_* tables), the functions below read/write the CRM's own
 # `leads` and `deals` tables — a *different* leads table (UUID id, owned by
 # magnivo.ai) living on this same Postgres instance. This is intentional:
-# Agent 22's job is to turn a qualified reply into something that shows up in
+# Agent 24's job is to turn a qualified reply into something that shows up in
 # the CRM pipeline the sales team actually looks at, not a phase3-only table.
 # Matched by email, never by any numeric id (the two "leads" tables don't
 # share a key) — and every function here is best-effort/None-returning on a
@@ -1051,7 +1051,7 @@ def update_deal(deal_id: str, **fields) -> None:
 
 def get_replies_needing_qualification(limit: int | None = None) -> list[dict]:
     """outreach_replies rows classified 'interested' that haven't been run
-    through Agent 22 yet (deal_qualified=false). Scoped to 'interested' only
+    through Agent 24 yet (deal_qualified=false). Scoped to 'interested' only
     — the only classification that signals real buying intent worth scoring
     for a deal; everything else (not_now, has_question, wrong_person,
     not_interested, unknown) has nothing to qualify."""

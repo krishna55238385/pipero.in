@@ -9,7 +9,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_qualify = sub.add_parser(
         "qualify-deals",
-        help="Agent 22: score 'interested' replies and create/update CRM deals",
+        help="Agent 24: score 'interested' replies and create/update CRM deals",
     )
     p_qualify.add_argument("--limit", type=int, default=None)
 
@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     command = args.command
 
     if command == "qualify-deals":
-        from gtm_backend.phase4.agents.agent_22_deal_qualification import qualify_pending_deals
+        from gtm_backend.phase4.agents.agent_24_deal_qualification import qualify_pending_deals
         qualify_pending_deals(args.limit)
     return 0
 

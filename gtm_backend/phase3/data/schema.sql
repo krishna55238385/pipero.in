@@ -292,7 +292,7 @@ ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS objection_type TEXT;
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS objection_phrase TEXT;
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS rebuttal_angle TEXT;
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS objection_checked BOOLEAN NOT NULL DEFAULT FALSE;
--- Agent 22 — Deal Qualification (phase4/CONVERT) addition. Set once a reply
+-- Agent 24 — Deal Qualification (phase4/CONVERT) addition. Set once a reply
 -- classified 'interested' has been scored and either turned into (or matched
 -- to) a row in the CRM's own `deals` table, so re-runs don't re-score it.
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS deal_qualified BOOLEAN NOT NULL DEFAULT FALSE;

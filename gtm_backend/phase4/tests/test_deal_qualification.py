@@ -1,12 +1,12 @@
-"""Tests for Agent 22 — Deal Qualification. All external IO mocked."""
+"""Tests for Agent 24 — Deal Qualification. All external IO mocked."""
 from unittest.mock import patch
 
-from gtm_backend.phase4.agents.agent_22_deal_qualification import (
+from gtm_backend.phase4.agents.agent_24_deal_qualification import (
     qualify_deal,
     qualify_pending_deals,
 )
 
-_MOD = "gtm_backend.phase4.agents.agent_22_deal_qualification"
+_MOD = "gtm_backend.phase4.agents.agent_24_deal_qualification"
 
 _REPLY = {
     "id": 9, "lead_id": 1, "email": "priya@acmehr.com", "company_name": "Acme HR",

@@ -1,4 +1,4 @@
-"""Agent 22 — Deal Qualification (PDF Phase 5 — CONVERT).
+"""Agent 24 — Deal Qualification (PDF Phase 5 — CONVERT).
 
 "Turns a genuinely interested reply into a scored opportunity the sales team
 can see and act on."
@@ -36,7 +36,7 @@ def qualify_pending_deals(limit: int | None = None) -> dict:
     reply currently awaiting qualification."""
     bar = "═" * 72
     print(f"\n{bar}")
-    print(f"  AGENT 22 — Deal Qualification (limit={limit or 'all'})")
+    print(f"  AGENT 24 — Deal Qualification (limit={limit or 'all'})")
     print(bar)
 
     replies = supabase.get_replies_needing_qualification(limit=limit)
@@ -58,7 +58,7 @@ def qualify_pending_deals(limit: int | None = None) -> dict:
             failed += 1
 
     print(
-        f"  ✓ Agent 22 complete: {deals_created} deal(s) created · "
+        f"  ✓ Agent 24 complete: {deals_created} deal(s) created · "
         f"{deals_updated} updated · {no_crm_match} no CRM lead match · {failed} failed"
     )
     return {
@@ -82,7 +82,7 @@ def qualify_deal(reply: dict) -> dict:
     crm_lead = supabase.get_crm_lead_by_email(email) if email else None
     if crm_lead is None:
         print(
-            f"  [Agent 22] reply {reply_id} ({company}) → no CRM lead found for "
+            f"  [Agent 24] reply {reply_id} ({company}) → no CRM lead found for "
             f"{email or '(no email on reply)'}, skipping deal creation"
         )
         supabase.update_reply(reply_id, deal_qualified=True)
@@ -98,12 +98,12 @@ def qualify_deal(reply: dict) -> dict:
         raw = llm.chat_json(
             DEAL_QUALIFICATION_SYSTEM,
             _stringify(payload),
-            agent="agent_22_deal_qualification",
+            agent="agent_24_deal_qualification",
             icp_id=context.get("icp_id"),
             phase="phase4",
         )
     except Exception as exc:
-        print(f"  [Agent 22] reply {reply_id} ({company}) → qualification failed: {exc}")
+        print(f"  [Agent 24] reply {reply_id} ({company}) → qualification failed: {exc}")
         supabase.update_reply(reply_id, deal_qualified=True)
         return {"status": "failed", "reply_id": reply_id, "error": str(exc)}
 
@@ -124,7 +124,7 @@ def qualify_deal(reply: dict) -> dict:
     if existing_deal is not None:
         supabase.update_deal(existing_deal["id"], **deal_fields)
         supabase.update_reply(reply_id, deal_qualified=True)
-        print(f"  [Agent 22] reply {reply_id} ({company}) → updated deal {existing_deal['id']} (score={score})")
+        print(f"  [Agent 24] reply {reply_id} ({company}) → updated deal {existing_deal['id']} (score={score})")
         return {"status": "updated", "reply_id": reply_id, "deal_id": existing_deal["id"], "score": score}
 
     new_deal = supabase.create_deal(
@@ -134,7 +134,7 @@ def qualify_deal(reply: dict) -> dict:
     )
     supabase.update_reply(reply_id, deal_qualified=True)
     deal_id = new_deal.get("id") if new_deal else None
-    print(f"  [Agent 22] reply {reply_id} ({company}) → created deal {deal_id} (score={score})")
+    print(f"  [Agent 24] reply {reply_id} ({company}) → created deal {deal_id} (score={score})")
     return {"status": "created", "reply_id": reply_id, "deal_id": deal_id, "score": score}
 
 
