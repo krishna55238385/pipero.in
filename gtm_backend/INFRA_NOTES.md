@@ -48,6 +48,35 @@ operation and should be treated as rotated/retired after use — it should not
 be reused for routine work; the app always runs as `magnivo_app` via
 `DATABASE_URL`.
 
+## Table ownership transfer (2026-07-23)
+
+Same class of issue as above, different table: adding Agent 16/17/18's new
+columns to `outreach_replies` failed because that table (plus
+`outreach_opens` and `outreach_unsubscribes`) was owned by `postgres`, not
+`magnivo_app` — `ALTER TABLE ... ADD COLUMN` requires ownership, and the
+`GRANT`s above don't cover it.
+
+Fixed by transferring ownership outright (run once as `postgres` master):
+
+```sql
+ALTER TABLE outreach_replies OWNER TO magnivo_app;
+ALTER TABLE outreach_opens OWNER TO magnivo_app;
+ALTER TABLE outreach_unsubscribes OWNER TO magnivo_app;
+```
+
+These three tables are entirely phase3's own data (not shared with any other
+system), so full ownership transfer — rather than another narrow grant — was
+the right call: `magnivo_app` can now freely `ALTER`/add columns to them
+going forward without hitting this again. If a *different* pre-existing
+`postgres`-owned table needs a schema change later, it'll need the same
+treatment (either a `REFERENCES` grant if only foreign keys are involved, or
+an `OWNER TO` transfer if columns need to be added/altered).
+
+**Credential hygiene:** the `postgres` master password was used again for
+this operation (second use since the Agent 20 fix). It should be rotated
+now — it hasn't been rotated since first being used, which is worth doing
+before it's needed a third time.
+
 ## Known related issue (pre-existing, not caused by the above)
 
 `GTM_ORG_ID` was previously missing from `/home/ubuntu/pipero.in/.env`

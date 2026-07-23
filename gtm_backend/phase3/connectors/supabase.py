@@ -981,3 +981,90 @@ def get_replies_needing_objection_check(limit: int | None = None) -> list[dict]:
         if _missing_table(exc, "outreach_replies"):
             return []
         raise
+
+
+# -- Agent 22 — Deal Qualification (phase4) -------------------------------
+#
+# NOTE: unlike everything above (which reads/writes gtm_backend's own
+# leads_raw/outreach_* tables), the functions below read/write the CRM's own
+# `leads` and `deals` tables — a *different* leads table (UUID id, owned by
+# magnivo.ai) living on this same Postgres instance. This is intentional:
+# Agent 22's job is to turn a qualified reply into something that shows up in
+# the CRM pipeline the sales team actually looks at, not a phase3-only table.
+# Matched by email, never by any numeric id (the two "leads" tables don't
+# share a key) — and every function here is best-effort/None-returning on a
+# miss rather than guessing, same conservative pattern as the rest of phase3.
+
+def get_crm_lead_by_email(email: str) -> dict | None:
+    """Look up the CRM's own `leads` row (UUID id) for a reply's From-address.
+    Case-insensitive exact match. Returns None (never guesses) if no CRM lead
+    has this email yet — e.g. the lead was never imported/promoted into the
+    CRM's leads table."""
+    if not email:
+        return None
+    try:
+        rows = _get("/leads", params={"email": f"eq.{email.strip().lower()}", "limit": 1})
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
+def get_deal_for_crm_lead(crm_lead_id: str) -> dict | None:
+    """Most recent deal already attached to this CRM lead, if any — so
+    qualifying the same lead twice updates one deal instead of creating
+    duplicates."""
+    try:
+        rows = _get(
+            "/deals",
+            params={"lead_id": f"eq.{crm_lead_id}", "order": "created_at.desc", "limit": 1},
+        )
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
+def create_deal(**fields) -> dict | None:
+    """Insert a new row into the CRM's `deals` table. organization_id is
+    auto-tagged from GTM_ORG_ID by _post/_inject_org same as every other
+    insert in this file."""
+    try:
+        rows = _post("/deals", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "deals"):
+            print("[supabase] deals table missing — cannot create deal.")
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def update_deal(deal_id: str, **fields) -> None:
+    """Patch arbitrary columns on one existing CRM deal row."""
+    if not fields:
+        return
+    try:
+        _patch("/deals", {"id": f"eq.{deal_id}"}, fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "deals"):
+            return
+        raise
+
+
+def get_replies_needing_qualification(limit: int | None = None) -> list[dict]:
+    """outreach_replies rows classified 'interested' that haven't been run
+    through Agent 22 yet (deal_qualified=false). Scoped to 'interested' only
+    — the only classification that signals real buying intent worth scoring
+    for a deal; everything else (not_now, has_question, wrong_person,
+    not_interested, unknown) has nothing to qualify."""
+    params: dict = {
+        "deal_qualified": "eq.false",
+        "classification": "eq.interested",
+        "order": "created_at.asc",
+    }
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/outreach_replies", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return []
+        raise
