@@ -13,6 +13,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_qualify.add_argument("--limit", type=int, default=None)
 
+    p_propose = sub.add_parser(
+        "generate-proposals",
+        help="Agent 25: draft a proposal for every qualified deal that doesn't have one",
+    )
+    p_propose.add_argument("--limit", type=int, default=None)
+
     return parser
 
 
@@ -23,6 +29,9 @@ def main(argv: list[str] | None = None) -> int:
     if command == "qualify-deals":
         from gtm_backend.phase4.agents.agent_24_deal_qualification import qualify_pending_deals
         qualify_pending_deals(args.limit)
+    elif command == "generate-proposals":
+        from gtm_backend.phase4.agents.agent_25_proposal_generation import generate_pending_proposals
+        generate_pending_proposals(args.limit)
     return 0
 
 

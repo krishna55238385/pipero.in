@@ -300,3 +300,38 @@ ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS deal_qualified BOOLEAN NOT
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_outreach_replies_lead_campaign
     ON outreach_replies(lead_id, campaign_id);
 CREATE INDEX IF NOT EXISTS idx_outreach_replies_lead_id ON outreach_replies(lead_id);
+
+-- ---------------------------------------------------------------------------
+-- Agent 25 — Proposal Generation (phase4/CONVERT)
+-- ---------------------------------------------------------------------------
+-- Deliberately its OWN table rather than more columns on the CRM's `deals`
+-- table: `deals` is a shared, live table the Next.js CRM app already reads/
+-- writes directly, and every previous ALTER TABLE on a table not owned by
+-- magnivo_app has needed a manual grant/ownership fix (see INFRA_NOTES.md).
+-- No FK to deals(id) for the same reason — deals is owned by `postgres`, not
+-- magnivo_app, and a FK constraint would need its own REFERENCES grant. This
+-- table is fully owned by magnivo_app since it creates it, so it needs no
+-- extra grants. deal_id is validated in application logic (Agent 25 only
+-- writes it after reading a real deal row), not by a DB constraint.
+CREATE TABLE IF NOT EXISTS deal_proposals (
+    id BIGSERIAL PRIMARY KEY,
+    deal_id UUID NOT NULL,
+    crm_lead_id UUID,
+    company_name TEXT,
+    proposal_text TEXT,
+    pain_points_referenced JSONB DEFAULT '[]'::jsonb,
+    status TEXT DEFAULT 'draft',              -- draft | approved | sent
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS deal_id UUID;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS crm_lead_id UUID;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS proposal_text TEXT;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS pain_points_referenced JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft';
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_deal_proposals_deal_id ON deal_proposals(deal_id);

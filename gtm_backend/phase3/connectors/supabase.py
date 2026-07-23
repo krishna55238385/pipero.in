@@ -1068,3 +1068,48 @@ def get_replies_needing_qualification(limit: int | None = None) -> list[dict]:
         if _missing_table(exc, "outreach_replies"):
             return []
         raise
+
+
+# -- Agent 25 — Proposal Generation (phase4) ------------------------------
+
+def get_qualified_deals(limit: int | None = None) -> list[dict]:
+    """CRM deals Agent 24 marked 'qualified' — the only status a proposal is
+    allowed to be generated for (PDF rule: unqualified deals never receive a
+    proposal)."""
+    params: dict = {"status": "eq.qualified", "order": "created_at.asc"}
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/deals", params=params)
+    except SupabaseError:
+        return []
+
+
+def get_proposal_for_deal(deal_id: str) -> dict | None:
+    """Existing deal_proposals row for this deal, if any — keeps proposal
+    generation idempotent (a qualified deal re-scanned twice doesn't get a
+    duplicate proposal)."""
+    try:
+        rows = _get("/deal_proposals", params={"deal_id": f"eq.{deal_id}", "limit": 1})
+    except SupabaseError as exc:
+        if _missing_table(exc, "deal_proposals"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def create_deal_proposal(**fields) -> dict | None:
+    """Insert one deal_proposals row. Always status='draft' at creation —
+    Agent 25 never marks a proposal 'approved'/'sent' itself, matching Agent
+    17's same human-review-first pattern."""
+    try:
+        rows = _post("/deal_proposals", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "deal_proposals"):
+            print(
+                "[supabase] deal_proposals table missing — proposal not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
