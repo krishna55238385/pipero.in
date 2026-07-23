@@ -119,6 +119,69 @@ def test_agent_02_region_geography_accepts_both_countries():
     assert _country_mismatch("Freedonia", codes) is False  # unmapped never rejected
 
 
+def test_agent_02_scrubs_internally_contradictory_location(sample_icp):
+    """Root-caused bug: Agent 02's batched LLM call sometimes cross-attributes
+    fields between different companies named in the same shared article (a
+    multi-company roundup post), producing self-contradictory combos like
+    company_state='California' + company_country='India'. That must be
+    scrubbed (nulled) rather than trusted or dropped outright — the company
+    name/domain are still likely fine, only the location fields are suspect."""
+    search_results = [
+        {"title": "Delight AI builds AI agents ... with Supabase, Vercel", "link": "https://supabase.com", "snippet": "..."},
+        {"title": "Beta HR Tools", "link": "https://betahr.io", "snippet": "..."},
+    ]
+    normalized = {
+        "companies": [
+            # Cross-contaminated: Supabase's own record ends up tagged with
+            # California (correct-ish, coincidentally) + India (wrong, bled in
+            # from the ICP-matching company also named in the shared article).
+            {
+                "company_name": "Supabase", "company_website": "https://supabase.com",
+                "source_url": "https://supabase.com",
+                "company_city": "San Francisco", "company_state": "California",
+                "company_country": "India",
+            },
+            {
+                "company_name": "Beta HR Tools", "company_website": "https://betahr.io",
+                "source_url": "https://betahr.io",
+                "company_city": "Bangalore", "company_state": "Karnataka",
+                "company_country": "India",
+            },
+        ]
+    }
+    with patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_icp", return_value=sample_icp), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.serpapi.search", return_value=search_results), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.llm.chat_json", return_value=normalized), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.extract_domain_from_url", side_effect=lambda u: u.replace("https://", "")), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.discover_domain", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_names", return_value=set()), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_domains", return_value=set()), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.insert_leads", return_value=[1, 2]) as inserter:
+        summary = generate_leads(icp_id=1, max_leads=20, min_leads=2)
+
+    assert summary["location_scrubbed"] == 1
+    assert summary["leads_inserted"] == 2  # both kept — only the bad fields are nulled, not the whole lead
+    inserted_leads = {lead.company_name: lead for lead in inserter.call_args[0][0]}
+    supabase_lead = inserted_leads["Supabase"]
+    assert supabase_lead.company_city is None
+    assert supabase_lead.company_state is None
+    assert supabase_lead.company_country is None
+    beta_lead = inserted_leads["Beta HR Tools"]
+    assert beta_lead.company_city == "Bangalore"  # untouched — internally consistent
+
+
+def test_location_internally_inconsistent_helper():
+    from gtm_backend.phase1.agents.agent_02_leads import _location_internally_inconsistent
+
+    assert _location_internally_inconsistent("San Francisco", "California", "India") is True
+    assert _location_internally_inconsistent("Bangalore", "Karnataka", "United States") is True
+    assert _location_internally_inconsistent("San Francisco", "California", "United States") is False
+    assert _location_internally_inconsistent("Bangalore", "Karnataka", "India") is False
+    assert _location_internally_inconsistent(None, None, None) is False
+    assert _location_internally_inconsistent("Tallinn", None, "Estonia") is False  # unmapped state, never flagged
+    assert _location_internally_inconsistent("Freedonia City", "Freedonia", "India") is False  # unknown state
+
+
 # Agent 03 ---------------------------------------------------------------
 
 def test_agent_03_finds_contact_and_verifies_email(sample_icp):

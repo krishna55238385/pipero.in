@@ -59,6 +59,23 @@ Sources for company_name, in priority order: (1) the snippet's clear naming of t
 organization, (2) the domain/brand implied by the link, (3) the page title — ONLY if it
 doesn't match any pattern above.
 
+CRITICAL — never cross-attribute fields between different companies in a shared article:
+Some results are roundup/launch posts that name SEVERAL companies in one title+snippet
+(e.g. "YC W17 Launch: Credy, Upcall and Kangpe", or a post about "Delight AI ... with
+Supabase, Vercel and..."). Each such result still produces only ONE company record — the
+one whose OWN website the `link` points to. Every field you set (company_city,
+company_state, company_country, company_industry, company_size) must describe THAT one
+company specifically, evidenced by text about it in particular. Never borrow a location,
+size, or industry mentioned about a different company named in the same snippet, even if
+it's the only location/size text present — leave the field null instead. A California
+address mentioned for "Vercel" in a snippet must never be written onto a "Delight AI"
+record just because they appear in the same sentence.
+
+The icp_hint below (industry/geography) is ONLY context for judging which results are
+worth including — it is NEVER evidence for a company's actual city/state/country. Do not
+let it bias company_country toward the ICP's target geography; a company's location comes
+only from text that specifically describes that company, never from the ICP hint.
+
 Return JSON:
 {
   "companies": [

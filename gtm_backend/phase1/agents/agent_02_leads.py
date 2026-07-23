@@ -58,6 +58,7 @@ def generate_leads(
     raw_total = 0
     pages_used = 0
     geo_rejected = 0
+    location_scrubbed = 0
 
     for page in range(_MAX_PAGES):
         raw_results = _run_searches(
@@ -70,6 +71,18 @@ def generate_leads(
         raw_results = _dedupe_raw_by_domain(raw_results)
         page_cands = _attach_domains(_normalize_with_llm(raw_results, icp, icp_id))
         for cand in page_cands:
+            if _location_internally_inconsistent(
+                cand.get("company_city"), cand.get("company_state"), cand.get("company_country"),
+            ):
+                # Self-contradictory combo (e.g. state="California", country="India")
+                # — a data-merging artefact, not a real address. Null the whole
+                # location trio rather than guessing which field is the wrong one;
+                # Agent 03 will re-derive it later from a per-company search, which
+                # can't cross-contaminate the way a batched multi-company LLM call can.
+                location_scrubbed += 1
+                cand["company_city"] = None
+                cand["company_state"] = None
+                cand["company_country"] = None
             if _country_mismatch(cand.get("company_country"), expected_countries):
                 geo_rejected += 1
                 continue
@@ -81,6 +94,7 @@ def generate_leads(
             f"  → page {page + 1}: {len(candidates_by_key)} unique candidates · "
             f"{len(fresh)} fresh (not in DB)"
             + (f" · {geo_rejected} geo-rejected" if geo_rejected else "")
+            + (f" · {location_scrubbed} location-scrubbed" if location_scrubbed else "")
         )
         if len(fresh) >= min_leads:
             break
@@ -104,11 +118,13 @@ def generate_leads(
         "leads_inserted": len(inserted_ids),
         "inserted_ids": inserted_ids,
         "geo_rejected": geo_rejected,
+        "location_scrubbed": location_scrubbed,
     }
     print(
         f"  ✓ Agent 02 complete: {len(queries)} queries · {pages_used} page(s) · "
         f"{raw_total} raw · {len(inserted_ids)} leads inserted"
         + (f" · {geo_rejected} geo-rejected" if geo_rejected else "")
+        + (f" · {location_scrubbed} location-scrubbed" if location_scrubbed else "")
     )
     return summary
 
@@ -273,6 +289,51 @@ def _country_mismatch(company_country: str | None, expected_codes: set[str]) -> 
     if code is None:
         return False
     return code not in expected_codes
+
+
+# US states (full names, as the LLM tends to write them) — used only to catch
+# an internally-contradictory combo like city="San Francisco", state="California",
+# country="India", regardless of what the ICP's own target geography is. This
+# is a DIFFERENT check from _country_mismatch above: that one catches a
+# self-consistent record for the wrong country; this one catches a record
+# whose own fields disagree with each other (root-caused to Agent 02's batched
+# LLM call cross-attributing fields between different companies named in the
+# same shared article/roundup post).
+_US_STATE_NAMES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+    "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+    "missouri", "montana", "nebraska", "nevada", "new hampshire", "new jersey",
+    "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina",
+    "south dakota", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "west virginia", "wisconsin", "wyoming",
+}
+
+_INDIA_STATE_NAMES = {
+    "karnataka", "maharashtra", "telangana", "tamil nadu", "delhi", "haryana",
+    "uttar pradesh", "west bengal", "gujarat", "rajasthan", "kerala", "punjab",
+}
+
+
+def _location_internally_inconsistent(city: str | None, state: str | None, country: str | None) -> bool:
+    """True when company_state is a KNOWN US/India state name but company_country
+    is a KNOWN, different country — a self-contradictory combo that can only
+    come from a data-merging bug, never a real company. Unknown/blank/unmapped
+    values are never flagged (same conservative bias as _country_mismatch).
+    """
+    if not state or not country:
+        return False
+    state_key = state.strip().lower()
+    country_code = _COUNTRY_NAME_TO_CODE.get(country.strip().lower())
+    if country_code is None:
+        return False
+    if state_key in _US_STATE_NAMES and country_code != "us":
+        return True
+    if state_key in _INDIA_STATE_NAMES and country_code != "in":
+        return True
+    return False
 
 
 def _build_queries(icp: dict, max_leads: int) -> list[tuple[str, str | None, str | None]]:
