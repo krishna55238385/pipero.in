@@ -115,6 +115,32 @@ class OutreachLogEntry(BaseModel):
     thread_id: str | None = None
 
 
+# -- Agent 16 — Inbox Management (reply classification) -------------------
+
+class ReplyRecord(BaseModel):
+    """One classified reply, written to outreach_replies by Agent 16.
+
+    Agent 14's reply-pause gate (get_replied_lead_ids) reads this table
+    already — Agent 16 is what actually populates it. classification values
+    per the architecture doc: interested | not_now | wrong_person |
+    has_question | not_interested | unknown (LLM/classification failure).
+    """
+
+    model_config = {"extra": "ignore"}
+
+    lead_id: int
+    email: str
+    campaign_id: str = ""
+    classification: str = "unknown"
+    confidence: str = "medium"  # low | medium | high
+    reply_text: str = ""
+    suggested_action: str = ""  # short human-readable next step
+    # Set by Agent 16 based on classification: 'pending_draft' for anything
+    # Agent 17 should draft a response for, 'no_response_needed' for a hard
+    # decline or unclassifiable message (pause-only, nothing to draft).
+    response_status: str = "pending_draft"
+
+
 # -- Agent 15 — A/B Testing -----------------------------------------------
 
 class ABTestResult(BaseModel):

@@ -36,6 +36,7 @@ from gtm_backend.phase3.core.schemas import (
     OutreachLogEntry,
     OutreachSequence,
     PersonalisationResult,
+    ReplyRecord,
 )
 
 
@@ -869,3 +870,114 @@ def _local_fallback_find(table_name: str, key: str, value: object) -> dict | Non
         if row.get(key) == value:
             return row
     return None
+
+
+def get_lead_by_email(email: str) -> dict | None:
+    """Look up the lead a reply's From-address belongs to.
+
+    Case-insensitive exact match on contact_email. Returns the most recently
+    created row if (unexpectedly) more than one lead shares an email.
+    """
+    if not email:
+        return None
+    try:
+        rows = _get(
+            "/leads_raw",
+            params={"select": "id,company_name,contact_email,icp_id", "order": "created_at.desc"},
+        )
+    except SupabaseError:
+        return None
+    target = email.strip().lower()
+    for row in rows:
+        if (row.get("contact_email") or "").strip().lower() == target:
+            return row
+    return None
+
+
+def get_reply_for_lead(lead_id: int, campaign_id: str = "") -> dict | None:
+    """Existing outreach_replies row for this (lead, campaign), if any —
+    used to keep classify_reply idempotent (a reply thread re-scanned twice
+    should not create a duplicate row or reclassify)."""
+    try:
+        rows = _get(
+            "/outreach_replies",
+            params={"lead_id": f"eq.{lead_id}", "campaign_id": f"eq.{campaign_id}", "limit": 1},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return _local_fallback_find("outreach_replies", "lead_id", lead_id)
+        raise
+    return rows[0] if rows else None
+
+
+def insert_reply(reply: ReplyRecord) -> int | None:
+    """Insert one classified reply. Returns the new row's id, or None if the
+    table is missing (best-effort — Agent 16 must never crash a caller over
+    a schema not being applied yet)."""
+    payload = reply.model_dump(exclude_none=False)
+    try:
+        rows = _post("/outreach_replies", payload)
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            print(
+                "[supabase] outreach_replies table missing — reply not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0]["id"] if rows else None
+
+
+def get_replies_needing_draft(limit: int | None = None) -> list[dict]:
+    """outreach_replies rows classified but not yet drafted (response_status='pending_draft')."""
+    params: dict = {"response_status": "eq.pending_draft", "order": "created_at.asc"}
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/outreach_replies", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return []
+        raise
+
+
+def get_reply_by_id(reply_id: int) -> dict | None:
+    try:
+        rows = _get("/outreach_replies", params={"id": f"eq.{reply_id}", "limit": 1})
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def update_reply(reply_id: int, **fields) -> None:
+    """Patch arbitrary columns on one outreach_replies row (draft, status, send metadata)."""
+    if not fields:
+        return
+    try:
+        _patch("/outreach_replies", {"id": f"eq.{reply_id}"}, fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return
+        raise
+
+
+def get_replies_needing_objection_check(limit: int | None = None) -> list[dict]:
+    """Replies classified as not_now/has_question that haven't been through
+    Agent 18's objection detection yet (objection_checked=false). Scoped to
+    these two classifications — an 'interested' or 'wrong_person' reply
+    isn't pushback, and not_interested/unknown never get a draft at all."""
+    params: dict = {
+        "objection_checked": "eq.false",
+        "classification": "in.(not_now,has_question)",
+        "order": "created_at.asc",
+    }
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/outreach_replies", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return []
+        raise

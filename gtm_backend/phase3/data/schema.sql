@@ -265,6 +265,33 @@ ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS campaign_id TEXT DEFAULT '
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS classification TEXT;
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+-- Agent 16 — Inbox Management additions: the raw reply text (audit trail /
+-- human review), how confident the classification is, and a short suggested
+-- next action (e.g. "book meeting", "request correct contact").
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS reply_text TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS confidence TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS suggested_action TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS reviewed BOOLEAN NOT NULL DEFAULT FALSE;
+-- Agent 17 — Reply Handling additions: a drafted response, always held for
+-- human approval before send (PDF rule: "all automated responses must be
+-- reviewed before sending"). response_status: pending_draft (classified, no
+-- draft yet) | pending_review (drafted, awaiting approval) | approved (queued
+-- to send) | sent | no_response_needed (e.g. not_interested — pause only).
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS draft_response TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS response_status TEXT NOT NULL DEFAULT 'pending_draft';
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS drafted_at TIMESTAMPTZ;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS response_message_id TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS response_thread_id TEXT;
+-- Agent 18 — Objection Handling additions. Runs on classification IN
+-- (not_now, has_question) before Agent 17 drafts, so the draft can address
+-- the SPECIFIC objection instead of a generic acknowledgment. objection_type
+-- is null when the reply doesn't actually contain an objection (e.g. a plain
+-- factual question with no pushback).
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS objection_type TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS objection_phrase TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS rebuttal_angle TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS objection_checked BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_outreach_replies_lead_campaign
     ON outreach_replies(lead_id, campaign_id);

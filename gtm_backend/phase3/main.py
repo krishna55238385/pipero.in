@@ -53,6 +53,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p_follow.add_argument("--limit", type=int, default=None)
     p_follow.add_argument("--dry-run", action="store_true", dest="dry_run")
 
+    p_inbox = sub.add_parser(
+        "classify-reply",
+        help="Agent 16: classify one reply (manual/testing entrypoint — real integration calls classify_reply() directly)",
+    )
+    p_inbox.add_argument("--from", type=str, required=True, dest="from_email")
+    p_inbox.add_argument("--text", type=str, required=True, dest="reply_text")
+    p_inbox.add_argument("--campaign-id", type=str, default="", dest="campaign_id")
+
+    p_draft = sub.add_parser("draft-replies", help="Agent 17: draft responses for classified replies awaiting one")
+    p_draft.add_argument("--limit", type=int, default=None)
+
+    p_send_reply = sub.add_parser(
+        "send-reply", help="Agent 17: send a human-approved draft (response_status must be 'approved')"
+    )
+    p_send_reply.add_argument("--reply-id", type=int, required=True, dest="reply_id")
+
+    p_objections = sub.add_parser(
+        "detect-objections",
+        help="Agent 18: detect objection type + rebuttal angle for not_now/has_question replies (run before draft-replies)",
+    )
+    p_objections.add_argument("--limit", type=int, default=None)
+
     p_all = sub.add_parser("run-all", help="Chain 11 → 12 → 13 → 14 (15 skipped — needs live data)")
     p_all.add_argument("--icp", type=int, default=None, dest="icp_id")
     p_all.add_argument("--limit", type=int, default=None)
@@ -105,6 +127,18 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "followups":
         from gtm_backend.phase3.agents.agent_19_followup import run_followups
         run_followups(args.icp_id, args.limit, args.dry_run)
+    elif command == "classify-reply":
+        from gtm_backend.phase3.agents.agent_16_inbox import classify_reply
+        classify_reply(args.from_email, args.reply_text, args.campaign_id)
+    elif command == "draft-replies":
+        from gtm_backend.phase3.agents.agent_17_reply_handling import draft_pending_responses
+        draft_pending_responses(args.limit)
+    elif command == "send-reply":
+        from gtm_backend.phase3.agents.agent_17_reply_handling import send_approved_response
+        send_approved_response(args.reply_id)
+    elif command == "detect-objections":
+        from gtm_backend.phase3.agents.agent_18_objection_handling import detect_pending_objections
+        detect_pending_objections(args.limit)
     elif command == "run-all":
         from gtm_backend.phase3.agents.agent_11_personalisation import run_personalisation
         from gtm_backend.phase3.agents.agent_12_copywriter import run_copywriting
