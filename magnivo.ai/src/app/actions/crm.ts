@@ -193,6 +193,35 @@ export async function getDeals(searchQuery?: string) {
   } catch (err: any) { console.error('Error fetching deals:', err.message); return [] }
 }
 
+// ─── getAiInsightsForDeal ───────────────────────────────────────────────────
+// Read-only. Surfaces what the GTM backend's Phase 5 agents (Deal
+// Qualification, Proposal Generation, Proposal Follow-up, Executive
+// Engagement, Pipeline Management) have already generated for this deal.
+// These tables (deal_proposals, executive_briefs, pipeline_status) are
+// gtm_backend-owned and written to directly by those agents — this action
+// just reads the latest row from each, it never writes. Not org-filtered:
+// deal_id is already scoped to a deal the caller was authorized to open via
+// getDeals()'s own org check, and these newer tables don't reliably have
+// organization_id populated on every row yet.
+export async function getAiInsightsForDeal(dealId: string) {
+  if (!dealId) return { proposal: null, executiveBrief: null, pipelineStatus: null }
+  try {
+    const [proposalRes, briefRes, pipelineRes] = await Promise.all([
+      pool.query(`SELECT * FROM public.deal_proposals WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
+      pool.query(`SELECT * FROM public.executive_briefs WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
+      pool.query(`SELECT * FROM public.pipeline_status WHERE deal_id = $1 ORDER BY reviewed_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
+    ])
+    return {
+      proposal: proposalRes.rows[0] ?? null,
+      executiveBrief: briefRes.rows[0] ?? null,
+      pipelineStatus: pipelineRes.rows[0] ?? null,
+    }
+  } catch (err: any) {
+    console.error('Error fetching AI insights for deal:', err.message)
+    return { proposal: null, executiveBrief: null, pipelineStatus: null }
+  }
+}
+
 // ─── addLead ──────────────────────────────────────────────────────────────────
 
 export async function addLead(formData: FormData) {
