@@ -92,6 +92,27 @@ def _inject_org(body: list | dict) -> list | dict:
     return body
 
 
+def _scope_to_org(params: dict) -> dict:
+    """Read-side counterpart to _inject_org: adds an organization_id filter
+    to a _get() params dict, when GTM_ORG_ID is set and the caller hasn't
+    already specified one. No-op when GTM_ORG_ID is unset.
+
+    Added 2026-07-25 after finding several read functions (get_all_deals,
+    get_active_deals, get_qualified_deals, revenue/pipeline/proposal
+    readers) had NO org scoping at all — every agent using them was reading
+    across every organization in the database, not just its own. Caught via
+    a board report that mixed a deal from org "Dysonc" into a conversion
+    rate that should have been scoped to org "MT". This mirrors an
+    equality filter, same as _parse_filter's eq., so it also naturally
+    excludes rows where organization_id IS NULL (old pre-tenancy rows) —
+    same behavior the CRM's own getDeals() action already has.
+    """
+    if not _ORG_ID or "organization_id" in params:
+        return params
+    return {**params, "organization_id": f"eq.{_ORG_ID}"}
+    return body
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -1006,7 +1027,7 @@ def get_crm_lead_by_email(email: str) -> dict | None:
     if not email:
         return None
     try:
-        rows = _get("/leads", params={"email": f"eq.{email.strip().lower()}", "limit": 1})
+        rows = _get("/leads", params=_scope_to_org({"email": f"eq.{email.strip().lower()}", "limit": 1}))
     except SupabaseError:
         return None
     return rows[0] if rows else None
@@ -1019,7 +1040,7 @@ def get_deal_for_crm_lead(crm_lead_id: str) -> dict | None:
     try:
         rows = _get(
             "/deals",
-            params={"lead_id": f"eq.{crm_lead_id}", "order": "created_at.desc", "limit": 1},
+            params=_scope_to_org({"lead_id": f"eq.{crm_lead_id}", "order": "created_at.desc", "limit": 1}),
         )
     except SupabaseError:
         return None
@@ -1083,7 +1104,7 @@ def get_qualified_deals(limit: int | None = None) -> list[dict]:
     if limit is not None:
         params["limit"] = limit
     try:
-        return _get("/deals", params=params)
+        return _get("/deals", params=_scope_to_org(params))
     except SupabaseError:
         return []
 
@@ -1128,7 +1149,7 @@ def get_sent_proposals(limit: int | None = None) -> list[dict]:
     if limit is not None:
         params["limit"] = limit
     try:
-        return _get("/deal_proposals", params=params)
+        return _get("/deal_proposals", params=_scope_to_org(params))
     except SupabaseError as exc:
         if _missing_table(exc, "deal_proposals"):
             return []
@@ -1195,7 +1216,7 @@ def get_active_deals(limit: int | None = None) -> list[dict]:
     than the caller asked for.
     """
     try:
-        rows = _get("/deals", params={"order": "created_at.asc"})
+        rows = _get("/deals", params=_scope_to_org({"order": "created_at.asc"}))
     except SupabaseError:
         return []
     active = [r for r in rows if (r.get("status") or "").lower() not in _CLOSED_STATUSES]
@@ -1245,7 +1266,7 @@ def get_all_deals() -> list[dict]:
     (won / (won + lost)), unlike get_active_deals() which deliberately
     excludes closed deals for pipeline-review purposes."""
     try:
-        return _get("/deals", params={"order": "created_at.asc"})
+        return _get("/deals", params=_scope_to_org({"order": "created_at.asc"}))
     except SupabaseError:
         return []
 
@@ -1254,7 +1275,7 @@ def get_recent_revenue_forecasts(limit: int = 2) -> list[dict]:
     """Most recent forecast snapshots, newest first — used to compute the
     period-over-period delta the PDF requires (current vs. previous run)."""
     try:
-        return _get("/revenue_forecasts", params={"order": "generated_at.desc", "limit": limit})
+        return _get("/revenue_forecasts", params=_scope_to_org({"order": "generated_at.desc", "limit": limit}))
     except SupabaseError as exc:
         if _missing_table(exc, "revenue_forecasts"):
             return []
@@ -1269,7 +1290,7 @@ def get_at_risk_pipeline_status(limit: int | None = None) -> list[dict]:
     if limit is not None:
         params["limit"] = limit
     try:
-        return _get("/pipeline_status", params=params)
+        return _get("/pipeline_status", params=_scope_to_org(params))
     except SupabaseError as exc:
         if _missing_table(exc, "pipeline_status"):
             return []
