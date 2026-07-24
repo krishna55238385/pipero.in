@@ -37,6 +37,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_pipeline.add_argument("--limit", type=int, default=None)
 
+    sub.add_parser(
+        "generate-forecast",
+        help="Agent 34: roll up active deals into a conservative/base/optimistic revenue forecast snapshot",
+    )
+
     return parser
 
 
@@ -59,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "review-pipeline":
         from gtm_backend.phase4.agents.agent_33_pipeline_management import run_pipeline_review
         run_pipeline_review(args.limit)
+    elif command == "generate-forecast":
+        from gtm_backend.phase4.agents.agent_34_revenue_forecasting import generate_revenue_forecast
+        generate_revenue_forecast()
     return 0
 
 

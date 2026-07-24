@@ -6,6 +6,7 @@ Agent 26: Proposal Follow-up
 Agent 27: Executive Engagement
 Agent 33: Pipeline Management (MANAGE & REPORT — also lives here since it
 shares the same deals/Groq/RDS infra; no separate phase5/ folder needed)
+Agent 34: Revenue Forecasting (MANAGE & REPORT, no LLM — pure arithmetic)
 
 Deliberately thin: reuses phase3's proven Groq client (connectors/openai.py)
 and RDS client (connectors/supabase.py) rather than duplicating them — the

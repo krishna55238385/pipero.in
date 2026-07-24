@@ -1214,3 +1214,22 @@ def upsert_pipeline_status(**fields) -> dict | None:
             return None
         raise
     return rows[0] if rows else None
+
+
+# -- Agent 34 — Revenue Forecasting (phase4) -------------------------------
+
+def create_revenue_forecast(**fields) -> dict | None:
+    """Insert one revenue_forecasts snapshot row. Append-only (see schema.sql
+    comment) — every run adds a new row rather than overwriting, so forecast
+    accuracy can be tracked over time against actuals later."""
+    try:
+        rows = _post("/revenue_forecasts", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "revenue_forecasts"):
+            print(
+                "[supabase] revenue_forecasts table missing — forecast not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None

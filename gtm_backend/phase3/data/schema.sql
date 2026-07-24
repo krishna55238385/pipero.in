@@ -420,3 +420,34 @@ ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ DEF
 ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_pipeline_status_deal_id ON pipeline_status(deal_id);
+
+-- ---------------------------------------------------------------------------
+-- Agent 34 — Revenue Forecasting (phase4/MANAGE & REPORT)
+-- ---------------------------------------------------------------------------
+-- Append-only history log, NOT upserted like pipeline_status — the PDF's own
+-- rule is "must track forecast accuracy over time," which requires keeping
+-- every past forecast snapshot to compare against actuals later, not just
+-- the latest one.
+CREATE TABLE IF NOT EXISTS revenue_forecasts (
+    id BIGSERIAL PRIMARY KEY,
+    conservative_total NUMERIC,
+    base_total NUMERIC,
+    optimistic_total NUMERIC,
+    committed_deal_count INTEGER,
+    excluded_deal_count INTEGER,
+    total_deal_count INTEGER,
+    deal_breakdown JSONB DEFAULT '[]'::jsonb,
+    generated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS conservative_total NUMERIC;
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS base_total NUMERIC;
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS optimistic_total NUMERIC;
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS committed_deal_count INTEGER;
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS excluded_deal_count INTEGER;
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS total_deal_count INTEGER;
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS deal_breakdown JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS organization_id UUID;
+
+CREATE INDEX IF NOT EXISTS idx_revenue_forecasts_generated_at ON revenue_forecasts(generated_at);
