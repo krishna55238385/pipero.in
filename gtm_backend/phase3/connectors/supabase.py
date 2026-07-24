@@ -52,7 +52,10 @@ def _get_connection():
 # Columns whose Postgres type is jsonb and therefore need an explicit
 # json.dumps(...) + ::jsonb cast (see phase3/data/schema.sql). Everything else
 # is a plain scalar column — psycopg2 adapts it directly.
-_JSONB_COLUMNS = {"angles", "steps", "channel_sequence", "deal_breakdown", "pain_points_referenced"}
+_JSONB_COLUMNS = {
+    "angles", "steps", "channel_sequence", "deal_breakdown", "pain_points_referenced",
+    "pipeline_by_stage", "top_risks", "going_well", "needs_attention",
+}
 
 
 class SupabaseError(RuntimeError):
@@ -1228,6 +1231,61 @@ def create_revenue_forecast(**fields) -> dict | None:
         if _missing_table(exc, "revenue_forecasts"):
             print(
                 "[supabase] revenue_forecasts table missing — forecast not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+# -- Agent 35 — Board Reporting (phase4) -----------------------------------
+
+def get_all_deals() -> list[dict]:
+    """Every CRM deal, open or closed — needed for conversion-rate math
+    (won / (won + lost)), unlike get_active_deals() which deliberately
+    excludes closed deals for pipeline-review purposes."""
+    try:
+        return _get("/deals", params={"order": "created_at.asc"})
+    except SupabaseError:
+        return []
+
+
+def get_recent_revenue_forecasts(limit: int = 2) -> list[dict]:
+    """Most recent forecast snapshots, newest first — used to compute the
+    period-over-period delta the PDF requires (current vs. previous run)."""
+    try:
+        return _get("/revenue_forecasts", params={"order": "generated_at.desc", "limit": limit})
+    except SupabaseError as exc:
+        if _missing_table(exc, "revenue_forecasts"):
+            return []
+        raise
+
+
+def get_at_risk_pipeline_status(limit: int | None = None) -> list[dict]:
+    """Latest pipeline_status rows flagged at_risk or stuck — the 'top
+    risks' input for the board report. pipeline_status is one row per deal
+    (upserted), so this is already deduplicated to the current state."""
+    params: dict = {"risk_level": "in.(at_risk,stuck)", "order": "reviewed_at.desc"}
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/pipeline_status", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "pipeline_status"):
+            return []
+        raise
+
+
+def create_board_report(**fields) -> dict | None:
+    """Insert one board_reports snapshot row. Append-only, same reasoning as
+    revenue_forecasts — each report is a point-in-time record, not something
+    to overwrite."""
+    try:
+        rows = _post("/board_reports", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "board_reports"):
+            print(
+                "[supabase] board_reports table missing — report not persisted. "
                 "Apply schema: python -m phase3 print-schema"
             )
             return None

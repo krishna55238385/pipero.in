@@ -451,3 +451,41 @@ ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ 
 ALTER TABLE revenue_forecasts ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_revenue_forecasts_generated_at ON revenue_forecasts(generated_at);
+
+-- ---------------------------------------------------------------------------
+-- Agent 35 — Board Reporting (phase4/MANAGE & REPORT)
+-- ---------------------------------------------------------------------------
+-- Append-only, same reasoning as revenue_forecasts — each report is a point-
+-- in-time snapshot; keeping history is what makes "period-over-period
+-- comparison" (a PDF rule) possible on the NEXT report. organization_id
+-- included from the start this time (lesson from Agent 33/34).
+CREATE TABLE IF NOT EXISTS board_reports (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    pipeline_by_stage JSONB DEFAULT '{}'::jsonb,
+    conversion_rate NUMERIC,
+    conversion_rate_note TEXT,
+    forecast_base_total NUMERIC,
+    forecast_delta_from_previous NUMERIC,
+    top_risks JSONB DEFAULT '[]'::jsonb,
+    going_well JSONB DEFAULT '[]'::jsonb,
+    needs_attention JSONB DEFAULT '[]'::jsonb,
+    executive_summary TEXT,
+    report_text TEXT,
+    generated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS pipeline_by_stage JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS conversion_rate NUMERIC;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS conversion_rate_note TEXT;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS forecast_base_total NUMERIC;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS forecast_delta_from_previous NUMERIC;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS top_risks JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS going_well JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS needs_attention JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS executive_summary TEXT;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS report_text TEXT;
+ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_board_reports_generated_at ON board_reports(generated_at);

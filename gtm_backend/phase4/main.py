@@ -42,6 +42,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Agent 34: roll up active deals into a conservative/base/optimistic revenue forecast snapshot",
     )
 
+    sub.add_parser(
+        "generate-board-report",
+        help="Agent 35: compile pipeline/forecast/risk data into a leadership-ready board report",
+    )
+
     return parser
 
 
@@ -67,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "generate-forecast":
         from gtm_backend.phase4.agents.agent_34_revenue_forecasting import generate_revenue_forecast
         generate_revenue_forecast()
+    elif command == "generate-board-report":
+        from gtm_backend.phase4.agents.agent_35_board_reporting import generate_board_report
+        generate_board_report()
     return 0
 
 
