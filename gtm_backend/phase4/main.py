@@ -4,7 +4,7 @@ import sys
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="phase4", description="AI GTM Agency — Phase 4 pipeline (CONVERT)")
+    parser = argparse.ArgumentParser(prog="phase4", description="AI GTM Agency — Phase 4 pipeline (CONVERT + MANAGE & REPORT)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_qualify = sub.add_parser(
@@ -31,6 +31,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_exec.add_argument("--limit", type=int, default=None)
 
+    p_pipeline = sub.add_parser(
+        "review-pipeline",
+        help="Agent 33: flag at-risk/stuck deals and assign a specific next-best-action to every active deal",
+    )
+    p_pipeline.add_argument("--limit", type=int, default=None)
+
     return parser
 
 
@@ -50,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "generate-executive-briefs":
         from gtm_backend.phase4.agents.agent_27_executive_engagement import generate_pending_executive_briefs
         generate_pending_executive_briefs(args.limit)
+    elif command == "review-pipeline":
+        from gtm_backend.phase4.agents.agent_33_pipeline_management import run_pipeline_review
+        run_pipeline_review(args.limit)
     return 0
 
 

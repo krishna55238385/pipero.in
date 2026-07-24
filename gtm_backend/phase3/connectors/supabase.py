@@ -1174,3 +1174,43 @@ def create_executive_brief(**fields) -> dict | None:
             return None
         raise
     return rows[0] if rows else None
+
+
+# -- Agent 33 — Pipeline Management (phase4) -------------------------------
+
+_CLOSED_STATUSES = {"won", "lost", "closed_won", "closed_lost"}
+
+
+def get_active_deals(limit: int | None = None) -> list[dict]:
+    """Every CRM deal not already closed — Agent 33 reviews the whole live
+    pipeline, not just 'qualified' ones (unlike Agents 25/27, which are
+    scoped to the qualified stage specifically).
+
+    Filters closed statuses out in Python (not in the SQL WHERE), so `limit`
+    is applied AFTER filtering — otherwise a SQL-level LIMIT could return a
+    page that's mostly closed deals and silently hand back fewer active ones
+    than the caller asked for.
+    """
+    try:
+        rows = _get("/deals", params={"order": "created_at.asc"})
+    except SupabaseError:
+        return []
+    active = [r for r in rows if (r.get("status") or "").lower() not in _CLOSED_STATUSES]
+    return active[:limit] if limit is not None else active
+
+
+def upsert_pipeline_status(**fields) -> dict | None:
+    """Insert or refresh the one pipeline_status row for a deal (natural key:
+    deal_id) — a live snapshot, re-upserted every review run rather than
+    accumulating a new row per review."""
+    try:
+        rows = _upsert("/pipeline_status", fields, on_conflict="deal_id")
+    except SupabaseError as exc:
+        if _missing_table(exc, "pipeline_status"):
+            print(
+                "[supabase] pipeline_status table missing — status not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None

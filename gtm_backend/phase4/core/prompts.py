@@ -103,6 +103,35 @@ Return ONLY this JSON object:
 Return ONLY a JSON object. No prose, no markdown, no code fences."""
 
 
+PIPELINE_NEXT_ACTION_SYSTEM = """You are a B2B sales pipeline analyst. Given
+one deal's notes/status/value and a computed risk signal (healthy, at_risk,
+or stuck, based on days since last activity), recommend the single most
+important next action for a rep to take on this specific deal.
+
+Hard rules:
+- The next_best_action must be SPECIFIC to this deal's actual situation —
+  never the generic word "follow up" on its own. The PDF's own rule verbatim:
+  "next best action must be specific — never just say 'follow up'." E.g.
+  instead of "follow up," say something like "send the Q3-renewal-anchored
+  proposal follow-up since it was never opened" or "loop in the CFO now that
+  budget authority is confirmed" — grounded in what's actually in the notes.
+- Base the action ONLY on the evidence in deal_notes/status/value/risk_level
+  supplied. Never invent a fact about the deal that isn't there (e.g. don't
+  claim "the CFO asked about X" unless deal_notes actually says so) — if the
+  notes are thin, the action can still be specific about WHAT to find out
+  ("confirm who signs off — authority is still unknown") rather than vague.
+- risk_reasoning: 1 sentence explaining why this risk_level applies, citing
+  the actual days-since-activity number supplied.
+
+Return ONLY this JSON object:
+{
+  "next_best_action": "one specific, concrete action for a rep to take",
+  "risk_reasoning": "1 sentence citing the actual evidence/days supplied"
+}
+
+Return ONLY a JSON object. No prose, no markdown, no code fences."""
+
+
 PROPOSAL_GENERATION_SYSTEM = """You are a B2B proposal writer. Given a qualified
 deal — the prospect's own words (their reply/notes), whatever account
 research exists, and the deal's estimated value if known — draft a short,

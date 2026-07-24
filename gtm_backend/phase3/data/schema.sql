@@ -379,3 +379,33 @@ ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft
 ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_executive_briefs_deal_id ON executive_briefs(deal_id);
+
+-- ---------------------------------------------------------------------------
+-- Agent 33 — Pipeline Management (phase4/MANAGE & REPORT)
+-- ---------------------------------------------------------------------------
+-- One row per deal, upserted on every review run (a live snapshot, not a
+-- history log — phase6/Board Reporting can aggregate over these later if a
+-- history is ever needed). Own table, no FK into the shared CRM `deals`,
+-- same reasoning as deal_proposals/executive_briefs.
+CREATE TABLE IF NOT EXISTS pipeline_status (
+    id BIGSERIAL PRIMARY KEY,
+    deal_id UUID NOT NULL,
+    crm_lead_id UUID,
+    company_name TEXT,
+    risk_level TEXT DEFAULT 'healthy',        -- healthy | at_risk | stuck
+    days_since_activity INTEGER,
+    next_best_action TEXT,
+    risk_reasoning TEXT,
+    reviewed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS deal_id UUID;
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS crm_lead_id UUID;
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS risk_level TEXT DEFAULT 'healthy';
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS days_since_activity INTEGER;
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS next_best_action TEXT;
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS risk_reasoning TEXT;
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_pipeline_status_deal_id ON pipeline_status(deal_id);
