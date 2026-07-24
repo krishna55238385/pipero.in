@@ -52,7 +52,7 @@ def _get_connection():
 # Columns whose Postgres type is jsonb and therefore need an explicit
 # json.dumps(...) + ::jsonb cast (see phase3/data/schema.sql). Everything else
 # is a plain scalar column — psycopg2 adapts it directly.
-_JSONB_COLUMNS = {"angles", "steps", "channel_sequence", "deal_breakdown"}
+_JSONB_COLUMNS = {"angles", "steps", "channel_sequence", "deal_breakdown", "pain_points_referenced"}
 
 
 class SupabaseError(RuntimeError):
