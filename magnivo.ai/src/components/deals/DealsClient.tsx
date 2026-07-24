@@ -125,7 +125,7 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
     }
 
     return (
-        <div className="fixed inset-0 z-40 flex" onClick={onClose}>
+        <div className="fixed inset-0 z-[60] flex" onClick={onClose}>
             <div className="flex-1 bg-black/30 backdrop-blur-sm" />
             <div
                 className="w-full max-w-md bg-white dark:bg-card shadow-2xl overflow-y-auto border-l border-slate-200 dark:border-border animate-in slide-in-from-right duration-200"
