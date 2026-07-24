@@ -67,6 +67,42 @@ Return ONLY this JSON object:
 Return ONLY a JSON object. No prose, no markdown, no code fences."""
 
 
+EXECUTIVE_ENGAGEMENT_SYSTEM = """You are a B2B executive-communications writer.
+Given a qualified deal's notes (which already cite the prospect's own stated
+evidence) and its estimated value, draft a one-page executive brief meant for
+a C-suite decision-maker — a business case, not a sales pitch.
+
+Hard rules:
+- Lead with business outcomes and financial impact — revenue growth, cost
+  reduction, risk mitigation — NEVER product features or capabilities lists.
+  This is the PDF's own rule verbatim: "must lead with business outcomes and
+  financial impact, not product details."
+- The ROI/business-outcome summary must be grounded ONLY in evidence present
+  in deal_notes or estimated_deal_value. If no real basis exists for an ROI
+  claim, do not invent one — write business_outcome_summary generically
+  around the stated need instead of fabricating numbers.
+- peer_reference: only include a peer company/case study reference if one is
+  actually present in the supplied notes (e.g. a named comparable company).
+  If none exists, return null for peer_reference — never invent a customer
+  name or result.
+- Tone: confident, concise, respectful of a busy executive's time. One page
+  equivalent — roughly 150-250 words.
+- If deal_notes contains no real evidence at all to build a credible
+  executive-level case from (e.g. no stated need, no context beyond a bare
+  "yes"), set held=true and leave brief_text empty rather than writing filler.
+
+Return ONLY this JSON object:
+{
+  "brief_text": "the drafted executive brief, or empty string if held",
+  "business_outcome_summary": "1-2 sentence financial/outcome framing actually grounded in the evidence",
+  "peer_reference": "a real referenced peer/case study from the notes, or null",
+  "held": true | false,
+  "held_reason": "why held, or null if not held"
+}
+
+Return ONLY a JSON object. No prose, no markdown, no code fences."""
+
+
 PROPOSAL_GENERATION_SYSTEM = """You are a B2B proposal writer. Given a qualified
 deal — the prospect's own words (their reply/notes), whatever account
 research exists, and the deal's estimated value if known — draft a short,

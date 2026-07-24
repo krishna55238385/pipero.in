@@ -350,3 +350,32 @@ ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS followup_count INTEGER NOT N
 ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ;
 ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS draft_followup_text TEXT;
 ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS followup_status TEXT NOT NULL DEFAULT 'none';
+
+-- ---------------------------------------------------------------------------
+-- Agent 27 — Executive Engagement (phase4/CONVERT)
+-- ---------------------------------------------------------------------------
+-- Own table, same reasoning as deal_proposals — no FK into the CRM's `deals`
+-- (owned by postgres, not magnivo_app), deal_id validated in application
+-- logic only.
+CREATE TABLE IF NOT EXISTS executive_briefs (
+    id BIGSERIAL PRIMARY KEY,
+    deal_id UUID NOT NULL,
+    crm_lead_id UUID,
+    company_name TEXT,
+    brief_text TEXT,
+    business_outcome_summary TEXT,
+    peer_reference TEXT,
+    status TEXT DEFAULT 'draft',              -- draft | held | approved | sent
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS deal_id UUID;
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS crm_lead_id UUID;
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS brief_text TEXT;
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS business_outcome_summary TEXT;
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS peer_reference TEXT;
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft';
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_executive_briefs_deal_id ON executive_briefs(deal_id);

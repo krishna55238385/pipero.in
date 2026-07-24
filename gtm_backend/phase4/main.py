@@ -25,6 +25,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_followup.add_argument("--limit", type=int, default=None)
 
+    p_exec = sub.add_parser(
+        "generate-executive-briefs",
+        help="Agent 27: draft an executive brief for qualified deals with an engaged champion signal",
+    )
+    p_exec.add_argument("--limit", type=int, default=None)
+
     return parser
 
 
@@ -41,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "check-proposal-followups":
         from gtm_backend.phase4.agents.agent_26_proposal_followup import check_proposal_followups
         check_proposal_followups(args.limit)
+    elif command == "generate-executive-briefs":
+        from gtm_backend.phase4.agents.agent_27_executive_engagement import generate_pending_executive_briefs
+        generate_pending_executive_briefs(args.limit)
     return 0
 
 

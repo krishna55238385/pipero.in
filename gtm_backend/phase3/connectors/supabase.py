@@ -1143,3 +1143,34 @@ def update_deal_proposal(proposal_id: int, **fields) -> None:
         if _missing_table(exc, "deal_proposals"):
             return
         raise
+
+
+# -- Agent 27 — Executive Engagement (phase4) ------------------------------
+
+def get_brief_for_deal(deal_id: str) -> dict | None:
+    """Existing executive_briefs row for this deal, if any — keeps brief
+    generation idempotent."""
+    try:
+        rows = _get("/executive_briefs", params={"deal_id": f"eq.{deal_id}", "limit": 1})
+    except SupabaseError as exc:
+        if _missing_table(exc, "executive_briefs"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def create_executive_brief(**fields) -> dict | None:
+    """Insert one executive_briefs row. Always draft/held — never sent
+    automatically, same human-review-first pattern as every messaging agent
+    this session."""
+    try:
+        rows = _post("/executive_briefs", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "executive_briefs"):
+            print(
+                "[supabase] executive_briefs table missing — brief not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
