@@ -350,6 +350,14 @@ ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS followup_count INTEGER NOT N
 ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ;
 ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS draft_followup_text TEXT;
 ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS followup_status TEXT NOT NULL DEFAULT 'none';
+-- organization_id: every _post/_upsert in supabase.py auto-injects this via
+-- _inject_org whenever GTM_ORG_ID is set — required on any table Agent
+-- 25-27/33 write to, or the insert/upsert fails with UndefinedColumn (hit
+-- live on pipeline_status 2026-07-24; backfilling it here too since the same
+-- bug was latent on this table, just never triggered — no row had been
+-- inserted into deal_proposals yet). Nullable UUID, no FK, matches the
+-- existing pattern on phase1's social_listening_leads.
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 -- ---------------------------------------------------------------------------
 -- Agent 27 — Executive Engagement (phase4/CONVERT)
@@ -377,6 +385,8 @@ ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS business_outcome_summary T
 ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS peer_reference TEXT;
 ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft';
 ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+ALTER TABLE executive_briefs ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_executive_briefs_deal_id ON executive_briefs(deal_id);
 
@@ -407,5 +417,6 @@ ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS days_since_activity INTEGER
 ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS next_best_action TEXT;
 ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS risk_reasoning TEXT;
 ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE pipeline_status ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_pipeline_status_deal_id ON pipeline_status(deal_id);
