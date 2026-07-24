@@ -110,7 +110,6 @@ def _scope_to_org(params: dict) -> dict:
     if not _ORG_ID or "organization_id" in params:
         return params
     return {**params, "organization_id": f"eq.{_ORG_ID}"}
-    return body
 
 
 def _now_iso() -> str:
