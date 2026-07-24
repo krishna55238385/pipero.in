@@ -1113,3 +1113,33 @@ def create_deal_proposal(**fields) -> dict | None:
             return None
         raise
     return rows[0] if rows else None
+
+
+# -- Agent 26 — Proposal Follow-up (phase4) --------------------------------
+
+def get_sent_proposals(limit: int | None = None) -> list[dict]:
+    """deal_proposals rows a human has marked status='sent' — the only status
+    Agent 26 acts on (a 'draft'/'held' proposal was never sent, nothing to
+    follow up on; PDF rule: follow-up timing is measured from send time)."""
+    params: dict = {"status": "eq.sent", "order": "sent_at.asc"}
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/deal_proposals", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "deal_proposals"):
+            return []
+        raise
+
+
+def update_deal_proposal(proposal_id: int, **fields) -> None:
+    """Patch arbitrary columns on one deal_proposals row (follow-up draft,
+    engagement counters, alert flag)."""
+    if not fields:
+        return
+    try:
+        _patch("/deal_proposals", {"id": f"eq.{proposal_id}"}, fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "deal_proposals"):
+            return
+        raise

@@ -2,6 +2,7 @@
 
 Agent 24: Deal Qualification
 Agent 25: Proposal Generation
+Agent 26: Proposal Follow-up
 
 Deliberately thin: reuses phase3's proven Groq client (connectors/openai.py)
 and RDS client (connectors/supabase.py) rather than duplicating them — the

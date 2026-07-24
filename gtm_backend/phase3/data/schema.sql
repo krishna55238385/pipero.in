@@ -335,3 +335,18 @@ ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_deal_proposals_deal_id ON deal_proposals(deal_id);
+
+-- Agent 26 — Proposal Follow-up additions. sent_at/opened_at/open_count/
+-- shared_with_others are populated by whatever eventually sends+tracks the
+-- proposal (not built yet — same "build the agent ahead of the real
+-- integration" pattern as Agent 16/inbox). Until that exists these just stay
+-- null/0/false and Agent 26 simply never fires, which is the safe default.
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS open_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS shared_with_others BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS seller_alerted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS followup_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS draft_followup_text TEXT;
+ALTER TABLE deal_proposals ADD COLUMN IF NOT EXISTS followup_status TEXT NOT NULL DEFAULT 'none';
