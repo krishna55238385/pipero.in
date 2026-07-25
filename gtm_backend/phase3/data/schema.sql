@@ -505,3 +505,61 @@ ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS report_text TEXT;
 ALTER TABLE board_reports ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ DEFAULT NOW();
 
 CREATE INDEX IF NOT EXISTS idx_board_reports_generated_at ON board_reports(generated_at);
+
+-- ---------------------------------------------------------------------------
+-- Agent 36 — ROI Attribution (phase4/MANAGE & REPORT)
+-- ---------------------------------------------------------------------------
+-- Append-only, same reasoning as revenue_forecasts/board_reports — the PDF
+-- rule "attribution data must be reviewed monthly" implies keeping history,
+-- and cost-per-acquisition trend ("reducing quarter over quarter") can only
+-- be judged by comparing snapshots over time, not from one point-in-time row.
+--
+-- Deliberately scoped honestly, not to the PDF's full spec: the PDF asks for
+-- multi-touch, multi-CHANNEL attribution and cost-per-meeting. This system
+-- currently has exactly one outbound channel (email — phase3's
+-- CHANNEL_STRATEGY_SYSTEM is a hard "email-only" rule) and no Meeting Booking
+-- agent (22/23 blocked on a calendar vendor decision). channel_breakdown
+-- therefore has exactly one real row today; cost_per_meeting is omitted
+-- entirely rather than invented. limitations_note records this in the row
+-- itself so nobody reads a single-channel report as if it were the
+-- multi-channel comparison the PDF describes.
+CREATE TABLE IF NOT EXISTS roi_attribution_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    total_llm_cost_usd NUMERIC,
+    cost_by_phase JSONB DEFAULT '{}'::jsonb,
+    lead_count INTEGER,
+    qualified_deal_count INTEGER,
+    closed_won_count INTEGER,
+    closed_won_revenue NUMERIC,
+    cost_per_lead NUMERIC,
+    cost_per_qualified_deal NUMERIC,
+    cost_per_closed_deal NUMERIC,
+    channel_breakdown JSONB DEFAULT '[]'::jsonb,
+    sourced_pipeline_value NUMERIC,
+    influenced_pipeline_value NUMERIC,
+    roi_ratio NUMERIC,
+    flagged_negative_roi BOOLEAN NOT NULL DEFAULT FALSE,
+    limitations_note TEXT,
+    generated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS total_llm_cost_usd NUMERIC;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS cost_by_phase JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS lead_count INTEGER;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS qualified_deal_count INTEGER;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS closed_won_count INTEGER;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS closed_won_revenue NUMERIC;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS cost_per_lead NUMERIC;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS cost_per_qualified_deal NUMERIC;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS cost_per_closed_deal NUMERIC;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS channel_breakdown JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS sourced_pipeline_value NUMERIC;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS influenced_pipeline_value NUMERIC;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS roi_ratio NUMERIC;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS flagged_negative_roi BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS limitations_note TEXT;
+ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_roi_attribution_generated_at ON roi_attribution_snapshots(generated_at);

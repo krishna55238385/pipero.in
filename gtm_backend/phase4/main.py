@@ -47,6 +47,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Agent 35: compile pipeline/forecast/risk data into a leadership-ready board report",
     )
 
+    sub.add_parser(
+        "generate-roi-report",
+        help="Agent 36: compute cost-per-lead/qualified-deal/closed-deal and flag negative ROI",
+    )
+
     return parser
 
 
@@ -75,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "generate-board-report":
         from gtm_backend.phase4.agents.agent_35_board_reporting import generate_board_report
         generate_board_report()
+    elif command == "generate-roi-report":
+        from gtm_backend.phase4.agents.agent_36_roi_attribution import generate_roi_attribution
+        generate_roi_attribution()
     return 0
 
 

@@ -1334,6 +1334,71 @@ def get_at_risk_pipeline_status(limit: int | None = None) -> list[dict]:
         raise
 
 
+# -- Agent 36 — ROI Attribution (phase4) -----------------------------------
+
+def get_llm_cost_by_phase() -> dict[str, float]:
+    """Total estimated_cost_usd from the shared llm_usage table, grouped by
+    phase — the real cost basis for cost-per-lead/deal math. Not org-scoped:
+    llm_usage has no organization_id (it's a phase1-4 shared table keyed by
+    agent/phase, not by CRM tenant), same reason leads_raw has none — the
+    whole backend process runs scoped to one org via GTM_ORG_ID already."""
+    try:
+        rows = _get("/llm_usage", params={"select": "phase, estimated_cost_usd"})
+    except SupabaseError:
+        return {}
+    totals: dict[str, float] = {}
+    for row in rows:
+        phase = row.get("phase") or "unknown"
+        try:
+            cost = float(row.get("estimated_cost_usd") or 0)
+        except (TypeError, ValueError):
+            cost = 0.0
+        totals[phase] = totals.get(phase, 0.0) + cost
+    return totals
+
+
+def get_lead_count() -> int:
+    """Total rows in leads_raw — the denominator for cost-per-lead. Counts
+    every lead ever generated, not scoped to a time window (matches the
+    all-time approach Agent 35 already uses for conversion_rate)."""
+    try:
+        rows = _get("/leads_raw", params={"select": "id"})
+    except SupabaseError:
+        return 0
+    return len(rows)
+
+
+def create_roi_attribution_snapshot(**fields) -> dict | None:
+    """Insert one roi_attribution_snapshots row. Append-only, same reasoning
+    as revenue_forecasts/board_reports — trend over time is the point."""
+    try:
+        rows = _post("/roi_attribution_snapshots", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "roi_attribution_snapshots"):
+            print(
+                "[supabase] roi_attribution_snapshots table missing — snapshot not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def get_recent_roi_attribution_snapshots(limit: int = 2) -> list[dict]:
+    """Most recent ROI snapshots, newest first — lets Agent 36 note whether
+    a negative-ROI flag is a one-off or consistent across runs (PDF rule:
+    'if a channel is consistently showing negative ROI, it must be flagged')."""
+    try:
+        return _get(
+            "/roi_attribution_snapshots",
+            params=_scope_to_org({"order": "generated_at.desc", "limit": limit}),
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "roi_attribution_snapshots"):
+            return []
+        raise
+
+
 def create_board_report(**fields) -> dict | None:
     """Insert one board_reports snapshot row. Append-only, same reasoning as
     revenue_forecasts — each report is a point-in-time record, not something
