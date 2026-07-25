@@ -302,6 +302,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_outreach_replies_lead_campaign
 CREATE INDEX IF NOT EXISTS idx_outreach_replies_lead_id ON outreach_replies(lead_id);
 
 -- ---------------------------------------------------------------------------
+-- Per-organization seller product description (Agents 25/27)
+-- ---------------------------------------------------------------------------
+-- Each CRM organization is a genuinely separate client business (PDF Agent 47
+-- "Multi-Tenant Management" — each client's data/workspace is isolated; PDF
+-- Agent 48 "White-Label Delivery" — outputs carry the client's brand, not the
+-- agency's). A single global product description was architecturally wrong
+-- for Agents 25 (Proposal Generation) and 27 (Executive Engagement), which
+-- both need to know what THIS client's business actually sells. Stored on
+-- `organizations` itself (the CRM's own tenant table) rather than a new
+-- table, per the natural 1:1 relationship — one description per org.
+-- `organizations` is a shared CRM table (not owned by magnivo_app), so this
+-- ALTER may need a one-time grant fix on first deploy, same as past
+-- shared-table ALTERs (see INFRA_NOTES.md) — flagged here, not worked around.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS product_description TEXT;
+
+-- ---------------------------------------------------------------------------
 -- Agent 25 — Proposal Generation (phase4/CONVERT)
 -- ---------------------------------------------------------------------------
 -- Deliberately its OWN table rather than more columns on the CRM's `deals`

@@ -75,17 +75,13 @@ class Settings(BaseSettings):
     # for an immediate blast or when recipient timezones are unknown/unreliable.
     enforce_send_window: bool = True
 
-    # -- Seller product description (Agents 25/27) ------------------------
-    # A short, factual description of what WE actually sell — used only as
-    # grounding context for Proposal Generation and Executive Engagement so
-    # their drafts can be specific ("our AI-driven GTM automation platform
-    # handles X, Y, Z") instead of generic filler ("our solution will help
-    # you..."). Optional and unset by default: without it, those agents
-    # correctly stay vague rather than invent what the product does — this
-    # setting exists to close that gap, not to work around it. Set
-    # SELLER_PRODUCT_DESCRIPTION in the root .env once with 2-4 real
-    # sentences about the actual product/service being sold.
-    seller_product_description: str | None = None
+    # NOTE: no global seller_product_description setting. The CRM is
+    # multi-tenant (PDF Agent 47/48: each organization is a separate client
+    # business, isolated from every other client) — a single shared product
+    # description would be wrong for every org but one. Agents 25/27 instead
+    # look up each deal's own organization's product_description via
+    # supabase.get_org_product_description(deal["organization_id"]), reading
+    # a per-org column on the CRM's `organizations` table.
 
 
 def get_settings() -> Settings:

@@ -33,7 +33,6 @@ from datetime import datetime, timedelta, timezone
 
 from gtm_backend.phase3.connectors import openai as llm
 from gtm_backend.phase3.connectors import supabase
-from gtm_backend.phase3.core.config import get_settings
 from gtm_backend.phase4.core.prompts import PROPOSAL_GENERATION_SYSTEM
 
 _EXPIRY_DAYS = 14
@@ -93,7 +92,9 @@ def generate_proposal(deal: dict) -> dict:
     payload = {
         "deal_notes": notes,
         "estimated_deal_value": value,
-        "seller_product_description": get_settings().seller_product_description,
+        "seller_product_description": supabase.get_org_product_description(
+            deal.get("organization_id")
+        ),
     }
 
     try:

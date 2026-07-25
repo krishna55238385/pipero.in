@@ -1093,6 +1093,29 @@ def get_replies_needing_qualification(limit: int | None = None) -> list[dict]:
         raise
 
 
+# -- Per-org seller product description (Agents 25/27) ---------------------
+
+def get_org_product_description(organization_id: str | None) -> str | None:
+    """Fetch the requesting client's own product_description from the CRM's
+    `organizations` table. Returns None (never guesses/falls back to another
+    org's value) when organization_id is missing, the org row has no
+    description set, or the table/column isn't there yet — Agents 25/27 treat
+    None as "stay generic," which is the safe default either way."""
+    if not organization_id:
+        return None
+    try:
+        rows = _get(
+            "/organizations",
+            params={"id": f"eq.{organization_id}", "select": "product_description", "limit": 1},
+        )
+    except SupabaseError:
+        return None
+    if not rows:
+        return None
+    value = rows[0].get("product_description")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 # -- Agent 25 — Proposal Generation (phase4) ------------------------------
 
 def get_qualified_deals(limit: int | None = None) -> list[dict]:

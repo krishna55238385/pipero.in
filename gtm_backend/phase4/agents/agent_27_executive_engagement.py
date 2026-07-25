@@ -25,7 +25,6 @@ import json
 
 from gtm_backend.phase3.connectors import openai as llm
 from gtm_backend.phase3.connectors import supabase
-from gtm_backend.phase3.core.config import get_settings
 from gtm_backend.phase4.core.prompts import EXECUTIVE_ENGAGEMENT_SYSTEM
 
 
@@ -91,7 +90,9 @@ def generate_executive_brief(deal: dict) -> dict:
     payload = {
         "deal_notes": notes,
         "estimated_deal_value": deal.get("value"),
-        "seller_product_description": get_settings().seller_product_description,
+        "seller_product_description": supabase.get_org_product_description(
+            deal.get("organization_id")
+        ),
     }
 
     try:
