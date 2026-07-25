@@ -7,6 +7,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="phase4", description="AI GTM Agency — Phase 4 pipeline (CONVERT + MANAGE & REPORT)")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    sub.add_parser(
+        "sync-crm",
+        help="Agent 32: audit CRM for duplicate contacts, unverifiable contacts, and stale deals (flags only, never merges/deletes)",
+    )
+
     p_qualify = sub.add_parser(
         "qualify-deals",
         help="Agent 24: score 'interested' replies and create/update CRM deals",
@@ -59,7 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     command = args.command
 
-    if command == "qualify-deals":
+    if command == "sync-crm":
+        from gtm_backend.phase4.agents.agent_32_crm_sync import run_crm_sync
+        run_crm_sync()
+    elif command == "qualify-deals":
         from gtm_backend.phase4.agents.agent_24_deal_qualification import qualify_pending_deals
         qualify_pending_deals(args.limit)
     elif command == "generate-proposals":

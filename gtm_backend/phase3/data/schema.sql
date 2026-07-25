@@ -563,3 +563,51 @@ ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS limitations_note 
 ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ DEFAULT NOW();
 
 CREATE INDEX IF NOT EXISTS idx_roi_attribution_generated_at ON roi_attribution_snapshots(generated_at);
+
+-- ---------------------------------------------------------------------------
+-- Agent 32 — CRM Sync (phase4/MANAGE & REPORT)
+-- ---------------------------------------------------------------------------
+-- Scoped honestly, not to the PDF's full spec (see agent_32_crm_sync.py
+-- module docstring for the full reasoning): most of "log every touchpoint /
+-- auto-update deal stage" is already covered by Agents 14/16/24 writing
+-- directly to the CRM's own tables in real time. This table exists for the
+-- genuinely NEW piece — a data-hygiene audit that FLAGS problems (duplicate
+-- contacts, stale deals, unverifiable contacts) for a human to review and
+-- fix. Never auto-merges or auto-deletes anything (PDF's own rule: "data
+-- must never be deleted — only archived with a reason"; duplicates "must be
+-- flagged and merged" but auto-merging real CRM records is exactly the kind
+-- of destructive action this whole session's human-review-first pattern
+-- exists to avoid).
+--
+-- One row per detected issue, upserted on (flag_type, dedupe_key) so re-runs
+-- refresh existing flags instead of piling up duplicates of the same issue.
+-- dedupe_key is computed by the agent: deal_id for stale_deal, crm_lead_id
+-- for invalid_contact, a sorted-joined string of the duplicate lead ids for
+-- duplicate_contact.
+CREATE TABLE IF NOT EXISTS crm_sync_flags (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    flag_type TEXT NOT NULL,          -- duplicate_contact | stale_deal | invalid_contact
+    dedupe_key TEXT NOT NULL,
+    crm_lead_id UUID,
+    deal_id UUID,
+    related_lead_ids JSONB DEFAULT '[]'::jsonb,
+    details TEXT,
+    detected_at TIMESTAMPTZ DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ,
+    resolved_note TEXT
+);
+
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS flag_type TEXT;
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS crm_lead_id UUID;
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS deal_id UUID;
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS related_lead_ids JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS details TEXT;
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS resolved_note TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_crm_sync_flags_type_key ON crm_sync_flags(flag_type, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_crm_sync_flags_resolved_at ON crm_sync_flags(resolved_at);

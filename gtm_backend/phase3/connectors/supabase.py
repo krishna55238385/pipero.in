@@ -55,7 +55,7 @@ def _get_connection():
 _JSONB_COLUMNS = {
     "angles", "steps", "channel_sequence", "deal_breakdown", "pain_points_referenced",
     "pipeline_by_stage", "top_risks", "going_well", "needs_attention",
-    "cost_by_phase", "channel_breakdown",
+    "cost_by_phase", "channel_breakdown", "related_lead_ids",
 }
 
 
@@ -1236,6 +1236,52 @@ def create_executive_brief(**fields) -> dict | None:
             return None
         raise
     return rows[0] if rows else None
+
+
+# -- Agent 32 — CRM Sync (phase4) ------------------------------------------
+
+def get_all_crm_leads() -> list[dict]:
+    """Every CRM lead row (org-scoped) — used to detect duplicate contacts.
+    Unlike get_crm_lead_by_email (an exact-match lookup for one email), this
+    pulls the full set so the agent can group by normalized email itself."""
+    try:
+        return _get("/leads", params=_scope_to_org({"order": "created_at.asc"}))
+    except SupabaseError:
+        return []
+
+
+def upsert_crm_sync_flag(**fields) -> dict | None:
+    """Insert or refresh one crm_sync_flags row, keyed on (flag_type,
+    dedupe_key) — a re-run refreshes an existing flag (detected_at, details)
+    rather than piling up duplicate rows for the same issue. Never touches
+    resolved_at/resolved_note on conflict, so a human's resolution isn't
+    silently wiped by the next scheduled run re-detecting the same issue
+    before the underlying data is actually fixed."""
+    try:
+        rows = _upsert("/crm_sync_flags", fields, on_conflict="flag_type,dedupe_key")
+    except SupabaseError as exc:
+        if _missing_table(exc, "crm_sync_flags"):
+            print(
+                "[supabase] crm_sync_flags table missing — flag not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def get_unresolved_crm_sync_flags(flag_type: str | None = None) -> list[dict]:
+    """Currently-open flags (resolved_at IS NULL), optionally filtered to one
+    flag_type — what a human/ops dashboard would actually want to see."""
+    params: dict = {"resolved_at": "is.null", "order": "detected_at.desc"}
+    if flag_type is not None:
+        params["flag_type"] = f"eq.{flag_type}"
+    try:
+        return _get("/crm_sync_flags", params=_scope_to_org(params))
+    except SupabaseError as exc:
+        if _missing_table(exc, "crm_sync_flags"):
+            return []
+        raise
 
 
 # -- Agent 33 — Pipeline Management (phase4) -------------------------------
