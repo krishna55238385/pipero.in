@@ -79,6 +79,7 @@ def _build_one(row: dict) -> OutreachSequence | None:
             "contact_title": contact_title,
             "persona": persona_hint,
             "angles": row.get("angles") or [],
+            "seller_product_description": supabase.get_current_org_product_description(),
             "instructions": (
                 "Write the 5-step sequence in the FIXED order intro → follow_up × 3 "
                 "→ breakup, with EXACTLY 2 distinct subject variants per step. "

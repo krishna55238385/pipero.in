@@ -90,6 +90,7 @@ def _build_one(lead: dict) -> PersonalisationResult | None:
             "gtm_insight": gtm_insight or {},
             "account_intel": account_intel or {},
             "buying_signals": [],
+            "seller_product_description": supabase.get_current_org_product_description(),
         },
         default=str,
     )

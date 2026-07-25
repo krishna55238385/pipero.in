@@ -1093,7 +1093,22 @@ def get_replies_needing_qualification(limit: int | None = None) -> list[dict]:
         raise
 
 
-# -- Per-org seller product description (Agents 25/27) ---------------------
+# -- Per-org seller product description (Agents 11/12/25/27) ---------------
+
+def get_current_org_product_description() -> str | None:
+    """Product description for whichever org this whole process run is
+    scoped to (GTM_ORG_ID / _ORG_ID).
+
+    Unlike Agents 25/27 (which read the CRM's multi-tenant `deals` table and
+    so must look up each individual deal's own organization_id), phase3's
+    leads_raw/outreach_* pipeline has no per-row organization_id at all — the
+    entire pipeline run is already scoped to one client via _ORG_ID/_inject_org
+    (see module docstring). So "the org running right now" is simply _ORG_ID,
+    not something read off each lead. Returns None when GTM_ORG_ID is unset
+    (agents fall back to their existing generic-but-honest behavior).
+    """
+    return get_org_product_description(_ORG_ID)
+
 
 def get_org_product_description(organization_id: str | None) -> str | None:
     """Fetch the requesting client's own product_description from the CRM's
