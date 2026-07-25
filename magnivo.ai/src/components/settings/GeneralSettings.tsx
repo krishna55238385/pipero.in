@@ -4,8 +4,9 @@ import { useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-import { Building, Globe, Coins, Palette, Upload, Loader2, CheckCircle2 } from "lucide-react"
+import { Building, Globe, Coins, Palette, Upload, Loader2, CheckCircle2, Package } from "lucide-react"
 import { updateOrganization } from '@/app/actions/crm'
 import { toast } from 'sonner'
 import { useWorkspace } from '@/components/providers/WorkspaceProvider'
@@ -18,7 +19,8 @@ export default function GeneralSettings({ initialData }: { initialData: any }) {
         name: initialData?.name || '',
         timezone: initialData?.timezone || 'UTC',
         currency: initialData?.currency || 'INR',
-        logo_url: initialData?.logo_url || ''
+        logo_url: initialData?.logo_url || '',
+        product_description: initialData?.product_description || ''
     })
 
     const handleSave = async () => {
@@ -108,6 +110,23 @@ export default function GeneralSettings({ initialData }: { initialData: any }) {
                                 />
                             </div>
                         </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1 flex items-center gap-1.5">
+                            <Package className="w-3.5 h-3.5" /> Product / Service Description
+                        </Label>
+                        <Textarea
+                            value={formData.product_description}
+                            onChange={(e) => setFormData({ ...formData, product_description: e.target.value })}
+                            disabled={!isCoreAdmin}
+                            placeholder="2-4 sentences describing what your business actually sells. Used by AI-drafted proposals, executive briefs, and outreach emails so they reference your real product instead of generic filler."
+                            rows={4}
+                            className="rounded-2xl border-slate-100 dark:border-border font-bold bg-slate-50/50 dark:bg-card/50 resize-none"
+                        />
+                        <p className="text-xs font-medium text-slate-500 ml-1">
+                            Powers AI-generated proposals, executive briefs, and outreach copy for this organization only.
+                        </p>
                     </div>
                 </CardContent>
                 <CardFooter className="bg-slate-50/50 dark:bg-card/50 border-t border-slate-100 dark:border-border p-8 flex justify-end">

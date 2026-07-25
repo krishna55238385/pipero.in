@@ -1734,7 +1734,7 @@ export async function getOrganizationDetails() {
 
 // ─── updateOrganization ───────────────────────────────────────────────────────
 
-export async function updateOrganization(data: { name?: string; logo_url?: string; timezone?: string; currency?: string; branding?: any }) {
+export async function updateOrganization(data: { name?: string; logo_url?: string; timezone?: string; currency?: string; branding?: any; product_description?: string }) {
   const orgId = await getDefaultOrgId()
   if (!orgId) throw new Error('No organization found')
   const { isAdmin, error: authError } = await requireAdmin()
