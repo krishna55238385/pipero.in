@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import {
     Select,
@@ -24,7 +25,8 @@ export default function WorkspaceSettings({ initialData }: { initialData: any })
     const [formData, setFormData] = useState({
         name: initialData?.name || '',
         timezone: initialData?.timezone || '(UTC-05:00) Eastern Time',
-        currency: initialData?.currency || 'USD'
+        currency: initialData?.currency || 'USD',
+        product_description: initialData?.product_description || ''
     })
 
     const handleSave = async () => {
@@ -96,6 +98,21 @@ export default function WorkspaceSettings({ initialData }: { initialData: any })
                                 </SelectContent>
                             </Select>
                         </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label className="text-sm font-semibold dark:text-foreground">Product / Service Description</Label>
+                        <Textarea
+                            value={formData.product_description}
+                            onChange={(e) => setFormData({ ...formData, product_description: e.target.value })}
+                            disabled={!isCoreAdmin}
+                            placeholder="2-4 sentences describing what your business actually sells. Used by AI-drafted proposals, executive briefs, and outreach emails so they reference your real product instead of generic filler."
+                            rows={4}
+                            className="border-slate-200 dark:border-border bg-slate-50/50 dark:bg-background/50 resize-none"
+                        />
+                        <p className="text-xs text-slate-500 dark:text-muted-foreground">
+                            Powers AI-generated proposals, executive briefs, and outreach copy for this organization only.
+                        </p>
                     </div>
                 </CardContent>
                 <CardFooter className="flex justify-end p-6 pt-0">
