@@ -111,7 +111,15 @@ def qualify_deal(reply: dict) -> dict:
     value = _coerce_value(raw.get("estimated_deal_value"))
     reasoning = str(raw.get("reasoning") or "").strip() or None
     bant_note = _bant_summary(raw)
-    notes = f"{reasoning}\n\n{bant_note}".strip() if reasoning else bant_note
+    # Include the prospect's own words verbatim, not just Agent 24's paraphrase
+    # of them — downstream agents (25 Proposal Generation, 27 Executive
+    # Engagement) read deal.notes as their only grounding material, and a
+    # paraphrase-of-a-paraphrase produces noticeably more generic drafts than
+    # working from the actual quote. Added 2026-07-25 after live-testing 24-27
+    # end-to-end and finding the proposal/brief text read as boilerplate.
+    quote = f'Prospect\'s own words: "{reply_text}"' if reply_text else None
+    notes_parts = [p for p in (reasoning, bant_note, quote) if p]
+    notes = "\n\n".join(notes_parts)
 
     existing_deal = supabase.get_deal_for_crm_lead(crm_lead["id"])
     deal_fields = {

@@ -69,14 +69,22 @@ Return ONLY a JSON object. No prose, no markdown, no code fences."""
 
 EXECUTIVE_ENGAGEMENT_SYSTEM = """You are a B2B executive-communications writer.
 Given a qualified deal's notes (which already cite the prospect's own stated
-evidence) and its estimated value, draft a one-page executive brief meant for
-a C-suite decision-maker — a business case, not a sales pitch.
+evidence), its estimated value, and (optionally) a short description of what
+the seller's own product/service actually is, draft a one-page executive
+brief meant for a C-suite decision-maker — a business case, not a sales
+pitch or a restatement of the deal's bare facts.
 
 Hard rules:
 - Lead with business outcomes and financial impact — revenue growth, cost
   reduction, risk mitigation — NEVER product features or capabilities lists.
   This is the PDF's own rule verbatim: "must lead with business outcomes and
   financial impact, not product details."
+- Do not simply restate the deal facts (budget, authority, timing) back at
+  the reader — that's a summary, not a business case. Use seller_product_
+  description (when provided) to explain HOW the outcome gets achieved, and
+  connect it to what the prospect specifically said they need. If seller_
+  product_description is null/empty, stay generic about mechanism but still
+  build a real outcome-focused argument, not a bare facts recap.
 - The ROI/business-outcome summary must be grounded ONLY in evidence present
   in deal_notes or estimated_deal_value. If no real basis exists for an ROI
   claim, do not invent one — write business_outcome_summary generically
@@ -171,13 +179,20 @@ Return ONLY a JSON object. No prose, no markdown, no code fences."""
 
 PROPOSAL_GENERATION_SYSTEM = """You are a B2B proposal writer. Given a qualified
 deal — the prospect's own words (their reply/notes), whatever account
-research exists, and the deal's estimated value if known — draft a short,
-compelling proposal.
+research exists, the deal's estimated value if known, and (optionally) a
+short description of what the seller's own product/service actually is —
+draft a short, compelling proposal.
 
 Hard rules:
 - Lead with the business OUTCOME the prospect will get, not a list of product
   features. The PDF's own rule: "must lead with business outcomes — not
   product features."
+- If seller_product_description is provided, ground the proposal in what that
+  product ACTUALLY does — reference its real capabilities, not vague phrases
+  like "our solution." If seller_product_description is null/empty, stay
+  deliberately generic about product specifics ("this approach," "what we
+  offer") rather than inventing capabilities that were never described —
+  vague-but-honest beats specific-but-fabricated every time.
 - Every proposal MUST explicitly reference at least one of the prospect's own
   stated pain points (from reply_text/notes) — a generic proposal that could
   go to any company is a failure. If no real pain point is present in the

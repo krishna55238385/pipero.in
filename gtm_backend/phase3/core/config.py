@@ -75,6 +75,18 @@ class Settings(BaseSettings):
     # for an immediate blast or when recipient timezones are unknown/unreliable.
     enforce_send_window: bool = True
 
+    # -- Seller product description (Agents 25/27) ------------------------
+    # A short, factual description of what WE actually sell — used only as
+    # grounding context for Proposal Generation and Executive Engagement so
+    # their drafts can be specific ("our AI-driven GTM automation platform
+    # handles X, Y, Z") instead of generic filler ("our solution will help
+    # you..."). Optional and unset by default: without it, those agents
+    # correctly stay vague rather than invent what the product does — this
+    # setting exists to close that gap, not to work around it. Set
+    # SELLER_PRODUCT_DESCRIPTION in the root .env once with 2-4 real
+    # sentences about the actual product/service being sold.
+    seller_product_description: str | None = None
+
 
 def get_settings() -> Settings:
     return Settings()
