@@ -55,6 +55,7 @@ def _get_connection():
 _JSONB_COLUMNS = {
     "angles", "steps", "channel_sequence", "deal_breakdown", "pain_points_referenced",
     "pipeline_by_stage", "top_risks", "going_well", "needs_attention",
+    "cost_by_phase", "channel_breakdown",
 }
 
 
