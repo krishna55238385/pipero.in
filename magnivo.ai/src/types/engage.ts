@@ -203,6 +203,7 @@ export type ConversationInsight = {
 
 export type ConversationThread = {
   id: string
+  threadId: string
   leadName: string
   leadPhone: string | null
   unreadCount: number

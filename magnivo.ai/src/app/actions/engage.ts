@@ -963,6 +963,86 @@ export async function getUniboxMeta(): Promise<import('@/types/engage').UniboxMe
   }
 }
 
+// --------------------------------------------------------------------------- //
+// Agent 17 (Reply Handling) draft approval — outreach_replies.draft_response
+// is drafted by the Python backend and held at response_status='pending_review'
+// until a human approves it here. Modeled on the GtmIntelligence approve/
+// reject pattern in app/actions/gtm.ts (approveGtmBrief/rejectGtmBrief).
+// --------------------------------------------------------------------------- //
+export async function getReplyDraftForThread(threadId: string): Promise<{
+  id: number
+  draftResponse: string | null
+  responseStatus: string
+} | null> {
+  const { orgId } = await getCurrentActor()
+  const res = await pool.query(
+    `SELECT id, draft_response, response_status FROM public.outreach_replies
+     WHERE organization_id = $1 AND thread_id = $2
+     ORDER BY replied_at DESC NULLS LAST, created_at DESC LIMIT 1`,
+    [orgId, threadId])
+  const row = res.rows?.[0]
+  if (!row) return null
+  return { id: row.id, draftResponse: row.draft_response ?? null, responseStatus: row.response_status }
+}
+
+async function callGtmService(path: string, body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
+  const url = process.env.GTM_SERVICE_URL
+  const token = process.env.GTM_SERVICE_TOKEN
+  if (!url || !token) {
+    return { ok: false, error: 'GTM service not configured (set GTM_SERVICE_URL & GTM_SERVICE_TOKEN)' }
+  }
+  try {
+    const res = await fetch(`${url}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) return { ok: false, error: json.detail ? JSON.stringify(json.detail) : `service returned ${res.status}` }
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'service unreachable' }
+  }
+}
+
+export async function approveAndSendReply(replyId: number): Promise<{ ok: boolean; error?: string }> {
+  const { orgId } = await getCurrentActor()
+  try {
+    // Flip to 'approved' first — this is the one hard gate the backend's
+    // send_approved_response() checks before it will dispatch anything.
+    await pool.query(
+      `UPDATE public.outreach_replies SET response_status = 'approved' WHERE id = $1 AND organization_id = $2`,
+      [replyId, orgId])
+
+    const sendResult = await callGtmService('/reply/send', { organization_id: orgId, reply_id: replyId })
+    if (!sendResult.ok) {
+      // Leave it at 'approved' — it's queued and safe to retry/send later
+      // (e.g. via `python -m phase3 send-reply --reply-id`) even if the
+      // live service call failed right now (service down, etc).
+      revalidatePath('/engage/conversations')
+      return { ok: false, error: sendResult.error }
+    }
+    revalidatePath('/engage/conversations')
+    return { ok: true }
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
+}
+
+export async function rejectReplyDraft(replyId: number): Promise<{ ok: boolean; error?: string }> {
+  const { orgId } = await getCurrentActor()
+  try {
+    await pool.query(
+      `UPDATE public.outreach_replies SET response_status = 'no_response_needed' WHERE id = $1 AND organization_id = $2`,
+      [replyId, orgId])
+    revalidatePath('/engage/conversations')
+    return { ok: true }
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
+}
+
 export async function setThreadInterest(threadId: string, status: import('@/types/engage').InterestStatus) {
   const { orgId } = await getCurrentActor()
   await pool.query(
@@ -1045,6 +1125,7 @@ export async function getEmailConversations(): Promise<ConversationThread[]> {
     const cls = rep?.classification ?? 'unknown'
     return {
       id: `email-${t}`,
+      threadId: t,
       leadName: rec?.name || rep?.email || 'Email lead',
       leadPhone: rec?.company || (rep?.email ?? null),
       unreadCount: 0,
@@ -1125,6 +1206,7 @@ export async function getConversations(): Promise<ConversationThread[]> {
     const id = String(c.id)
     return {
       id,
+      threadId: '', // not an email thread (WhatsApp/SMS) — no outreach_replies draft applies
       leadName: String(lead?.name || 'Unknown contact'),
       leadPhone: lead?.phone_number ? String(lead.phone_number) : null,
       unreadCount: Number(c.unread_count ?? 0),

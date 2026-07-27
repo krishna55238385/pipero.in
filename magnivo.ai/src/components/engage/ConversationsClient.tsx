@@ -1,10 +1,13 @@
 'use client'
 
-import { useState } from 'react'
-import { MessageSquare } from 'lucide-react'
+import { useEffect, useState, useTransition } from 'react'
+import { MessageSquare, Sparkles, CheckCircle2, XCircle } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
+import { getReplyDraftForThread, approveAndSendReply, rejectReplyDraft } from '@/app/actions/engage'
 import type { ConversationThread } from '@/types/engage'
 
 function formatWhen(value: string | null): string {
@@ -26,6 +29,80 @@ function urgencyVariant(urgency: string | null) {
   if (u === 'high') return 'destructive' as const
   if (u === 'medium') return 'default' as const
   return 'secondary' as const
+}
+
+// Agent 17's drafted response for this thread, held at response_status=
+// 'pending_review' until a human approves or rejects it here — modeled on
+// the GtmIntelligence.tsx Approve/Reject pattern (app/actions/gtm.ts).
+function PendingDraftCard({ threadId }: { threadId: string }) {
+  const [draft, setDraft] = useState<{ id: number; draftResponse: string | null; responseStatus: string } | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [pending, startTransition] = useTransition()
+
+  useEffect(() => {
+    setLoaded(false)
+    setDraft(null)
+    if (!threadId) {
+      setLoaded(true)
+      return
+    }
+    let cancelled = false
+    getReplyDraftForThread(threadId).then((d) => {
+      if (!cancelled) {
+        setDraft(d)
+        setLoaded(true)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [threadId])
+
+  if (!loaded || !draft || draft.responseStatus !== 'pending_review' || !draft.draftResponse) {
+    return null
+  }
+
+  const onApprove = () => {
+    startTransition(async () => {
+      const res = await approveAndSendReply(draft.id)
+      if (res.ok) {
+        toast.success('Reply approved and sent')
+        setDraft({ ...draft, responseStatus: 'sent' })
+      } else {
+        toast.error(res.error || 'Approved, but send failed — will retry')
+        setDraft({ ...draft, responseStatus: 'approved' })
+      }
+    })
+  }
+
+  const onReject = () => {
+    startTransition(async () => {
+      const res = await rejectReplyDraft(draft.id)
+      if (res.ok) {
+        toast.success('Draft rejected')
+        setDraft({ ...draft, responseStatus: 'no_response_needed' })
+      } else {
+        toast.error(res.error || 'Failed to reject draft')
+      }
+    })
+  }
+
+  return (
+    <div className="rounded-xl border border-purple-200 dark:border-purple-900/40 bg-purple-50/60 dark:bg-purple-950/20 p-3 space-y-2.5">
+      <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-purple-700 dark:text-purple-400">
+        <Sparkles className="h-3.5 w-3.5" /> AI drafted reply — awaiting your review
+      </div>
+      <p className="text-sm whitespace-pre-wrap">{draft.draftResponse}</p>
+      <div className="flex items-center gap-2 pt-1">
+        <Button size="sm" onClick={onApprove} disabled={pending} className="gap-1.5">
+          <CheckCircle2 className="h-3.5 w-3.5" /> {pending ? 'Sending…' : 'Approve & Send'}
+        </Button>
+        <Button size="sm" variant="outline" onClick={onReject} disabled={pending} className="gap-1.5">
+          <XCircle className="h-3.5 w-3.5" /> Reject
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 export default function ConversationsClient({
@@ -179,6 +256,8 @@ export default function ConversationsClient({
                 })}
               </div>
             )}
+
+            <PendingDraftCard threadId={selected.threadId} />
 
             {selected.insight?.suggestedReply ? (
               <div className="rounded-xl border bg-muted/40 p-3">
