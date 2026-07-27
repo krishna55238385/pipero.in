@@ -53,6 +53,21 @@ ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS contact_linkedin_url TEXT;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT FALSE;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS bounce_status TEXT;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMPTZ;
+-- Agent 37 — Data Refresh (phase4/MANAGE & REPORT) addition. last_verified_at
+-- already existed but was never actually set anywhere in the codebase before
+-- Agent 37 — every lead has been "unverified since creation" by omission,
+-- not by any real check. data_quality_score is new: a deterministic 0-100
+-- completeness+freshness score, computed and stored per record (PDF rule:
+-- "must maintain a data quality score per record").
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS data_quality_score INTEGER;
+-- Agent 38 — Inbound Signal Capture addition. `source` (below) already means
+-- something else (which search API found the lead — "serpapi"/"serper"), so
+-- a NEW column is needed for lead-origin-channel rather than overloading it.
+-- Default 'outbound' — every existing/future Agent 02 row is outbound by
+-- definition; Agent 38 sets 'inbound_signal' on the leads it creates. PDF
+-- rule: "inbound leads must be tagged separately from outbound leads for
+-- attribution."
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS lead_channel TEXT DEFAULT 'outbound';
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS sources JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS raw_data JSONB DEFAULT '{}'::jsonb;
@@ -159,3 +174,68 @@ ALTER TABLE social_listening_leads ADD COLUMN IF NOT EXISTS organization_id UUID
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_social_listening_source_url ON social_listening_leads(icp_id, source_url);
 CREATE INDEX IF NOT EXISTS idx_social_listening_icp_id ON social_listening_leads(icp_id);
 CREATE INDEX IF NOT EXISTS idx_social_listening_status ON social_listening_leads(status);
+
+-- ---------------------------------------------------------------------------
+-- Agent 37 — Data Refresh (phase4/MANAGE & REPORT)
+-- ---------------------------------------------------------------------------
+-- Append-only monthly-health snapshot, same reasoning as revenue_forecasts/
+-- board_reports/roi_attribution_snapshots — PDF rule "must report monthly on
+-- overall database health and decay rate" needs history to show a trend, not
+-- just a current number. Per-record state (data_quality_score, verified,
+-- bounce_status, last_verified_at) lives directly on leads_raw — this table
+-- is only the aggregate summary of each refresh run.
+CREATE TABLE IF NOT EXISTS data_quality_reports (
+    id BIGSERIAL PRIMARY KEY,
+    leads_examined INTEGER,
+    reverified_count INTEGER,
+    still_stale_count INTEGER,
+    avg_quality_score NUMERIC,
+    bounce_rate NUMERIC,
+    generated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS leads_examined INTEGER;
+ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS reverified_count INTEGER;
+ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS still_stale_count INTEGER;
+ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS avg_quality_score NUMERIC;
+ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS bounce_rate NUMERIC;
+ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_data_quality_reports_generated_at ON data_quality_reports(generated_at);
+
+-- ---------------------------------------------------------------------------
+-- Agent 38 — Inbound Signal Capture (phase4/MANAGE & REPORT)
+-- ---------------------------------------------------------------------------
+-- Reads the CRM's existing `website_visitor_signals` table (GA4-backed,
+-- already company-level aggregated data — no individual-tracking privacy
+-- concern, PDF rule already satisfied by the data source itself). One row
+-- per (organization, company_domain) — upserted so a company visiting again
+-- refreshes the existing row instead of piling up duplicates. Mirrors the
+-- candidate/promoted status pattern already used by social_listening_leads.
+CREATE TABLE IF NOT EXISTS inbound_signal_captures (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    company_name TEXT,
+    company_domain TEXT NOT NULL,
+    signal_strength TEXT,          -- low | medium | high (from website_visitor_signals)
+    sessions INTEGER,
+    page_views INTEGER,
+    high_intent_pages_hit BOOLEAN NOT NULL DEFAULT FALSE,  -- pricing/case-study page visited
+    status TEXT NOT NULL DEFAULT 'candidate',              -- candidate | promoted | held
+    held_reason TEXT,
+    promoted_lead_id BIGINT REFERENCES leads_raw(id) ON DELETE SET NULL,
+    captured_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS company_domain TEXT;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS signal_strength TEXT;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS sessions INTEGER;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS page_views INTEGER;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS high_intent_pages_hit BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'candidate';
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS held_reason TEXT;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS promoted_lead_id BIGINT REFERENCES leads_raw(id) ON DELETE SET NULL;
+ALTER TABLE inbound_signal_captures ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_inbound_signal_captures_org_domain ON inbound_signal_captures(organization_id, company_domain);
+CREATE INDEX IF NOT EXISTS idx_inbound_signal_captures_status ON inbound_signal_captures(status);

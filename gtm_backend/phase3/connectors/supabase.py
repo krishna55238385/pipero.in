@@ -1446,6 +1446,117 @@ def get_recent_roi_attribution_snapshots(limit: int = 2) -> list[dict]:
         raise
 
 
+# -- Agent 37 — Data Refresh (phase4) --------------------------------------
+
+def get_leads_for_data_refresh(limit: int | None = None) -> list[dict]:
+    """leads_raw rows with a contact_email set — nothing to re-verify on a
+    lead with no email. Sorted in Python (never-verified/NULL first, then
+    oldest last_verified_at first) rather than SQL, since the shared
+    _build_order helper only supports simple ASC/DESC and Postgres's default
+    NULLS LAST for ASC would put never-verified leads last — the opposite of
+    what "refresh the stalest records first" needs."""
+    try:
+        rows = _get("/leads_raw", params={"contact_email": "not.is.null"})
+    except SupabaseError:
+        return []
+    rows.sort(key=lambda r: r.get("last_verified_at") or "")
+    return rows[:limit] if limit is not None else rows
+
+
+def update_lead_raw(lead_id: int, **fields) -> None:
+    """Patch arbitrary columns on one leads_raw row (verification result,
+    data_quality_score)."""
+    if not fields:
+        return
+    try:
+        _patch("/leads_raw", {"id": f"eq.{lead_id}"}, fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "leads_raw"):
+            return
+        raise
+
+
+def create_data_quality_report(**fields) -> dict | None:
+    """Insert one data_quality_reports snapshot row. Append-only, same
+    reasoning as revenue_forecasts/board_reports/roi_attribution_snapshots."""
+    try:
+        rows = _post("/data_quality_reports", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "data_quality_reports"):
+            print(
+                "[supabase] data_quality_reports table missing — report not persisted. "
+                "Apply schema: python -m phase1 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+# -- Agent 38 — Inbound Signal Capture (phase4) -----------------------------
+
+def get_website_visitor_signals(limit: int | None = None) -> list[dict]:
+    """Company-level GA4-backed visitor signals from the CRM's own
+    website_visitor_signals table — already aggregated to company level (no
+    individual-visitor tracking), so the PDF's privacy rule ("only use
+    aggregated company-level data") is satisfied by the data source itself,
+    not something this agent needs to enforce."""
+    params: dict = {"order": "last_seen_at.desc"}
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/website_visitor_signals", params=_scope_to_org(params))
+    except SupabaseError:
+        return []
+
+
+def get_lead_by_company_domain(domain: str) -> dict | None:
+    """Existing leads_raw row for this company domain, if any — lets Agent 38
+    link an inbound signal to an already-known lead instead of creating a
+    duplicate (PDF rule: 'must link inbound signal to any existing lead
+    record if the company is already in the pipeline')."""
+    if not domain:
+        return None
+    try:
+        rows = _get(
+            "/leads_raw",
+            params={"company_domain": f"eq.{domain.strip().lower()}", "limit": 1},
+        )
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
+def create_inbound_lead(**fields) -> dict | None:
+    """Insert a new leads_raw row sourced from an inbound signal
+    (lead_channel='inbound_signal', set by the caller)."""
+    try:
+        rows = _post("/leads_raw", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "leads_raw"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def upsert_inbound_signal_capture(**fields) -> dict | None:
+    """Insert or refresh one inbound_signal_captures row, keyed on
+    (organization_id, company_domain) — a company visiting again refreshes
+    the existing candidate rather than creating a duplicate."""
+    try:
+        rows = _upsert(
+            "/inbound_signal_captures", fields, on_conflict="organization_id,company_domain"
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "inbound_signal_captures"):
+            print(
+                "[supabase] inbound_signal_captures table missing — capture not persisted. "
+                "Apply schema: python -m phase1 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
 def create_board_report(**fields) -> dict | None:
     """Insert one board_reports snapshot row. Append-only, same reasoning as
     revenue_forecasts — each report is a point-in-time record, not something

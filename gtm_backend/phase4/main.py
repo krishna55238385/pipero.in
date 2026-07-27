@@ -57,6 +57,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Agent 36: compute cost-per-lead/qualified-deal/closed-deal and flag negative ROI",
     )
 
+    p_refresh = sub.add_parser(
+        "refresh-data",
+        help="Agent 37: re-verify stale/bounced leads, compute data quality scores, log a health snapshot",
+    )
+    p_refresh.add_argument("--limit", type=int, default=None)
+
+    p_inbound = sub.add_parser(
+        "capture-inbound-signals",
+        help="Agent 38: promote multi-session website visitor signals into leads (2+ sessions, ICP-aware)",
+    )
+    p_inbound.add_argument("--limit", type=int, default=None)
+
     return parser
 
 
@@ -91,6 +103,12 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "generate-roi-report":
         from gtm_backend.phase4.agents.agent_36_roi_attribution import generate_roi_attribution
         generate_roi_attribution()
+    elif command == "refresh-data":
+        from gtm_backend.phase4.agents.agent_37_data_refresh import run_data_refresh
+        run_data_refresh(args.limit)
+    elif command == "capture-inbound-signals":
+        from gtm_backend.phase4.agents.agent_38_inbound_signal_capture import run_inbound_signal_capture
+        run_inbound_signal_capture(args.limit)
     return 0
 
 
