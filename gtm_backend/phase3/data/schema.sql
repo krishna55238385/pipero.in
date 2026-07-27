@@ -565,6 +565,58 @@ ALTER TABLE roi_attribution_snapshots ADD COLUMN IF NOT EXISTS generated_at TIME
 CREATE INDEX IF NOT EXISTS idx_roi_attribution_generated_at ON roi_attribution_snapshots(generated_at);
 
 -- ---------------------------------------------------------------------------
+-- Agent 39 — Onboarding Handoff (phase4/RETAIN & GROW, PDF Phase 7)
+-- ---------------------------------------------------------------------------
+-- Own table, same reasoning as deal_proposals/executive_briefs — no FK into
+-- the CRM's shared `deals` (owned by postgres, not magnivo_app), deal_id
+-- validated in application logic only.
+--
+-- Honest scope (see agent_39_onboarding_handoff.py docstring for full
+-- reasoning): this agent produces the BRIEF (what was promised, success
+-- criteria, key stakeholders). It does NOT schedule the sales team's 30-
+-- minute handoff call, and it does NOT itself gate onboarding on delivery-
+-- team confirmation — those are human coordination steps. The `status` and
+-- `quality_rating` columns exist so a future CRM UI can let the delivery
+-- team confirm receipt and rate the handoff (PDF rules), but nothing in
+-- this codebase sets them automatically — draft-only, same human-review-
+-- first pattern as every other messaging/brief agent this session.
+CREATE TABLE IF NOT EXISTS onboarding_handoffs (
+    id BIGSERIAL PRIMARY KEY,
+    deal_id UUID NOT NULL,
+    crm_lead_id UUID,
+    company_name TEXT,
+    handoff_brief TEXT,
+    what_was_promised TEXT,
+    success_criteria TEXT,
+    key_stakeholders JSONB DEFAULT '[]'::jsonb,
+    primary_contact_name TEXT,
+    primary_contact_email TEXT,
+    communication_preference TEXT,
+    status TEXT DEFAULT 'draft',          -- draft | delivered | confirmed | held
+    held_reason TEXT,
+    quality_rating INTEGER,               -- 1-5, set later by delivery team (not by this agent)
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS deal_id UUID;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS crm_lead_id UUID;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS handoff_brief TEXT;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS what_was_promised TEXT;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS success_criteria TEXT;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS key_stakeholders JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS primary_contact_name TEXT;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS primary_contact_email TEXT;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS communication_preference TEXT;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft';
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS held_reason TEXT;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS quality_rating INTEGER;
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS organization_id UUID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_onboarding_handoffs_deal_id ON onboarding_handoffs(deal_id);
+
+-- ---------------------------------------------------------------------------
 -- Agent 32 — CRM Sync (phase4/MANAGE & REPORT)
 -- ---------------------------------------------------------------------------
 -- Scoped honestly, not to the PDF's full spec (see agent_32_crm_sync.py

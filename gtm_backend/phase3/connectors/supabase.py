@@ -55,7 +55,7 @@ def _get_connection():
 _JSONB_COLUMNS = {
     "angles", "steps", "channel_sequence", "deal_breakdown", "pain_points_referenced",
     "pipeline_by_stage", "top_risks", "going_well", "needs_attention",
-    "cost_by_phase", "channel_breakdown", "related_lead_ids",
+    "cost_by_phase", "channel_breakdown", "related_lead_ids", "key_stakeholders",
 }
 
 
@@ -1282,6 +1282,51 @@ def get_unresolved_crm_sync_flags(flag_type: str | None = None) -> list[dict]:
         if _missing_table(exc, "crm_sync_flags"):
             return []
         raise
+
+
+# -- Agent 39 — Onboarding Handoff (phase4) ---------------------------------
+
+def get_crm_lead_by_id(crm_lead_id: str | None) -> dict | None:
+    """Full CRM lead row by id — used for whatever real contact fields exist
+    (name, phone, etc.), read defensively since this file has never needed
+    more than id/email from `leads` before now."""
+    if not crm_lead_id:
+        return None
+    try:
+        rows = _get("/leads", params=_scope_to_org({"id": f"eq.{crm_lead_id}", "limit": 1}))
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
+def get_handoff_for_deal(deal_id: str) -> dict | None:
+    """Existing onboarding_handoffs row for this deal, if any — keeps
+    handoff generation idempotent (a deal re-scanned after it's already won
+    doesn't get a duplicate brief)."""
+    try:
+        rows = _get("/onboarding_handoffs", params={"deal_id": f"eq.{deal_id}", "limit": 1})
+    except SupabaseError as exc:
+        if _missing_table(exc, "onboarding_handoffs"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def create_onboarding_handoff(**fields) -> dict | None:
+    """Insert one onboarding_handoffs row. Always draft/held — never marked
+    'delivered'/'confirmed' by this agent itself, same human-review-first
+    pattern as every other messaging/brief agent this session."""
+    try:
+        rows = _post("/onboarding_handoffs", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "onboarding_handoffs"):
+            print(
+                "[supabase] onboarding_handoffs table missing — handoff not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
 
 
 # -- Agent 33 — Pipeline Management (phase4) -------------------------------

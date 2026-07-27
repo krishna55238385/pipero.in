@@ -69,6 +69,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_inbound.add_argument("--limit", type=int, default=None)
 
+    p_handoff = sub.add_parser(
+        "generate-handoffs",
+        help="Agent 39: draft an onboarding handoff brief for every won deal that doesn't have one",
+    )
+    p_handoff.add_argument("--limit", type=int, default=None)
+
     return parser
 
 
@@ -109,6 +115,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "capture-inbound-signals":
         from gtm_backend.phase4.agents.agent_38_inbound_signal_capture import run_inbound_signal_capture
         run_inbound_signal_capture(args.limit)
+    elif command == "generate-handoffs":
+        from gtm_backend.phase4.agents.agent_39_onboarding_handoff import generate_pending_handoffs
+        generate_pending_handoffs(args.limit)
     return 0
 
 
