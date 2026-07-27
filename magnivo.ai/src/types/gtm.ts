@@ -198,6 +198,42 @@ export interface MarketSegment {
   recommendedVolume: number
 }
 
+// Agent 34 — Revenue Forecasting
+export interface RevenueForecast {
+  id: number
+  conservativeTotal: number
+  baseTotal: number
+  optimisticTotal: number
+  committedDealCount: number
+  excludedDealCount: number
+  totalDealCount: number
+  dealBreakdown: Array<{ deal_id?: string; company_name?: string; value?: number; probability?: number; weighted_value?: number }>
+  generatedAt: string
+}
+
+// Agent 35 — Board Reporting
+export interface BoardReportRisk {
+  deal_id?: string | number
+  company_name?: string
+  risk_level?: string
+  days_since_activity?: number
+  next_best_action?: string
+}
+
+export interface BoardReport {
+  id: number
+  pipelineByStage: Record<string, { count: number; total_value: number }>
+  conversionRate: number | null
+  conversionRateNote: string | null
+  forecastBaseTotal: number | null
+  forecastDeltaFromPrevious: number | null
+  topRisks: BoardReportRisk[]
+  goingWell: string[]
+  needsAttention: string[]
+  executiveSummary: string | null
+  generatedAt: string
+}
+
 export interface OutreachBundle {
   personalisation: {
     angles: Array<Record<string, unknown>>

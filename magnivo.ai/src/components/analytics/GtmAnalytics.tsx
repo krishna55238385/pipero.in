@@ -1,11 +1,210 @@
 'use client'
 
-import { BrainCircuit, Coins, Hash, Activity, Globe2, Layers } from 'lucide-react'
+import { BrainCircuit, Coins, Hash, Activity, Globe2, Layers, TrendingUp, TrendingDown, ClipboardList, AlertTriangle, CheckCircle2, ArrowUpRight, ArrowDownRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import type { Icp, MarketSegment } from '@/types/gtm'
+import type { Icp, MarketSegment, RevenueForecast, BoardReport } from '@/types/gtm'
+
+function fmtUsdFull(n: number): string {
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+}
+
+function riskClass(level: string | undefined): string {
+  const l = (level || '').toLowerCase()
+  if (l === 'stuck') return 'bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30'
+  if (l === 'at_risk' || l === 'at risk') return 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30'
+  return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
+}
+
+// Agent 34 — Revenue Forecasting
+function RevenueForecastCard({ forecast }: { forecast: RevenueForecast | null }) {
+  return (
+    <Card className="bg-white dark:bg-background border-gray-200 dark:border-border rounded-2xl overflow-hidden shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-lg font-bold flex items-center gap-2">
+          <TrendingUp className="h-5 w-5 text-emerald-600" />
+          Revenue Forecast
+        </CardTitle>
+        <CardDescription>
+          Conservative / base / optimistic rollup from active deals (probability ≥ 30% required to count as committed).
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!forecast ? (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            No forecast generated yet. Run the revenue forecasting pipeline to populate this.
+          </p>
+        ) : (
+          <div className="space-y-5">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Conservative</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">{fmtUsdFull(forecast.conservativeTotal)}</p>
+              </div>
+              <div className="rounded-xl border-2 border-emerald-500/40 p-3 bg-emerald-500/5">
+                <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">Base case</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">{fmtUsdFull(forecast.baseTotal)}</p>
+              </div>
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Optimistic</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">{fmtUsdFull(forecast.optimisticTotal)}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <span>{forecast.committedDealCount} committed deal(s)</span>
+              <span>·</span>
+              <span>{forecast.excludedDealCount} excluded (below 30% confidence)</span>
+              <span>·</span>
+              <span>{forecast.totalDealCount} total active</span>
+            </div>
+
+            {forecast.dealBreakdown.length > 0 && (
+              <div className="overflow-x-auto rounded-lg border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Deal</TableHead>
+                      <TableHead className="text-right">Value</TableHead>
+                      <TableHead className="text-right">Probability</TableHead>
+                      <TableHead className="text-right">Weighted</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {forecast.dealBreakdown.slice(0, 8).map((d, i) => (
+                      <TableRow key={d.deal_id ?? i}>
+                        <TableCell className="text-sm truncate max-w-[180px]">{d.company_name || '—'}</TableCell>
+                        <TableCell className="text-right text-sm tabular-nums">{d.value != null ? fmtUsdFull(d.value) : '—'}</TableCell>
+                        <TableCell className="text-right text-sm tabular-nums">{d.probability != null ? `${d.probability}%` : '—'}</TableCell>
+                        <TableCell className="text-right text-sm font-medium tabular-nums">{d.weighted_value != null ? fmtUsdFull(d.weighted_value) : '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Agent 35 — Board Reporting
+function BoardReportCard({ report }: { report: BoardReport | null }) {
+  return (
+    <Card className="bg-white dark:bg-background border-gray-200 dark:border-border rounded-2xl overflow-hidden shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-lg font-bold flex items-center gap-2">
+          <ClipboardList className="h-5 w-5 text-indigo-600" />
+          Board Report
+        </CardTitle>
+        <CardDescription>Leadership-ready pipeline, conversion, and risk summary.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!report ? (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            No board report generated yet. Run the board reporting pipeline to populate this.
+          </p>
+        ) : (
+          <div className="space-y-5">
+            {report.executiveSummary && (
+              <p className="text-sm text-foreground bg-muted/40 rounded-lg p-3">{report.executiveSummary}</p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Conversion rate</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">
+                  {report.conversionRate !== null ? `${report.conversionRate}%` : 'N/A'}
+                </p>
+                {report.conversionRateNote && (
+                  <p className="text-[11px] text-muted-foreground mt-0.5">{report.conversionRateNote}</p>
+                )}
+              </div>
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Forecast (base)</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">
+                  {report.forecastBaseTotal !== null ? fmtUsdFull(report.forecastBaseTotal) : 'N/A'}
+                </p>
+                {report.forecastDeltaFromPrevious !== null && (
+                  <p className={`text-[11px] mt-0.5 flex items-center gap-0.5 ${report.forecastDeltaFromPrevious >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {report.forecastDeltaFromPrevious >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                    {fmtUsdFull(Math.abs(report.forecastDeltaFromPrevious))} vs last report
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {Object.keys(report.pipelineByStage).length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Pipeline by stage</div>
+                {Object.entries(report.pipelineByStage).map(([stage, info]) => (
+                  <div key={stage} className="flex items-center justify-between text-sm">
+                    <span className="capitalize text-slate-700 dark:text-foreground">{stage.replace(/_/g, ' ')}</span>
+                    <span className="text-muted-foreground tabular-nums">{info.count} deal(s) · {fmtUsdFull(info.total_value)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {report.topRisks.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Top risks
+                </div>
+                {report.topRisks.map((r, i) => (
+                  <div key={r.deal_id ?? i} className="flex items-start justify-between gap-2 text-sm border-b last:border-0 pb-1.5 last:pb-0">
+                    <div>
+                      <span className="font-medium text-slate-900 dark:text-foreground">{r.company_name || 'Unknown'}</span>
+                      {r.next_best_action && <p className="text-xs text-muted-foreground">{r.next_best_action}</p>}
+                    </div>
+                    <Badge variant="outline" className={`shrink-0 capitalize ${riskClass(r.risk_level)}`}>
+                      {(r.risk_level || 'unknown').replace(/_/g, ' ')}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> Going well
+                </div>
+                {report.goingWell.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">Nothing to report yet</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {report.goingWell.map((item, i) => (
+                      <li key={i} className="text-xs text-foreground">+ {item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <TrendingDown className="h-3.5 w-3.5 text-red-500" /> Needs attention
+                </div>
+                {report.needsAttention.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">Nothing flagged</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {report.needsAttention.map((item, i) => (
+                      <li key={i} className="text-xs text-foreground">! {item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
 
 type LlmUsageSummary = {
   totalCost: number
@@ -35,10 +234,14 @@ export default function GtmAnalytics({
   usage,
   market,
   icps,
+  forecast,
+  boardReport,
 }: {
   usage: LlmUsageSummary
   market: MarketSegment[]
   icps: Icp[]
+  forecast: RevenueForecast | null
+  boardReport: BoardReport | null
 }) {
   const icpName = new Map(icps.map((i) => [i.id, i.name]))
   const maxPhaseCost = Math.max(1e-9, ...usage.byPhase.map((p) => p.cost))
@@ -49,6 +252,14 @@ export default function GtmAnalytics({
       <div className="flex items-center gap-2 px-1">
         <BrainCircuit className="h-6 w-6 text-purple-600 dark:text-purple-500" />
         <h2 className="text-xl font-bold text-slate-900 dark:text-foreground">GTM Pipeline Intelligence</h2>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* ---------------- Revenue Forecast (Agent 34) ---------------- */}
+        <RevenueForecastCard forecast={forecast} />
+
+        {/* ---------------- Board Report (Agent 35) ---------------- */}
+        <BoardReportCard report={boardReport} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

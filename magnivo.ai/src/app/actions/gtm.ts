@@ -23,6 +23,8 @@ import {
   type Icp,
   type IntentScore,
   type MarketSegment,
+  type RevenueForecast,
+  type BoardReport,
   type OutreachBundle,
   type PhaseRun,
   type ProspectLeadRow,
@@ -308,6 +310,55 @@ export async function getMarketSizing(icpId?: number): Promise<MarketSegment[]> 
       priorityRank: row.priority_rank ?? 3, priorityRationale: row.priority_rationale, recommendedVolume: row.recommended_volume || 0,
     }))
   } catch (err: any) { console.error('getMarketSizing error:', err.message); return [] }
+}
+
+// Agent 34 — Revenue Forecasting. Latest snapshot only (append-only table,
+// one row generated per run) — mirrors getMarketSizing's org-scoped read.
+export async function getRevenueForecast(): Promise<RevenueForecast | null> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return null
+    const r = await pool.query(
+      `SELECT * FROM public.revenue_forecasts WHERE organization_id = $1 ORDER BY generated_at DESC LIMIT 1`, [org])
+    const row = r.rows[0]
+    if (!row) return null
+    return {
+      id: row.id,
+      conservativeTotal: Number(row.conservative_total || 0),
+      baseTotal: Number(row.base_total || 0),
+      optimisticTotal: Number(row.optimistic_total || 0),
+      committedDealCount: row.committed_deal_count || 0,
+      excludedDealCount: row.excluded_deal_count || 0,
+      totalDealCount: row.total_deal_count || 0,
+      dealBreakdown: row.deal_breakdown || [],
+      generatedAt: row.generated_at,
+    }
+  } catch (err: any) { console.error('getRevenueForecast error:', err.message); return null }
+}
+
+// Agent 35 — Board Reporting. Latest snapshot only (append-only table).
+export async function getBoardReport(): Promise<BoardReport | null> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return null
+    const r = await pool.query(
+      `SELECT * FROM public.board_reports WHERE organization_id = $1 ORDER BY generated_at DESC LIMIT 1`, [org])
+    const row = r.rows[0]
+    if (!row) return null
+    return {
+      id: row.id,
+      pipelineByStage: row.pipeline_by_stage || {},
+      conversionRate: row.conversion_rate !== null ? Number(row.conversion_rate) : null,
+      conversionRateNote: row.conversion_rate_note,
+      forecastBaseTotal: row.forecast_base_total !== null ? Number(row.forecast_base_total) : null,
+      forecastDeltaFromPrevious: row.forecast_delta_from_previous !== null ? Number(row.forecast_delta_from_previous) : null,
+      topRisks: row.top_risks || [],
+      goingWell: row.going_well || [],
+      needsAttention: row.needs_attention || [],
+      executiveSummary: row.executive_summary,
+      generatedAt: row.generated_at,
+    }
+  } catch (err: any) { console.error('getBoardReport error:', err.message); return null }
 }
 
 export async function getCompetitors(icpId: number): Promise<CompetitorIntel[]> {
