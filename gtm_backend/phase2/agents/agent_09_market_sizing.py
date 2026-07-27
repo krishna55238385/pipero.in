@@ -10,6 +10,16 @@ Business rules enforced (from architecture PDF):
 - Flags segments with < 100 qualified leads as too_small.
 - Factors in seasonal buying patterns (encoded in the prompt).
 - Skips the whole run if total leads across segments < 5.
+- Runs on a WEEKLY cadence, not per-invocation (PDF: "market sizing is
+  recomputed weekly"). This agent is called from service.py's run_understand()
+  which itself runs per single-ICP live pipeline requests (e.g. every time a
+  user clicks "AI search" for one ICP in the CRM) — without a freshness gate,
+  every single one of those per-ICP requests was firing a full LLM call
+  scanning ALL active ICPs system-wide (one real deployment saw 27 ICPs /
+  306 leads scanned per call), which is what actually exhausted the daily
+  Groq token quota fastest during testing, not any one agent's per-call size.
+  Fixed by skipping the LLM call entirely (cheap, zero-token DB read only) if
+  a market_segment_intel snapshot for the current week_of already exists.
 
 Writes one row per ICP into market_segment_intel keyed by (icp_id, week_of).
 """
@@ -26,13 +36,28 @@ _MIN_LEADS_THRESHOLD = 5
 _TOO_SMALL_THRESHOLD = 100
 
 
-def size_markets() -> dict:
-    """Produce this week's ranked market map. Returns the upsert summary."""
+def size_markets(force: bool = False) -> dict:
+    """Produce this week's ranked market map. Returns the upsert summary.
+
+    Skips the LLM call (a cheap DB read only) if this week's snapshot
+    already exists, since this agent runs on a weekly cadence — not once per
+    single-ICP pipeline invocation. Pass force=True to bypass (e.g. for a
+    manual re-run/CLI command)."""
     bar = "═" * 72
     week_of = _week_of_monday()
     print(f"\n{bar}")
     print(f"  AGENT 09 — Market Sizing (week_of={week_of})")
     print(bar)
+
+    if not force:
+        existing = supabase.get_market_segments(week_of=week_of)
+        if existing:
+            print(
+                f"  ↷ SKIPPED — {len(existing)} segment(s) already computed "
+                f"for week_of={week_of} (weekly cadence, not per-run; "
+                f"pass force=True to recompute)"
+            )
+            return {"week_of": week_of, "already_computed": True, "segments_written": 0, "skipped": True}
 
     icps = supabase.get_active_icps()
     print(f"  → {len(icps)} active ICP segment(s)")

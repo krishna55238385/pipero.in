@@ -531,6 +531,10 @@ def test_agent_09_skips_when_total_leads_below_threshold(mocker, fake_icp):
         "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_scored_lead_counts_by_icp",
         return_value={"total": 1, "hot": 0, "warm": 1, "cold": 0},
     )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_market_segments",
+        return_value=[],
+    )
     llm_mock = mocker.patch(
         "gtm_backend.phase2.agents.agent_09_market_sizing.llm.chat_json",
     )
@@ -547,6 +551,64 @@ def test_agent_09_skips_when_total_leads_below_threshold(mocker, fake_icp):
     assert summary["total_leads"] == 1
 
 
+def test_agent_09_skips_llm_call_when_already_computed_this_week(mocker, fake_icp):
+    """The freshness gate: if a market_segment_intel snapshot already exists
+    for this week_of, skip the (expensive, whole-portfolio) LLM call
+    entirely without even reading lead counts — this is what actually
+    exhausted the daily token quota when called on every per-ICP run.
+    """
+    get_segments_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_market_segments",
+        return_value=[{"icp_id": fake_icp["id"], "week_of": "2026-07-27"}],
+    )
+    icps_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_active_icps",
+    )
+    llm_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.llm.chat_json",
+    )
+
+    summary = size_markets()
+
+    get_segments_mock.assert_called_once()
+    icps_mock.assert_not_called()
+    llm_mock.assert_not_called()
+    assert summary["already_computed"] is True
+    assert summary["segments_written"] == 0
+
+
+def test_agent_09_force_bypasses_freshness_gate(mocker, fake_icp):
+    """force=True must recompute even if this week's snapshot exists."""
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_market_segments",
+        return_value=[{"icp_id": fake_icp["id"], "week_of": "2026-07-27"}],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_active_icps",
+        return_value=[fake_icp],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_scored_lead_counts_by_icp",
+        return_value={"total": 150, "hot": 30, "warm": 70, "cold": 50},
+    )
+    llm_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.llm.chat_json",
+        return_value={
+            "summary": "x", "primary_gtm_segment": None, "secondary_gtm_segment": None,
+            "avoid_this_week": None, "focus_reason": None, "segments": [],
+        },
+    )
+    upsert_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.upsert_market_segments",
+        return_value=[],
+    )
+
+    summary = size_markets(force=True)
+
+    llm_mock.assert_called_once()
+    assert summary.get("already_computed") is not True
+
+
 def test_agent_09_writes_segments_when_leads_sufficient(mocker, fake_icp):
     """With 150 leads, the agent calls the LLM and persists the segments it
     returns.
@@ -558,6 +620,10 @@ def test_agent_09_writes_segments_when_leads_sufficient(mocker, fake_icp):
     mocker.patch(
         "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_scored_lead_counts_by_icp",
         return_value={"total": 150, "hot": 30, "warm": 70, "cold": 50},
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_09_market_sizing.supabase.get_market_segments",
+        return_value=[],
     )
     llm_payload = {
         "summary": "One mature segment with healthy demand.",

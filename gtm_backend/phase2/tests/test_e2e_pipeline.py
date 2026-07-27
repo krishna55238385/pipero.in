@@ -246,14 +246,26 @@ def test_phase2_pipeline_end_to_end(
              "talk_tracks": [], "threat_level": "high"},
         ],
     )
-    mocker.patch(
-        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_market_segments",
-        return_value=[{
+    # agent_09_market_sizing.supabase and agent_10_gtm_insights.supabase are
+    # the SAME shared connector module object (both `from ...connectors import
+    # supabase`), so get_market_segments must be mocked exactly ONCE with a
+    # side_effect that distinguishes callers, not two separate return_value
+    # patches (the second would silently clobber the first). Agent 09's
+    # freshness check calls it with icp_id=None; agent 10's per-lead lookup
+    # always passes an icp_id.
+    def _fake_get_market_segments(week_of=None, icp_id=None):
+        if icp_id is None:
+            return []  # agent 09: no snapshot yet this week -> proceed to compute
+        return [{
             "segment_name": "Mid-market HR-tech in India",
             "tam_estimate": "$2B", "sam_estimate": "$400M", "som_this_month": "$5M",
             "competition_density": "medium", "seasonal_fit": "neutral",
             "priority_rank": 1, "priority_rationale": "strong volume",
-        }],
+        }]
+
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_market_segments",
+        side_effect=_fake_get_market_segments,
     )
 
     # --- Supabase writes (the things we want to assert) -------------------

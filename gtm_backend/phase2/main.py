@@ -29,7 +29,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_comp.add_argument("--icp", type=int, default=None, dest="icp_id")
     p_comp.add_argument("--max", type=int, default=5, dest="max_competitors")
 
-    sub.add_parser("market-sizing", help="Agent 09: produce this week's ranked market map")
+    p_market = sub.add_parser("market-sizing", help="Agent 09: produce this week's ranked market map")
+    p_market.add_argument("--force", action="store_true", help="recompute even if this week's snapshot already exists")
 
     p_gtm = sub.add_parser("gtm-insights", help="Agent 10: synthesise per-account GTM briefs")
     p_gtm.add_argument("--icp", type=int, default=None, dest="icp_id")
@@ -70,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "competitive":
         gather_competitive_intel(args.icp_id, args.max_competitors)
     elif command == "market-sizing":
-        size_markets()
+        size_markets(force=args.force)
     elif command == "gtm-insights":
         generate_insights(args.icp_id, args.limit)
     elif command == "approve-insights":
