@@ -186,6 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_social_listening_status ON social_listening_leads
 -- is only the aggregate summary of each refresh run.
 CREATE TABLE IF NOT EXISTS data_quality_reports (
     id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
     leads_examined INTEGER,
     reverified_count INTEGER,
     still_stale_count INTEGER,
@@ -193,6 +194,7 @@ CREATE TABLE IF NOT EXISTS data_quality_reports (
     bounce_rate NUMERIC,
     generated_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS organization_id UUID;
 ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS leads_examined INTEGER;
 ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS reverified_count INTEGER;
 ALTER TABLE data_quality_reports ADD COLUMN IF NOT EXISTS still_stale_count INTEGER;
