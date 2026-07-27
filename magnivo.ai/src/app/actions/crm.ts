@@ -1604,7 +1604,7 @@ export async function getTeamPerformance() {
     return usersRes.rows.map(user => {
       const userAtt = attendanceRes.rows.find(a => a.user_id === user.id)
       return {
-        id: user.id, name: user.full_name, role: user.role,
+        id: user.id, name: user.full_name || 'Unnamed Rep', role: user.role || 'user',
         status: userAtt ? (userAtt.check_out_time ? 'Checked Out' : 'Online') : 'Offline',
         checkIn: userAtt?.check_in_time, checkOut: userAtt?.check_out_time,
         KPIs: {
@@ -1688,7 +1688,7 @@ export async function getRepPerformanceData() {
       const staleLeads = userLeads.filter(l => l.status !== 'converted' && new Date(l.created_at) < threeDaysAgo).length
 
       return {
-        id: user.id, name: user.full_name, role: user.role,
+        id: user.id, name: user.full_name || 'Unnamed Rep', role: user.role || 'user',
         leads: { total: userLeads.length, new: userLeads.filter(l => new Date(l.created_at) > new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)).length },
         workload: { activeDeals: userDeals.filter(d => d.status === 'open' || d.status === 'negotiation').length, pendingTasks: userTasks.filter(t => t.status === 'pending').length },
         performance: {

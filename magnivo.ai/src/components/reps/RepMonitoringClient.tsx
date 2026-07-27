@@ -53,8 +53,8 @@ export default function RepMonitoringClient({ initialData }: { initialData: any[
     }
 
     const filteredReps = reps.filter(r =>
-        r.name.toLowerCase().includes(search.toLowerCase()) ||
-        r.role.toLowerCase().includes(search.toLowerCase())
+        (r.name || '').toLowerCase().includes(search.toLowerCase()) ||
+        (r.role || '').toLowerCase().includes(search.toLowerCase())
     )
 
     const handleSetTargets = async () => {
@@ -125,7 +125,7 @@ export default function RepMonitoringClient({ initialData }: { initialData: any[
                             <div className="flex items-start gap-6">
                                 {/* Avatar/Badge */}
                                 <div className="w-20 h-20 rounded-[28px] bg-slate-50 dark:bg-card flex items-center justify-center border border-slate-100 dark:border-border relative shadow-inner overflow-hidden">
-                                    <span className="text-3xl font-bold text-blue-600 dark:text-blue-500">{rep.name.charAt(0)}</span>
+                                    <span className="text-3xl font-bold text-blue-600 dark:text-blue-500">{(rep.name || '?').charAt(0)}</span>
                                     {rep.performance.conversionRate > 20 && (
                                         <div className="absolute -bottom-1 -right-1 p-1 bg-emerald-500 rounded-lg shadow-lg">
                                             <Trophy className="w-3 h-3 text-white" />
