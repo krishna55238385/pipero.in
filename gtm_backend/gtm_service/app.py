@@ -5,6 +5,8 @@ Endpoints (all /run* and /ga4* require `Authorization: Bearer <GTM_TRIGGER_TOKEN
   POST /run/{phase}             -> kick off phase1|phase2|phase3|prepare|signals (background), returns run_id
   GET  /runs/{run_id}           -> poll a run's status/logs
   POST /ga4/sync                -> ingest GA4 visitor signals (background)
+  POST /reply/send              -> Agent 17: dispatch a human-approved outreach_replies
+                                    draft (response_status must already be 'approved')
   /track/*                      -> phase3 email open/unsubscribe tracking (mounted)
 
 Deploy on an always-on host (Render/Railway). Vercel can't run this.
@@ -13,8 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from contextlib import asynccontextmanager
-from typing import Optional
+import os
+from contextlib import asynccontextmanager, contextmanager
+from typing import Iterator, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +25,7 @@ from pydantic import BaseModel
 
 from gtm_backend.gtm_service import db, runner, scheduler
 from gtm_backend.gtm_service.config import config
+from gtm_backend.phase3.agents.agent_17_reply_handling import send_approved_response
 
 # Reuse the existing phase3 email-tracking app (open pixel + unsubscribe page).
 try:
@@ -88,6 +92,32 @@ class RunRequest(BaseModel):
 
 class Ga4SyncRequest(BaseModel):
     organization_id: Optional[str] = None
+
+
+class ReplySendRequest(BaseModel):
+    organization_id: Optional[str] = None
+    reply_id: int
+
+
+# --------------------------------------------------------------------------- #
+# Org tagging — mirror runner.py: set GTM_ORG_ID for the duration of the call
+# so rows the handler writes are tagged for the CRM tenant.
+# --------------------------------------------------------------------------- #
+@contextmanager
+def _org_context(organization_id: Optional[str]) -> Iterator[None]:
+    org = organization_id or config.DEFAULT_ORG_ID or None
+    if not org:
+        yield
+        return
+    previous = os.environ.get("GTM_ORG_ID")
+    os.environ["GTM_ORG_ID"] = org
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("GTM_ORG_ID", None)
+        else:
+            os.environ["GTM_ORG_ID"] = previous
 
 
 # --------------------------------------------------------------------------- #
@@ -171,3 +201,15 @@ def ga4_sync(body: Ga4SyncRequest, background: BackgroundTasks) -> dict:
 
     background.add_task(_job)
     return {"status": "accepted", "connections": len(conns)}
+
+
+@app.post("/reply/send", dependencies=[Depends(require_token)])
+def reply_send(body: ReplySendRequest) -> dict:
+    """Dispatch a human-approved Agent 17 draft. send_approved_response itself
+    refuses to send anything whose response_status isn't already 'approved' —
+    this endpoint doesn't relax that gate, it's just the HTTP entry point."""
+    with _org_context(body.organization_id):
+        result = send_approved_response(body.reply_id)
+    if result.get("status") != "sent":
+        raise HTTPException(status_code=400, detail=result)
+    return result
