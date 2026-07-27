@@ -12,6 +12,10 @@ Routes
     POST /run/understand    UNDERSTAND  (phase2: account intel → stakeholders →
                             competitive → market sizing → GTM brief)
     POST /run/reach         REACH       (phase3: personalize → copywrite → channel → send)
+    POST /reply/send        Agent 17 — dispatch a human-approved outreach_replies
+                            draft (response_status must already be 'approved';
+                            refuses otherwise). Wired to the CRM's Conversations
+                            approve action.
 
 Compatibility aliases for the existing trigger service paths are also
 registered (``/run/phase1`` → find, ``/run/phase2`` → understand,
@@ -51,6 +55,7 @@ from gtm_backend import (
 from gtm_backend import personalize as personalize_mod
 from gtm_backend import copywriter as copywriter_mod
 from gtm_backend import channel as channel_mod
+from gtm_backend.phase3.agents.agent_17_reply_handling import send_approved_response
 
 try:  # FastAPI is optional so this module imports in minimal environments.
     from fastapi import Depends, FastAPI, Header, HTTPException
@@ -180,6 +185,10 @@ if _HAVE_FASTAPI:
         dry_run: bool = False
         sender: str = "instantly"
 
+    class ReplySendRequest(BaseModel):
+        organization_id: Optional[str] = None
+        reply_id: int
+
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "service": "gtm-backend"}
@@ -215,6 +224,18 @@ if _HAVE_FASTAPI:
                 dry_run=body.dry_run,
                 sender=body.sender,
             )
+
+    @app.post("/reply/send", dependencies=[Depends(require_token)])
+    def http_reply_send(body: ReplySendRequest) -> dict:
+        """Dispatch a human-approved Agent 17 draft. send_approved_response
+        itself refuses to send anything whose response_status isn't already
+        'approved' — this endpoint doesn't relax that gate, it's just the
+        HTTP entry point the CRM calls right after flipping the status."""
+        with _org_context(body.organization_id):
+            result = send_approved_response(body.reply_id)
+        if result.get("status") not in {"sent"}:
+            raise HTTPException(status_code=400, detail=result)
+        return result
 
     # Compatibility aliases for the existing gtm_service phase paths.
     @app.post("/run/phase1", dependencies=[Depends(require_token)])
