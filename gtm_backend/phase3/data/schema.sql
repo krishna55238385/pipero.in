@@ -617,6 +617,42 @@ ALTER TABLE onboarding_handoffs ADD COLUMN IF NOT EXISTS organization_id UUID;
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_onboarding_handoffs_deal_id ON onboarding_handoffs(deal_id);
 
 -- ---------------------------------------------------------------------------
+-- Agent 40 — Lead Nurturing (phase4/RETAIN & GROW, PDF Phase 7)
+-- ---------------------------------------------------------------------------
+-- One row per nurture touch (append-per-touch, not upserted) — this is the
+-- history that both enforces "max one touch per month" (check the latest
+-- row's next_eligible_at) and "never repeat content within 6 months" (scan
+-- content_topic across a lead's own touch history). No organization_id —
+-- this operates on gtm_backend's own leads_raw/outreach_replies, which (like
+-- every other phase1/3 table) aren't per-CRM-org rows; the whole process is
+-- already scoped to one org via GTM_ORG_ID, same as personalisations/
+-- sequences.
+CREATE TABLE IF NOT EXISTS nurture_touches (
+    id BIGSERIAL PRIMARY KEY,
+    lead_id BIGINT NOT NULL REFERENCES leads_raw(id) ON DELETE CASCADE,
+    reply_id BIGINT REFERENCES outreach_replies(id) ON DELETE SET NULL,
+    touch_number INTEGER NOT NULL DEFAULT 1,
+    content_topic TEXT,
+    content_text TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',   -- draft | converted | paused | opted_out
+    held_reason TEXT,
+    next_eligible_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS reply_id BIGINT REFERENCES outreach_replies(id) ON DELETE SET NULL;
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS touch_number INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS content_topic TEXT;
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS content_text TEXT;
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS held_reason TEXT;
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS next_eligible_at TIMESTAMPTZ;
+ALTER TABLE nurture_touches ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_nurture_touches_lead_id ON nurture_touches(lead_id);
+CREATE INDEX IF NOT EXISTS idx_nurture_touches_status ON nurture_touches(status);
+
+-- ---------------------------------------------------------------------------
 -- Agent 32 — CRM Sync (phase4/MANAGE & REPORT)
 -- ---------------------------------------------------------------------------
 -- Scoped honestly, not to the PDF's full spec (see agent_32_crm_sync.py

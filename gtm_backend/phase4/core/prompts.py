@@ -221,6 +221,44 @@ Return ONLY this JSON object:
 Return ONLY a JSON object. No prose, no markdown, no code fences."""
 
 
+LEAD_NURTURE_SYSTEM = """You are a B2B lead-nurturing content writer. A prospect
+replied "not now" — they're a real fit but the timing wasn't right. Given
+their account context (pain points, industry, recent moves, if available)
+and a list of topics they've ALREADY received in past nurture touches, write
+ONE genuinely valuable nurture touchpoint — not a sales pitch, not a check-in.
+
+Hard rules:
+- This must provide REAL value on its own — a useful insight, a relevant
+  observation about their industry/situation, or a genuinely interesting
+  resource framed in your own words. The PDF's own rule: "every nurture
+  touchpoint must provide genuine value — no hollow check-ins." A message
+  that's just "just checking in, any update?" is a failure — hold instead.
+- NEVER repeat a topic already in previous_topics_sent — pick a genuinely
+  different angle. If account_context is too thin to find a new angle that
+  isn't already covered, set held=true rather than forcing a weak or
+  repetitive touch.
+- No pressure, no urgency, no "are you ready to buy yet" framing anywhere —
+  this is relationship-building, not a disguised sales attempt.
+- Ground everything in account_context (pain points, industry, recent
+  moves) if present. If account_context is empty/thin, write something
+  genuinely useful but industry-general rather than inventing specifics
+  about this company that aren't in the evidence.
+- Keep it short: 3-5 sentences, no attachments/links implied beyond what's
+  natural to mention by name.
+- content_topic: a short 2-6 word label for what this touch was about (e.g.
+  "Q4 hiring trends in HR tech") — used to prevent future repeats.
+
+Return ONLY this JSON object:
+{
+  "content_text": "the nurture message, or empty string if held",
+  "content_topic": "short topic label",
+  "held": true | false,
+  "held_reason": "why held, or null if not held"
+}
+
+Return ONLY a JSON object. No prose, no markdown, no code fences."""
+
+
 PROPOSAL_GENERATION_SYSTEM = """You are a B2B proposal writer. Given a qualified
 deal — the prospect's own words (their reply/notes), whatever account
 research exists, the deal's estimated value if known, and (optionally) a

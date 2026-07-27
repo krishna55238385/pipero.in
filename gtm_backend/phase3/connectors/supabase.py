@@ -1329,6 +1329,94 @@ def create_onboarding_handoff(**fields) -> dict | None:
     return rows[0] if rows else None
 
 
+# -- Agent 40 — Lead Nurturing (phase4) -------------------------------------
+
+def get_lead_raw_by_id(lead_id: int) -> dict | None:
+    """Single leads_raw row by id — used for its score_tier (Agent 40's
+    'is this still a valid ICP fit' re-check)."""
+    try:
+        rows = _get("/leads_raw", params={"id": f"eq.{lead_id}", "limit": 1})
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
+def get_not_now_replies(limit: int | None = None) -> list[dict]:
+    """outreach_replies classified 'not_now' — the PDF-defined nurture
+    population ('leads that said not now')."""
+    params: dict = {"classification": "eq.not_now", "order": "created_at.asc"}
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/outreach_replies", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return []
+        raise
+
+
+def get_latest_nurture_touch(lead_id: int) -> dict | None:
+    """Most recent nurture_touches row for a lead, if any — used to enforce
+    the 30-day cadence and to read prior content_topics for the 6-month
+    no-repeat rule."""
+    try:
+        rows = _get(
+            "/nurture_touches",
+            params={"lead_id": f"eq.{lead_id}", "order": "created_at.desc", "limit": 1},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "nurture_touches"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def get_nurture_touch_history(lead_id: int) -> list[dict]:
+    """Every past nurture_touches row for a lead — used to check the 6-month
+    no-repeat-content rule (needs the full topic history, not just latest)."""
+    try:
+        return _get(
+            "/nurture_touches",
+            params={"lead_id": f"eq.{lead_id}", "order": "created_at.desc"},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "nurture_touches"):
+            return []
+        raise
+
+
+def get_signals_since(lead_id: int, since_iso: str | None) -> list[dict]:
+    """buying_signals rows for a lead detected after `since_iso` (or all of
+    them, if since_iso is None) — used to detect a fresh buying signal on a
+    nurtured lead (PDF rule: 'must trigger immediate re-engagement when a
+    buying signal is detected on a nurtured lead')."""
+    params: dict = {"lead_id": f"eq.{lead_id}", "order": "detected_at.desc"}
+    if since_iso:
+        params["detected_at"] = f"gte.{since_iso}"
+    try:
+        return _get("/buying_signals", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "buying_signals"):
+            return []
+        raise
+
+
+def create_nurture_touch(**fields) -> dict | None:
+    """Insert one nurture_touches row — append-per-touch (this is a history
+    log, not a single upserted status row)."""
+    try:
+        rows = _post("/nurture_touches", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "nurture_touches"):
+            print(
+                "[supabase] nurture_touches table missing — touch not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
 # -- Agent 33 — Pipeline Management (phase4) -------------------------------
 
 _CLOSED_STATUSES = {"won", "lost", "closed_won", "closed_lost"}

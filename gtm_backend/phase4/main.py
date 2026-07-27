@@ -75,6 +75,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_handoff.add_argument("--limit", type=int, default=None)
 
+    p_nurture = sub.add_parser(
+        "run-nurture",
+        help="Agent 40: advance the lead nurture programme (draft touches, detect signals, enforce cadence)",
+    )
+    p_nurture.add_argument("--limit", type=int, default=None)
+
     return parser
 
 
@@ -118,6 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "generate-handoffs":
         from gtm_backend.phase4.agents.agent_39_onboarding_handoff import generate_pending_handoffs
         generate_pending_handoffs(args.limit)
+    elif command == "run-nurture":
+        from gtm_backend.phase4.agents.agent_40_lead_nurturing import run_lead_nurturing
+        run_lead_nurturing(args.limit)
     return 0
 
 
