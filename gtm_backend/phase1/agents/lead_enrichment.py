@@ -1,7 +1,16 @@
-"""Agent 03 — Lead Enrichment.
+"""Lead Enrichment (support step — not one of the PDF's 52 numbered agents).
 
 For leads with a domain but no contact, finds a decision-maker via LinkedIn search,
 generates email patterns, verifies with Disify, optionally falls back to Hunter.io.
+
+Renamed from agent_03_enrichment.py -> lead_enrichment.py: this step was
+filed under "Agent 03" in the code, but the PDF architecture spec defines
+Agent 03 as ICP Scoring, not Lead Enrichment. This enrichment step doesn't
+correspond to any of the PDF's 52 numbered agents — it's real, necessary
+pipeline infrastructure (finds/verifies contact emails between lead
+generation and scoring), just not part of the formal spec, so it's been
+dropped from the agent_NN_ numbering scheme entirely rather than given an
+incorrect number. No functional change, filename only.
 """
 import json
 import re
@@ -40,7 +49,7 @@ def enrich_leads(icp_id: int | None = None, limit: int = 50) -> dict:
     """Find contacts + verified emails for leads missing them."""
     bar = "═" * 72
     print(f"\n{bar}")
-    print(f"  AGENT 03 — Lead Enrichment (ICP #{icp_id}, limit={limit})")
+    print(f"  Lead Enrichment (support step) (ICP #{icp_id}, limit={limit})")
     print(bar)
 
     icp_filter = supabase.get_icp(icp_id) if icp_id else None
@@ -64,7 +73,7 @@ def enrich_leads(icp_id: int | None = None, limit: int = 50) -> dict:
         "leads_skipped": skipped,
     }
     print(
-        f"  ✓ Agent 03 complete: {len(leads)} examined · "
+        f"  ✓ Lead Enrichment complete: {len(leads)} examined · "
         f"{enriched} enriched · {skipped} skipped"
     )
     return summary
@@ -74,7 +83,7 @@ def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None)
     company_name = lead.get("company_name")
     domain = lead.get("company_domain")
     if not company_name or not domain:
-        print(f"  [Agent 03] {company_name or '?':<28} → skipped (no domain)")
+        print(f"  [Lead Enrichment] {company_name or '?':<28} → skipped (no domain)")
         return False
 
     updates: dict = {}
@@ -108,7 +117,7 @@ def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None)
             )
 
     if not updates:
-        print(f"  [Agent 03] {company_name:<28} → skipped (no data found)")
+        print(f"  [Lead Enrichment] {company_name:<28} → skipped (no data found)")
         return False
 
     supabase.update_lead(lead["id"], **updates)
@@ -118,11 +127,11 @@ def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None)
     if contact_found and contact_name:
         mark = "✓" if verified else "~"
         print(
-            f"  [Agent 03] {company_name:<28} {mark} {contact_name} "
+            f"  [Lead Enrichment] {company_name:<28} {mark} {contact_name} "
             f"<{email or '—'}> · +{n_company} company fields"
         )
     else:
-        print(f"  [Agent 03] {company_name:<28} ⊙ company details only (+{n_company} fields)")
+        print(f"  [Lead Enrichment] {company_name:<28} ⊙ company details only (+{n_company} fields)")
     return True
 
 
@@ -164,12 +173,12 @@ def _enrich_company(
         extracted = llm.chat_json(
             COMPANY_ENRICHMENT_SYSTEM,
             payload,
-            agent="agent_03_enrichment",
+            agent="lead_enrichment",
             icp_id=icp_id,
             phase="phase1",
         )
     except Exception as exc:
-        print(f"  [Agent 03] company enrichment failed for {company_name}: {exc}")
+        print(f"  [Lead Enrichment] company enrichment failed for {company_name}: {exc}")
         extracted = {}
 
     # Hunter's company LinkedIn URL is authoritative when the LLM didn't find one.
@@ -288,7 +297,7 @@ def _find_contact(
     try:
         snippets = serpapi.search_linkedin(company_name, role_keywords)
     except Exception as exc:
-        print(f"  [Agent 03] linkedin search failed for {company_name}: {exc}")
+        print(f"  [Lead Enrichment] linkedin search failed for {company_name}: {exc}")
         return None
     if not snippets:
         return None
@@ -304,12 +313,12 @@ def _find_contact(
         return llm.chat_json(
             CONTACT_EXTRACTION_SYSTEM,
             payload,
-            agent="agent_03_enrichment",
+            agent="lead_enrichment",
             icp_id=icp_id,
             phase="phase1",
         )
     except Exception as exc:
-        print(f"  [Agent 03] LLM contact extraction failed: {exc}")
+        print(f"  [Lead Enrichment] LLM contact extraction failed: {exc}")
         return None
 
 

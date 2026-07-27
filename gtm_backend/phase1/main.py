@@ -6,9 +6,9 @@ from pathlib import Path
 
 from gtm_backend.phase1.agents.agent_01_icp import define_icp
 from gtm_backend.phase1.agents.agent_02_leads import generate_leads
-from gtm_backend.phase1.agents.agent_03_enrichment import enrich_leads
+from gtm_backend.phase1.agents.lead_enrichment import enrich_leads
 from gtm_backend.phase1.agents.agent_04_signals import detect_signals
-from gtm_backend.phase1.agents.agent_05_scoring import score_leads
+from gtm_backend.phase1.agents.agent_03_icp_scoring import score_leads
 from gtm_backend.phase1.agents.agent_20_social_listening import run_social_listening
 from gtm_backend.phase1.connectors import supabase
 

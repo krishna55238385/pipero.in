@@ -1,8 +1,14 @@
-"""Agent 05 — ICP Scoring.
+"""Agent 03 — ICP Scoring.
 
 Combines firmographic fit (max 70) and aggregate buying-signal score (max 30,
 with freshness decay) into a final 0-100 score and a tier.
 Also calls an LLM to produce a rich ICP fit score alongside the deterministic one.
+
+Renamed from agent_05_scoring.py -> agent_03_icp_scoring.py: the PDF
+architecture spec defines Agent 03 as ICP Scoring and Agent 05 as the
+Lookalike Finder Agent (not yet built) — this file had drifted to the wrong
+number. No functional change, filename/number only. See
+lead_enrichment.py's docstring for the other half of this fix.
 """
 import json
 
@@ -47,7 +53,7 @@ def _llm_score(
         return llm.chat_json(
             ICP_SCORING_SYSTEM,
             json.dumps(payload),
-            agent="agent_05_scoring",
+            agent="agent_03_icp_scoring",
             icp_id=lead.get("icp_id"),
             phase="phase1",
         )
@@ -69,7 +75,7 @@ def score_leads(
     """Score leads in batches. Reads signals from buying_signals table."""
     bar = "\u2550" * 72
     print(f"\n{bar}")
-    print(f"  AGENT 05 \u2014 ICP Scoring (mode={mode}, icp_id={icp_id})")
+    print(f"  AGENT 03 \u2014 ICP Scoring (mode={mode}, icp_id={icp_id})")
     print(bar)
 
     icps = supabase.get_active_icps()
@@ -79,7 +85,7 @@ def score_leads(
 
     leads = supabase.get_leads_for_scoring(mode=mode, lead_id=lead_id, icp_id=icp_id, limit=limit)
     if not leads:
-        print("  [Agent 05] no leads to score")
+        print("  [Agent 03] no leads to score")
         return {"total_scored": 0, "hot": 0, "warm": 0, "cold": 0, "disqualified": 0}
 
     print(f"  \u2192 {len(leads)} leads to score")
@@ -110,7 +116,7 @@ def score_leads(
 
     summary = {"total_scored": len(leads), **counts}
     print(
-        f"  \u2713 Agent 05 complete: {len(leads)} scored \u00b7 "
+        f"  \u2713 Agent 03 complete: {len(leads)} scored \u00b7 "
         f"{counts['hot']} hot \u00b7 {counts['warm']} warm \u00b7 "
         f"{counts['cold']} cold \u00b7 {counts['disqualified']} disqualified"
     )

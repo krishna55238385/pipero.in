@@ -1,6 +1,8 @@
 # Phase 1 — FIND
 
-Five agents that produce a qualified, scored B2B lead pipeline using free-tier APIs. The pipeline takes a free-text ICP prompt, generates company leads, enriches them with verified decision-maker contacts, detects active buying signals, and emits a final 0-100 fit score with a hot/warm/cold tier.
+Four PDF-spec agents plus one support step, producing a qualified, scored B2B lead pipeline using free-tier APIs. The pipeline takes a free-text ICP prompt, generates company leads, enriches them with verified decision-maker contacts, detects active buying signals, and emits a final 0-100 fit score with a hot/warm/cold tier.
+
+**Numbering note:** Lead Enrichment is real, necessary pipeline infrastructure but is NOT one of the PDF architecture's 52 numbered agents — it used to be filed as "Agent 03," which incorrectly displaced the PDF's actual Agent 03 (ICP Scoring, previously mislabeled "Agent 05" in this codebase). Both have been corrected: `agent_03_icp_scoring.py` now matches the PDF, and enrichment lives in `lead_enrichment.py` with no agent number. The PDF's real Agent 05 (Lookalike Finder) has not been built.
 
 ## Pipeline
 
@@ -9,20 +11,20 @@ Agent 01 (ICP)
    ↓
 Agent 02 (Lead Gen, companies only)
    ↓
-Agent 03 (Enrichment, contacts)
+Lead Enrichment (support step, contacts — not a numbered PDF agent)
    ↓
 Agent 04 (Signals, continuous, separate buying_signals table)
    ↓
-Agent 05 (Scoring = firmographic + aggregate signal with freshness decay)
+Agent 03 (ICP Scoring = firmographic + aggregate signal with freshness decay)
 ```
 
 | #   | Agent                   | Output                                                                      | Reads from / Writes to                                              |
 | --- | ----------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | 01  | ICP Definition          | structured ICP from a free-text prompt                                      | writes `icp_profiles`                                               |
 | 02  | Lead Generation         | **company records only** — no people, no signals                            | reads `icp_profiles`, writes `leads_raw`                            |
-| 03  | Lead Enrichment         | contact name, email, title, LinkedIn (verified)                             | reads/writes `leads_raw` (adds contact fields)                      |
+| —   | Lead Enrichment (support step, not a numbered PDF agent) | contact name, email, title, LinkedIn (verified)            | reads/writes `leads_raw` (adds contact fields)                      |
 | 04  | Buying Signal Detection | signals with type · weight (6-10) · detected_at — in `buying_signals` table | reads `leads_raw`, writes `buying_signals`                          |
-| 05  | ICP Scoring             | firmographic fit (max 70) + aggregate signal score (max 30, decayed by age) | reads `leads_raw` + `buying_signals`, writes back to `leads_raw`    |
+| 03  | ICP Scoring             | firmographic fit (max 70) + aggregate signal score (max 30, decayed by age) | reads `leads_raw` + `buying_signals`, writes back to `leads_raw`    |
 
 Tiers: **hot** ≥80, **warm** ≥50, **cold** otherwise. Existing customers → disqualified. Score version `v2.0`.
 
@@ -61,7 +63,7 @@ python -m phase1 icp "mid-size HR-tech SaaS in India, 50-200 employees, target H
 python -m phase1 leads --icp 1 --max 20
 ```
 
-### Agent 03 — Lead Enrichment
+### Lead Enrichment (support step)
 
 - **Purpose:** Attach a verified decision-maker contact to leads that have a domain but no contact yet.
 - **Input:** Optional `icp_id` filter; pulls leads from `leads_raw` missing contact fields.
@@ -95,7 +97,7 @@ python -m phase1 enrich --icp 1
 python -m phase1 signals --icp 1
 ```
 
-### Agent 05 — ICP Scoring
+### Agent 03 — ICP Scoring
 
 - **Purpose:** Produce a final 0-100 fit score and tier for each lead, plus a parallel LLM-reasoned score.
 - **Input:** Mode (`unscored` / `all`) or a specific `lead_id`; reads `leads_raw` and joined `buying_signals`.
@@ -184,7 +186,7 @@ Notes:
 phase1/
 ├── main.py              # CLI entry point
 ├── __main__.py          # Enables `python -m phase1`
-├── agents/              # one file per agent (agent_01_icp.py … agent_05_scoring.py)
+├── agents/              # one file per agent (agent_01_icp.py, agent_02_leads.py, lead_enrichment.py, agent_04_signals.py, agent_03_icp_scoring.py)
 ├── connectors/          # external API clients (openai, serpapi, supabase, disify, hunter, dns)
 ├── core/                # pure logic: scoring, schemas, prompts, config, retries, emails
 ├── data/                # schema.sql + buying_signals.jsonl (local fallback)

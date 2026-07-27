@@ -9,6 +9,6 @@ enrichment tests cover this module.
 """
 from __future__ import annotations
 
-from gtm_backend.phase1.agents.agent_03_enrichment import enrich_leads
+from gtm_backend.phase1.agents.lead_enrichment import enrich_leads
 
 __all__ = ["enrich_leads"]

@@ -10,9 +10,9 @@ import pytest
 
 from gtm_backend.phase1.agents.agent_01_icp import define_icp
 from gtm_backend.phase1.agents.agent_02_leads import generate_leads
-from gtm_backend.phase1.agents.agent_03_enrichment import enrich_leads
+from gtm_backend.phase1.agents.lead_enrichment import enrich_leads
 from gtm_backend.phase1.agents.agent_04_signals import detect_signals
-from gtm_backend.phase1.agents.agent_05_scoring import score_leads
+from gtm_backend.phase1.agents.agent_03_icp_scoring import score_leads
 
 
 # Agent 01 ---------------------------------------------------------------
@@ -196,14 +196,14 @@ def test_agent_03_finds_contact_and_verifies_email(sample_icp):
         "contact_title": "CEO",
         "contact_linkedin_url": "https://linkedin.com/in/priya",
     }
-    with patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_icp", return_value=sample_icp), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_linkedin", return_value=[{"title": "Priya - CEO"}]), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.website.fetch_text", return_value=""), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.hunter.domain_metadata", return_value={}), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.llm.chat_json", return_value=contact), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.disify.verify_email", return_value={"verified": True, "bounce_status": "valid"}), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.update_lead") as updater:
+    with patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_icp", return_value=sample_icp), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin", return_value=[{"title": "Priya - CEO"}]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.website.fetch_text", return_value=""), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.hunter.domain_metadata", return_value={}), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.llm.chat_json", return_value=contact), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.disify.verify_email", return_value={"verified": True, "bounce_status": "valid"}), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.update_lead") as updater:
         summary = enrich_leads(icp_id=1)
     assert summary["leads_enriched"] == 1
     updater.assert_called_once()
@@ -231,13 +231,13 @@ def test_agent_03_fills_company_details_without_contact(sample_icp):
         "company_size": "51-200 employees",
         "company_linkedin_url": "https://linkedin.com/company/acmehr",
     }
-    with patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_icp", return_value=sample_icp), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.website.fetch_text", return_value="Acme HR is headquartered in Bangalore."), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.hunter.domain_metadata", return_value={"country": "India", "linkedin": "https://linkedin.com/company/acmehr"}), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_linkedin", return_value=[]), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.llm.chat_json", return_value=company), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.update_lead") as updater:
+    with patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_icp", return_value=sample_icp), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.website.fetch_text", return_value="Acme HR is headquartered in Bangalore."), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.hunter.domain_metadata", return_value={"country": "India", "linkedin": "https://linkedin.com/company/acmehr"}), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin", return_value=[]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.llm.chat_json", return_value=company), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.update_lead") as updater:
         summary = enrich_leads(icp_id=1)
     assert summary["leads_enriched"] == 1
     updater.assert_called_once()
@@ -263,13 +263,13 @@ def test_agent_03_drops_literal_null_strings(sample_icp):
         "company_size": "null",          # dropped
         "company_linkedin_url": None,
     }
-    with patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_icp", return_value=sample_icp), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.website.fetch_text", return_value="Acme HR, an IT services firm in Ireland."), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.hunter.domain_metadata", return_value={}), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_linkedin", return_value=[]), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.llm.chat_json", return_value=company), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.update_lead") as updater:
+    with patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_icp", return_value=sample_icp), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.website.fetch_text", return_value="Acme HR, an IT services firm in Ireland."), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.hunter.domain_metadata", return_value={}), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin", return_value=[]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.llm.chat_json", return_value=company), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.update_lead") as updater:
         enrich_leads(icp_id=1)
     kwargs = updater.call_args.kwargs
     assert kwargs == {"company_country": "Ireland", "company_industry": "IT Services"}
@@ -293,7 +293,7 @@ def test_agent_03_drops_literal_null_strings(sample_icp):
 )
 def test_size_band_normalization(raw, expected):
     """Any headcount expression maps to a canonical employee band."""
-    from gtm_backend.phase1.agents.agent_03_enrichment import _normalize_size_band
+    from gtm_backend.phase1.agents.lead_enrichment import _normalize_size_band
 
     assert _normalize_size_band(raw) == expected
 
@@ -312,15 +312,15 @@ def test_agent_03_uses_location_and_size_search_and_bands_size(sample_icp):
     loc_hits = [{"title": "Acme HR HQ", "link": "https://x", "snippet": "Headquarters: Bengaluru, India"}]
     size_hits = [{"title": "Acme HR | LinkedIn", "link": "https://l", "snippet": "Company size 201-500 employees"}]
 
-    with patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_icp", return_value=sample_icp), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.website.fetch_text", return_value=""), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.hunter.domain_metadata", return_value={}), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_company_location", return_value=loc_hits) as loc_search, \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_company_size", return_value=size_hits) as size_search, \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_linkedin", return_value=[]), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.llm.chat_json", return_value=llm_company) as llm_mock, \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.update_lead") as updater:
+    with patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_icp", return_value=sample_icp), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.website.fetch_text", return_value=""), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.hunter.domain_metadata", return_value={}), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_company_location", return_value=loc_hits) as loc_search, \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_company_size", return_value=size_hits) as size_search, \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin", return_value=[]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.llm.chat_json", return_value=llm_company) as llm_mock, \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.update_lead") as updater:
         enrich_leads(icp_id=1)
 
     loc_search.assert_called_once_with("Acme HR")
@@ -354,15 +354,15 @@ def test_agent_03_backfills_location_size_without_reclobbering(sample_icp):
         "company_industry": "WRONG — should be ignored",  # lead already has industry
         "company_size": "11-50",
     }
-    with patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_icp", return_value=sample_icp), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.website.fetch_text", return_value=""), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.hunter.domain_metadata", return_value={}), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_company_location", return_value=[]), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_company_size", return_value=[]), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.serpapi.search_linkedin") as linkedin_search, \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.llm.chat_json", return_value=llm_company), \
-         patch("gtm_backend.phase1.agents.agent_03_enrichment.supabase.update_lead") as updater:
+    with patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_icp", return_value=sample_icp), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.website.fetch_text", return_value=""), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.hunter.domain_metadata", return_value={}), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_company_location", return_value=[]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_company_size", return_value=[]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin") as linkedin_search, \
+         patch("gtm_backend.phase1.agents.lead_enrichment.llm.chat_json", return_value=llm_company), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.update_lead") as updater:
         summary = enrich_leads(icp_id=1)
 
     assert summary["leads_enriched"] == 1
@@ -495,10 +495,10 @@ def test_agent_04_falls_back_to_static_queries_on_llm_failure(sample_icp):
 # Agent 05 ---------------------------------------------------------------
 
 def test_agent_05_scores_and_updates(sample_icp, full_lead):
-    with patch("gtm_backend.phase1.agents.agent_05_scoring.supabase.get_active_icps", return_value=[sample_icp]), \
-         patch("gtm_backend.phase1.agents.agent_05_scoring.supabase.get_leads_for_scoring", return_value=[full_lead]), \
-         patch("gtm_backend.phase1.agents.agent_05_scoring.supabase.get_signals_for_leads", return_value={full_lead["id"]: []}), \
-         patch("gtm_backend.phase1.agents.agent_05_scoring.supabase.update_lead_score") as updater:
+    with patch("gtm_backend.phase1.agents.agent_03_icp_scoring.supabase.get_active_icps", return_value=[sample_icp]), \
+         patch("gtm_backend.phase1.agents.agent_03_icp_scoring.supabase.get_leads_for_scoring", return_value=[full_lead]), \
+         patch("gtm_backend.phase1.agents.agent_03_icp_scoring.supabase.get_signals_for_leads", return_value={full_lead["id"]: []}), \
+         patch("gtm_backend.phase1.agents.agent_03_icp_scoring.supabase.update_lead_score") as updater:
         summary = score_leads(mode="unscored")
     assert summary["total_scored"] == 1
     updater.assert_called_once()
