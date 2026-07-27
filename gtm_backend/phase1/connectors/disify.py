@@ -3,7 +3,7 @@ import httpx
 from gtm_backend.phase1.core.retries import retry_on_transient
 
 
-_BASE_URL = "https://www.disify.com/api/email"
+_BASE_URL = "https://disify.com/api/email"
 _client = httpx.Client(timeout=8.0)
 
 

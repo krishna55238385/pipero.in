@@ -1459,7 +1459,14 @@ def get_leads_for_data_refresh(limit: int | None = None) -> list[dict]:
         rows = _get("/leads_raw", params={"contact_email": "not.is.null"})
     except SupabaseError:
         return []
-    rows.sort(key=lambda r: r.get("last_verified_at") or "")
+
+    def _sort_key(r: dict) -> tuple[int, str]:
+        v = r.get("last_verified_at")
+        if v is None:
+            return (0, "")
+        return (1, v.isoformat() if hasattr(v, "isoformat") else str(v))
+
+    rows.sort(key=_sort_key)
     return rows[:limit] if limit is not None else rows
 
 
