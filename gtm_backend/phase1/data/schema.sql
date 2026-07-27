@@ -7,6 +7,12 @@ CREATE TABLE IF NOT EXISTS icp_profiles (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE icp_profiles ADD COLUMN IF NOT EXISTS organization_id UUID;
+
 ALTER TABLE icp_profiles ADD COLUMN IF NOT EXISTS name TEXT;
 ALTER TABLE icp_profiles ADD COLUMN IF NOT EXISTS product_line TEXT DEFAULT 'Core';
 ALTER TABLE icp_profiles ADD COLUMN IF NOT EXISTS industry TEXT[];
@@ -68,6 +74,16 @@ ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS data_quality_score INTEGER;
 -- rule: "inbound leads must be tagged separately from outbound leads for
 -- attribution."
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS lead_channel TEXT DEFAULT 'outbound';
+-- organization_id: _inject_org (phase3/connectors/supabase.py) tags EVERY
+-- _post()/_upsert() insert unconditionally whenever GTM_ORG_ID is set — no
+-- per-table opt-out exists. Agent 38's create_inbound_lead() writes here via
+-- _post("/leads_raw", ...), so this table needs the column just like any
+-- other, even though most leads_raw rows are written by phase1 agents that
+-- don't set GTM_ORG_ID. Added proactively after finding this same missing-
+-- column bug hit data_quality_reports and nurture_touches live — this one
+-- hadn't crashed yet only because Agent 38 had never found a real visitor
+-- signal to promote into a new lead.
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS organization_id UUID;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS sources JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS raw_data JSONB DEFAULT '{}'::jsonb;
@@ -105,6 +121,10 @@ ALTER TABLE buying_signals ADD COLUMN IF NOT EXISTS buying_intent TEXT;
 -- score: 0-100 numeric signal strength (BuyingSignal.score). Without this the
 -- whole phase-1 run-all crashes on insert with PGRST204 "Could not find 'score'".
 ALTER TABLE buying_signals ADD COLUMN IF NOT EXISTS score INTEGER NOT NULL DEFAULT 0;
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — see leads_raw's comment above
+-- for the full explanation. Closing the same documentation/safety gap here.
+ALTER TABLE buying_signals ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_buying_signals_lead_id ON buying_signals(lead_id);
 CREATE INDEX IF NOT EXISTS idx_buying_signals_detected_at ON buying_signals(detected_at);
@@ -123,6 +143,11 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS phase TEXT;
+-- organization_id: already present in production (added out-of-band at some
+-- point, undocumented) — this line just syncs schema.sql to match reality,
+-- found while investigating the nurture_touches/data_quality_reports bug
+-- class. Harmless no-op if the column already exists.
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_created_at ON llm_usage(created_at);

@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS outreach_personalisations (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE outreach_personalisations ADD COLUMN IF NOT EXISTS organization_id UUID;
+
 -- additive columns (idempotent)
 ALTER TABLE outreach_personalisations ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE outreach_personalisations ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE SET NULL;
@@ -69,6 +75,12 @@ CREATE TABLE IF NOT EXISTS outreach_sequences (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE outreach_sequences ADD COLUMN IF NOT EXISTS organization_id UUID;
+
 ALTER TABLE outreach_sequences ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE outreach_sequences ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE SET NULL;
 ALTER TABLE outreach_sequences ADD COLUMN IF NOT EXISTS company_name TEXT;
@@ -103,6 +115,12 @@ CREATE TABLE IF NOT EXISTS outreach_channel_plans (
     refreshed_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE outreach_channel_plans ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 ALTER TABLE outreach_channel_plans ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE outreach_channel_plans ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE SET NULL;
@@ -145,6 +163,12 @@ CREATE TABLE IF NOT EXISTS outreach_log (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE outreach_log ADD COLUMN IF NOT EXISTS organization_id UUID;
+
 ALTER TABLE outreach_log ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE outreach_log ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE SET NULL;
 ALTER TABLE outreach_log ADD COLUMN IF NOT EXISTS company_name TEXT;
@@ -185,6 +209,12 @@ CREATE TABLE IF NOT EXISTS ab_test_results (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE ab_test_results ADD COLUMN IF NOT EXISTS organization_id UUID;
+
 ALTER TABLE ab_test_results ADD COLUMN IF NOT EXISTS campaign_id TEXT;
 ALTER TABLE ab_test_results ADD COLUMN IF NOT EXISTS step_number INTEGER;
 ALTER TABLE ab_test_results ADD COLUMN IF NOT EXISTS variant_subject TEXT;
@@ -220,6 +250,12 @@ CREATE TABLE IF NOT EXISTS outreach_unsubscribes (
     unsubscribed_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE outreach_unsubscribes ADD COLUMN IF NOT EXISTS organization_id UUID;
 ALTER TABLE outreach_unsubscribes ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE SET NULL;
 ALTER TABLE outreach_unsubscribes ADD COLUMN IF NOT EXISTS campaign_id TEXT;
 ALTER TABLE outreach_unsubscribes ADD COLUMN IF NOT EXISTS unsubscribed_at TIMESTAMPTZ DEFAULT NOW();
@@ -233,6 +269,12 @@ CREATE TABLE IF NOT EXISTS outreach_opens (
     opened_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE outreach_opens ADD COLUMN IF NOT EXISTS organization_id UUID;
 ALTER TABLE outreach_opens ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE outreach_opens ADD COLUMN IF NOT EXISTS email TEXT;
 ALTER TABLE outreach_opens ADD COLUMN IF NOT EXISTS campaign_id TEXT DEFAULT '';
@@ -259,6 +301,12 @@ CREATE TABLE IF NOT EXISTS outreach_replies (
     replied_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS organization_id UUID;
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS email TEXT;
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS campaign_id TEXT DEFAULT '';

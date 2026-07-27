@@ -39,6 +39,12 @@ CREATE TABLE IF NOT EXISTS account_intelligence (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE account_intelligence ADD COLUMN IF NOT EXISTS organization_id UUID;
+
 -- additive columns (idempotent)
 ALTER TABLE account_intelligence ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE account_intelligence ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE SET NULL;
@@ -87,6 +93,12 @@ CREATE TABLE IF NOT EXISTS account_stakeholders (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE account_stakeholders ADD COLUMN IF NOT EXISTS organization_id UUID;
+
 ALTER TABLE account_stakeholders ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE account_stakeholders ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE account_stakeholders ADD COLUMN IF NOT EXISTS job_title TEXT;
@@ -119,6 +131,12 @@ CREATE TABLE IF NOT EXISTS stakeholder_maps (
     refreshed_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE stakeholder_maps ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 ALTER TABLE stakeholder_maps ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE stakeholder_maps ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE SET NULL;
@@ -159,6 +177,12 @@ CREATE TABLE IF NOT EXISTS competitor_intel (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE competitor_intel ADD COLUMN IF NOT EXISTS organization_id UUID;
+
 ALTER TABLE competitor_intel ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE CASCADE;
 ALTER TABLE competitor_intel ADD COLUMN IF NOT EXISTS competitor_name TEXT;
 ALTER TABLE competitor_intel ADD COLUMN IF NOT EXISTS competitor_domain TEXT;
@@ -187,6 +211,12 @@ CREATE TABLE IF NOT EXISTS lead_competitor_usage (
     detected_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE lead_competitor_usage ADD COLUMN IF NOT EXISTS organization_id UUID;
 ALTER TABLE lead_competitor_usage ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE lead_competitor_usage ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE SET NULL;
 ALTER TABLE lead_competitor_usage ADD COLUMN IF NOT EXISTS competitor_name TEXT;
@@ -222,6 +252,12 @@ CREATE TABLE IF NOT EXISTS market_segment_intel (
     recommended_volume INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE market_segment_intel ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 ALTER TABLE market_segment_intel ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE CASCADE;
 ALTER TABLE market_segment_intel ADD COLUMN IF NOT EXISTS week_of DATE;
@@ -269,6 +305,12 @@ CREATE TABLE IF NOT EXISTS gtm_insights (
     generated_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- organization_id: _inject_org tags every _post()/_upsert() insert
+-- unconditionally whenever GTM_ORG_ID is set — no per-table opt-out
+-- exists. Closing a documentation/safety gap found while auditing this
+-- bug class (already hit data_quality_reports and nurture_touches live).
+ALTER TABLE gtm_insights ADD COLUMN IF NOT EXISTS organization_id UUID;
 
 ALTER TABLE gtm_insights ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
 ALTER TABLE gtm_insights ADD COLUMN IF NOT EXISTS icp_id BIGINT REFERENCES icp_profiles(id) ON DELETE SET NULL;
