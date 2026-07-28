@@ -204,21 +204,26 @@ export async function getDeals(searchQuery?: string) {
 // getDeals()'s own org check, and these newer tables don't reliably have
 // organization_id populated on every row yet.
 export async function getAiInsightsForDeal(dealId: string) {
-  if (!dealId) return { proposal: null, executiveBrief: null, pipelineStatus: null }
+  if (!dealId) return { proposal: null, executiveBrief: null, pipelineStatus: null, onboardingHandoff: null }
   try {
-    const [proposalRes, briefRes, pipelineRes] = await Promise.all([
+    const [proposalRes, briefRes, pipelineRes, handoffRes] = await Promise.all([
       pool.query(`SELECT * FROM public.deal_proposals WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
       pool.query(`SELECT * FROM public.executive_briefs WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
       pool.query(`SELECT * FROM public.pipeline_status WHERE deal_id = $1 ORDER BY reviewed_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
+      // Agent 39 — Onboarding Handoff. Only ever exists for won deals (one
+      // per deal_id, unique). Not org-filtered for the same reason as the
+      // other three: dealId is already scoped via getDeals()'s own org check.
+      pool.query(`SELECT * FROM public.onboarding_handoffs WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
     ])
     return {
       proposal: proposalRes.rows[0] ?? null,
       executiveBrief: briefRes.rows[0] ?? null,
       pipelineStatus: pipelineRes.rows[0] ?? null,
+      onboardingHandoff: handoffRes.rows[0] ?? null,
     }
   } catch (err: any) {
     console.error('Error fetching AI insights for deal:', err.message)
-    return { proposal: null, executiveBrief: null, pipelineStatus: null }
+    return { proposal: null, executiveBrief: null, pipelineStatus: null, onboardingHandoff: null }
   }
 }
 

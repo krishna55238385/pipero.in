@@ -18,6 +18,9 @@ import {
   TrendingUp,
   AlertTriangle,
   Target,
+  HeartHandshake,
+  PauseCircle,
+  Ban,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
@@ -37,6 +40,7 @@ import {
   type CompetitorIntel,
   type GtmBrief,
   type OutreachBundle,
+  type NurtureTouch,
 } from '@/types/gtm'
 
 // The data prop mirrors exactly what getGtmDataForCrmLead returns (or null).
@@ -426,6 +430,62 @@ function BriefTab({ brief }: { brief: GtmBrief | null }) {
   )
 }
 
+// ------------------------------------------------------------------ Nurture (Agent 40)
+function nurtureStatusMeta(status: string): { label: string; className: string; icon: typeof HeartHandshake } {
+  switch (status) {
+    case 'converted':
+      return { label: 'Converted', className: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30', icon: CheckCircle2 }
+    case 'paused':
+      return { label: 'Paused', className: 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20', icon: PauseCircle }
+    case 'opted_out':
+      return { label: 'Opted out', className: 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/30', icon: Ban }
+    default:
+      return { label: 'Draft', className: 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30', icon: Clock }
+  }
+}
+
+function NurtureTab({ touches }: { touches: NurtureTouch[] }) {
+  if (touches.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground py-8 text-center">
+        Not currently in the nurture programme — this lead either hasn't replied "not now" yet, or hasn't been picked up by a nurture run.
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-3">
+      {touches.map((t) => {
+        const meta = nurtureStatusMeta(t.status)
+        const Icon = meta.icon
+        return (
+          <div key={t.id} className="rounded-lg border bg-card p-4 space-y-2">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="outline" className="text-[11px]">Touch #{t.touchNumber}</Badge>
+                <Badge variant="outline" className={`gap-1 text-[11px] ${meta.className}`}>
+                  <Icon className="h-3 w-3" /> {meta.label}
+                </Badge>
+                {t.contentTopic && (
+                  <span className="text-xs text-muted-foreground">{t.contentTopic}</span>
+                )}
+              </div>
+              <span className="text-xs text-muted-foreground">{fmtDate(t.createdAt, 'MMM d, yyyy')}</span>
+            </div>
+            {t.contentText ? (
+              <p className="text-sm text-foreground whitespace-pre-wrap">{t.contentText}</p>
+            ) : t.heldReason ? (
+              <p className="text-sm text-muted-foreground italic">Held: {t.heldReason}</p>
+            ) : null}
+            {t.nextEligibleAt && t.status === 'draft' && (
+              <p className="text-xs text-muted-foreground">Next eligible: {fmtDate(t.nextEligibleAt, 'MMM d, yyyy')}</p>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ------------------------------------------------------------------ Outreach
 function OutreachTab({ outreach }: { outreach: OutreachBundle }) {
   const { personalisation, sequence, channelPlan, log } = outreach
@@ -582,7 +642,7 @@ export function GtmIntelligence({ data }: { data: GtmData | null }) {
     )
   }
 
-  const { intel, stakeholders, map, brief, outreach, competitors, signals } = data
+  const { intel, stakeholders, map, brief, outreach, competitors, signals, nurtureTouches } = data
 
   return (
     <Card className="shadow-sm border-slate-200 dark:border-border">
@@ -616,6 +676,10 @@ export function GtmIntelligence({ data }: { data: GtmData | null }) {
             <TabsTrigger value="outreach" className="rounded-md px-3 gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm">
               <Send className="h-3.5 w-3.5" /> Outreach
             </TabsTrigger>
+            <TabsTrigger value="nurture" className="rounded-md px-3 gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+              <HeartHandshake className="h-3.5 w-3.5" /> Nurture
+              {nurtureTouches.length > 0 && <span className="text-[10px] text-muted-foreground">({nurtureTouches.length})</span>}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="intel" className="mt-5">
@@ -635,6 +699,9 @@ export function GtmIntelligence({ data }: { data: GtmData | null }) {
           </TabsContent>
           <TabsContent value="outreach" className="mt-5">
             <OutreachTab outreach={outreach} />
+          </TabsContent>
+          <TabsContent value="nurture" className="mt-5">
+            <NurtureTab touches={nurtureTouches} />
           </TabsContent>
         </Tabs>
       </CardContent>

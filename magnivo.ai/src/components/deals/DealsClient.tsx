@@ -92,7 +92,7 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
         assigned_to: deal.assigned_to || '',
     })
     const [saving, setSaving] = useState(false)
-    const [aiInsights, setAiInsights] = useState<{ proposal: any; executiveBrief: any; pipelineStatus: any } | null>(null)
+    const [aiInsights, setAiInsights] = useState<{ proposal: any; executiveBrief: any; pipelineStatus: any; onboardingHandoff: any } | null>(null)
     const [aiLoading, setAiLoading] = useState(true)
 
     useEffect(() => {
@@ -308,7 +308,25 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
                                     </div>
                                 )}
 
-                                {!aiInsights?.pipelineStatus && !aiInsights?.proposal && !aiInsights?.executiveBrief && (
+                                {aiInsights?.onboardingHandoff && aiInsights.onboardingHandoff.status !== 'held' && (
+                                    <div className="rounded-xl p-3 bg-emerald-50/50 dark:bg-emerald-950/20 space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">Onboarding Handoff</span>
+                                            <Badge variant="outline" className="text-[10px] capitalize">{aiInsights.onboardingHandoff.status}</Badge>
+                                        </div>
+                                        <div className="text-sm text-slate-700 dark:text-muted-foreground whitespace-pre-wrap line-clamp-4">
+                                            {aiInsights.onboardingHandoff.handoff_brief}
+                                        </div>
+                                        {aiInsights.onboardingHandoff.primary_contact_name && (
+                                            <div className="text-xs text-slate-500 dark:text-muted-foreground">
+                                                Primary contact: {aiInsights.onboardingHandoff.primary_contact_name}
+                                                {aiInsights.onboardingHandoff.primary_contact_email && ` <${aiInsights.onboardingHandoff.primary_contact_email}>`}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {!aiInsights?.pipelineStatus && !aiInsights?.proposal && !aiInsights?.executiveBrief && !aiInsights?.onboardingHandoff && (
                                     <div className="text-xs text-slate-400 italic">No AI-generated content for this deal yet.</div>
                                 )}
                             </div>

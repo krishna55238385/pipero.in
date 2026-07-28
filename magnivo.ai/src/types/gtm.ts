@@ -291,6 +291,33 @@ export interface DataQualityReport {
   generatedAt: string
 }
 
+// Agent 38 — Inbound Signal Capture
+export interface InboundSignalCapture {
+  id: number
+  companyName: string | null
+  companyDomain: string
+  signalStrength: string | null
+  sessions: number | null
+  pageViews: number | null
+  highIntentPagesHit: boolean
+  status: string
+  heldReason: string | null
+  promotedLeadId: number | null
+  capturedAt: string
+}
+
+// Agent 40 — Lead Nurturing
+export interface NurtureTouch {
+  id: number
+  touchNumber: number
+  contentTopic: string | null
+  contentText: string | null
+  status: string // draft | converted | paused | opted_out
+  heldReason: string | null
+  nextEligibleAt: string | null
+  createdAt: string
+}
+
 export interface OutreachBundle {
   personalisation: {
     angles: Array<Record<string, unknown>>

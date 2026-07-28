@@ -23,11 +23,13 @@ import {
   type Icp,
   type IntentScore,
   type MarketSegment,
+  type NurtureTouch,
   type RevenueForecast,
   type BoardReport,
   type RoiAttributionSnapshot,
   type CrmSyncFlag,
   type DataQualityReport,
+  type InboundSignalCapture,
   type OutreachBundle,
   type PhaseRun,
   type ProspectLeadRow,
@@ -454,6 +456,31 @@ export async function getDataQualityReport(): Promise<DataQualityReport | null> 
   } catch (err: any) { console.error('getDataQualityReport error:', err.message); return null }
 }
 
+// Agent 38 — Inbound Signal Capture. Recent captures across all statuses
+// (candidate/promoted/held) so a user can see the full evaluation, not just
+// what got promoted.
+export async function getInboundSignalCaptures(limit = 50): Promise<InboundSignalCapture[]> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return []
+    const r = await pool.query(
+      `SELECT * FROM public.inbound_signal_captures WHERE organization_id = $1 ORDER BY captured_at DESC LIMIT $2`, [org, limit])
+    return r.rows.map((row: any) => ({
+      id: row.id,
+      companyName: row.company_name,
+      companyDomain: row.company_domain,
+      signalStrength: row.signal_strength,
+      sessions: row.sessions,
+      pageViews: row.page_views,
+      highIntentPagesHit: Boolean(row.high_intent_pages_hit),
+      status: row.status,
+      heldReason: row.held_reason,
+      promotedLeadId: row.promoted_lead_id,
+      capturedAt: row.captured_at,
+    }))
+  } catch (err: any) { console.error('getInboundSignalCaptures error:', err.message); return [] }
+}
+
 export async function getCompetitors(icpId: number): Promise<CompetitorIntel[]> {
   try {
     const r = await pool.query(
@@ -473,10 +500,10 @@ export async function getCompetitors(icpId: number): Promise<CompetitorIntel[]> 
 // --------------------------------------------------------------------------- //
 export async function getLeadGtmData(leadsRawId: number): Promise<{
   intel: AccountIntel | null; stakeholders: StakeholderRow[]; map: StakeholderMap | null
-  brief: GtmBrief | null; outreach: OutreachBundle
+  brief: GtmBrief | null; outreach: OutreachBundle; nurtureTouches: NurtureTouch[]
 }> {
   try {
-    const [intelRes, stkRes, mapRes, briefRes, persRes, seqRes, planRes, logRes] = await Promise.all([
+    const [intelRes, stkRes, mapRes, briefRes, persRes, seqRes, planRes, logRes, nurtureRes] = await Promise.all([
       pool.query('SELECT * FROM public.account_intelligence WHERE lead_id = $1 LIMIT 1', [leadsRawId]),
       pool.query('SELECT * FROM public.account_stakeholders WHERE lead_id = $1 ORDER BY rank ASC', [leadsRawId]),
       pool.query('SELECT * FROM public.stakeholder_maps WHERE lead_id = $1 LIMIT 1', [leadsRawId]),
@@ -485,6 +512,10 @@ export async function getLeadGtmData(leadsRawId: number): Promise<{
       pool.query('SELECT * FROM public.outreach_sequences WHERE lead_id = $1 LIMIT 1', [leadsRawId]),
       pool.query('SELECT * FROM public.outreach_channel_plans WHERE lead_id = $1 LIMIT 1', [leadsRawId]),
       pool.query('SELECT * FROM public.outreach_log WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 25', [leadsRawId]),
+      // Agent 40 — Lead Nurturing. Append-per-touch history (not a snapshot) —
+      // full history is the point, so the cadence/no-repeat-content rules are
+      // visible, not just the latest touch.
+      pool.query('SELECT * FROM public.nurture_touches WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 25', [leadsRawId]),
     ])
 
     const persRow = persRes.rows[0]; const seqRow = seqRes.rows[0]; const planRow = planRes.rows[0]
@@ -506,10 +537,20 @@ export async function getLeadGtmData(leadsRawId: number): Promise<{
           status: r.status, sentAt: r.sent_at, error: r.error,
         })),
       },
+      nurtureTouches: nurtureRes.rows.map((r: any) => ({
+        id: r.id,
+        touchNumber: r.touch_number,
+        contentTopic: r.content_topic,
+        contentText: r.content_text,
+        status: r.status,
+        heldReason: r.held_reason,
+        nextEligibleAt: r.next_eligible_at,
+        createdAt: r.created_at,
+      })),
     }
   } catch (err: any) {
     console.error('getLeadGtmData error:', err.message)
-    return { intel: null, stakeholders: [], map: null, brief: null, outreach: emptyOutreach() }
+    return { intel: null, stakeholders: [], map: null, brief: null, outreach: emptyOutreach(), nurtureTouches: [] }
   }
 }
 
