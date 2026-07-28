@@ -40,6 +40,7 @@ import {
   type VisitorSignalRow,
   type ChampionMove,
   type RevenueIntelligenceSnapshot,
+  type AbTestResult,
 } from '@/types/gtm'
 
 // Per-request memoized org lookup
@@ -511,6 +512,35 @@ export async function getChampionMoves(limit = 50): Promise<ChampionMove[]> {
       createdAt: row.created_at,
     }))
   } catch (err: any) { console.error('getChampionMoves error:', err.message); return [] }
+}
+
+// Agent 15 — A/B Testing. All variants across all campaigns, newest step
+// first — the UI groups these client-side by (campaign_id, step_number) so
+// a user can see each subject-line contest and its declared winner (if the
+// 50-send sample-size threshold has been met) at a glance.
+export async function getAbTestResults(limit = 200): Promise<AbTestResult[]> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return []
+    const r = await pool.query(
+      `SELECT * FROM public.ab_test_results WHERE organization_id = $1 ORDER BY refreshed_at DESC LIMIT $2`,
+      [org, limit])
+    return r.rows.map((row: any) => ({
+      id: row.id,
+      campaignId: row.campaign_id,
+      stepNumber: row.step_number,
+      variantSubject: row.variant_subject,
+      sentCount: row.sent_count || 0,
+      openCount: row.open_count || 0,
+      replyCount: row.reply_count || 0,
+      openRate: row.open_rate !== null ? Number(row.open_rate) : 0,
+      replyRate: row.reply_rate !== null ? Number(row.reply_rate) : 0,
+      isWinner: Boolean(row.is_winner),
+      isRetired: Boolean(row.is_retired),
+      sampleSizeMet: Boolean(row.sample_size_met),
+      refreshedAt: row.refreshed_at,
+    }))
+  } catch (err: any) { console.error('getAbTestResults error:', err.message); return [] }
 }
 
 // Agent 38 — Inbound Signal Capture. Recent captures across all statuses

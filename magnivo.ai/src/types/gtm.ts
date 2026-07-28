@@ -368,6 +368,23 @@ export interface ReferralRequest {
   createdAt: string
 }
 
+// Agent 15 — A/B Testing
+export interface AbTestResult {
+  id: number
+  campaignId: string
+  stepNumber: number
+  variantSubject: string
+  sentCount: number
+  openCount: number
+  replyCount: number
+  openRate: number
+  replyRate: number
+  isWinner: boolean
+  isRetired: boolean
+  sampleSizeMet: boolean
+  refreshedAt: string
+}
+
 // Agent 45 — Revenue Intelligence
 export interface RevenueIntelligenceSnapshot {
   id: number

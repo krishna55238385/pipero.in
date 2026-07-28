@@ -1,11 +1,11 @@
 'use client'
 
-import { BrainCircuit, Coins, Hash, Activity, Globe2, Layers, TrendingUp, TrendingDown, ClipboardList, AlertTriangle, CheckCircle2, ArrowUpRight, ArrowDownRight, PiggyBank, Info, Lightbulb, UserCheck } from 'lucide-react'
+import { BrainCircuit, Coins, Hash, Activity, Globe2, Layers, TrendingUp, TrendingDown, ClipboardList, AlertTriangle, CheckCircle2, ArrowUpRight, ArrowDownRight, PiggyBank, Info, Lightbulb, UserCheck, FlaskConical, Trophy } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import type { Icp, MarketSegment, RevenueForecast, BoardReport, RoiAttributionSnapshot, RevenueIntelligenceSnapshot, ChampionMove } from '@/types/gtm'
+import type { Icp, MarketSegment, RevenueForecast, BoardReport, RoiAttributionSnapshot, RevenueIntelligenceSnapshot, ChampionMove, AbTestResult } from '@/types/gtm'
 
 function fmtUsdFull(n: number): string {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -455,6 +455,83 @@ function ChampionMovesCard({ moves }: { moves: ChampionMove[] }) {
   )
 }
 
+// Agent 15 — A/B Testing
+function AbTestingCard({ results }: { results: AbTestResult[] }) {
+  const groups = new Map<string, AbTestResult[]>()
+  for (const r of results) {
+    const key = `${r.campaignId}::${r.stepNumber}`
+    const arr = groups.get(key) || []
+    arr.push(r)
+    groups.set(key, arr)
+  }
+
+  return (
+    <Card className="bg-white dark:bg-background border-gray-200 dark:border-border rounded-2xl overflow-hidden shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-lg font-bold flex items-center gap-2">
+          <FlaskConical className="h-5 w-5 text-cyan-600" />
+          A/B Testing
+        </CardTitle>
+        <CardDescription>Subject-line variants competing per outreach step — winners declared at 50+ sends.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {groups.size === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            No A/B test data yet. Run the A/B testing pipeline to populate this.
+          </p>
+        ) : (
+          <div className="space-y-5">
+            {Array.from(groups.entries()).map(([key, variants]) => {
+              const [campaignId, stepNumber] = key.split('::')
+              const anySampleMet = variants.some((v) => v.sampleSizeMet)
+              return (
+                <div key={key} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                      Step {stepNumber} · <span className="normal-case font-normal" title={campaignId}>{campaignId.slice(0, 8)}…</span>
+                    </div>
+                    {!anySampleMet && (
+                      <Badge variant="outline" className="text-[10px] text-slate-500">below 50-send threshold</Badge>
+                    )}
+                  </div>
+                  <div className="overflow-x-auto rounded-lg border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead>Variant</TableHead>
+                          <TableHead className="text-right">Sent</TableHead>
+                          <TableHead className="text-right">Open rate</TableHead>
+                          <TableHead className="text-right">Reply rate</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {variants.map((v) => (
+                          <TableRow key={v.id} className={v.isRetired ? 'opacity-50' : ''}>
+                            <TableCell className="text-sm max-w-[220px] truncate" title={v.variantSubject}>
+                              <div className="flex items-center gap-1.5">
+                                {v.isWinner && <Trophy className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
+                                <span className={v.isWinner ? 'font-semibold' : ''}>{v.variantSubject}</span>
+                                {v.isRetired && <Badge variant="outline" className="text-[9px] shrink-0">retired</Badge>}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right text-sm tabular-nums">{v.sentCount}</TableCell>
+                            <TableCell className="text-right text-sm tabular-nums">{(v.openRate * 100).toFixed(1)}%</TableCell>
+                            <TableCell className="text-right text-sm tabular-nums">{(v.replyRate * 100).toFixed(1)}%</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 type LlmUsageSummary = {
   totalCost: number
   totalCalls: number
@@ -488,6 +565,7 @@ export default function GtmAnalytics({
   roi,
   revenueIntelligence,
   championMoves,
+  abTestResults,
 }: {
   usage: LlmUsageSummary
   market: MarketSegment[]
@@ -497,6 +575,7 @@ export default function GtmAnalytics({
   roi: RoiAttributionSnapshot | null
   revenueIntelligence: RevenueIntelligenceSnapshot | null
   championMoves: ChampionMove[]
+  abTestResults: AbTestResult[]
 }) {
   const icpName = new Map(icps.map((i) => [i.id, i.name]))
   const maxPhaseCost = Math.max(1e-9, ...usage.byPhase.map((p) => p.cost))
@@ -524,6 +603,9 @@ export default function GtmAnalytics({
 
         {/* ---------------- Champion Moves (Agent 42) ---------------- */}
         <ChampionMovesCard moves={championMoves} />
+
+        {/* ---------------- A/B Testing (Agent 15) ---------------- */}
+        <AbTestingCard results={abTestResults} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
