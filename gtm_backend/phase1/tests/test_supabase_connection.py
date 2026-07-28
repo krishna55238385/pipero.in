@@ -21,13 +21,24 @@ import pytest
 
 # Override the fake env vars set by conftest.py with real credentials.
 # Must happen before any phase1 connector module is imported.
+#
+# Scoped to just the keys this file's own tests read (Supabase/DB connectivity
+# + backend.db's usage-summary lookup) — NOT a blind copy of every .env line.
+# A blind copy previously leaked unrelated keys like GMAIL_ADDRESS /
+# GMAIL_APP_PASSWORD into os.environ for the rest of the pytest process,
+# undoing phase3/tests/conftest.py's deliberate empty-string overrides and
+# making phase3's gmail_smtp tests attempt a real SMTP send whenever phase1
+# and phase3 ran in the same invocation.
 _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"  # repo-root .env
+_REAL_CREDENTIAL_KEYS = {"SUPABASE_URL", "SUPABASE_KEY", "DATABASE_URL", "GTM_ORG_ID"}
 if _ENV_PATH.exists():
     for _line in _ENV_PATH.read_text().splitlines():
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:
             _k, _, _v = _line.partition("=")
-            os.environ[_k.strip()] = _v.strip()
+            _k = _k.strip()
+            if _k in _REAL_CREDENTIAL_KEYS:
+                os.environ[_k] = _v.strip()
 
 
 def _has_real_supabase() -> bool:
