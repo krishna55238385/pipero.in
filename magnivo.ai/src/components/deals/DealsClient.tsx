@@ -92,7 +92,7 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
         assigned_to: deal.assigned_to || '',
     })
     const [saving, setSaving] = useState(false)
-    const [aiInsights, setAiInsights] = useState<{ proposal: any; executiveBrief: any; pipelineStatus: any; onboardingHandoff: any } | null>(null)
+    const [aiInsights, setAiInsights] = useState<{ proposal: any; executiveBrief: any; pipelineStatus: any; onboardingHandoff: any; reengagementTouch: any; expansionOpportunity: any; referralRequest: any } | null>(null)
     const [aiLoading, setAiLoading] = useState(true)
 
     useEffect(() => {
@@ -326,7 +326,61 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
                                     </div>
                                 )}
 
-                                {!aiInsights?.pipelineStatus && !aiInsights?.proposal && !aiInsights?.executiveBrief && !aiInsights?.onboardingHandoff && (
+                                {aiInsights?.reengagementTouch && aiInsights.reengagementTouch.status === 'draft' && (
+                                    <div className="rounded-xl p-3 bg-amber-50/50 dark:bg-amber-950/20 space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">Re-engagement Draft</span>
+                                            <Badge variant="outline" className="text-[10px]">{aiInsights.reengagementTouch.status}</Badge>
+                                        </div>
+                                        {aiInsights.reengagementTouch.trigger_reason && (
+                                            <div className="text-xs text-slate-500 dark:text-muted-foreground italic">
+                                                {aiInsights.reengagementTouch.trigger_reason}
+                                            </div>
+                                        )}
+                                        <div className="text-sm text-slate-700 dark:text-muted-foreground whitespace-pre-wrap line-clamp-4">
+                                            {aiInsights.reengagementTouch.content_text}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {aiInsights?.expansionOpportunity && aiInsights.expansionOpportunity.status === 'draft' && (
+                                    <div className="rounded-xl p-3 bg-teal-50/50 dark:bg-teal-950/20 space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-semibold text-teal-700 dark:text-teal-400">Expansion Opportunity</span>
+                                            {aiInsights.expansionOpportunity.opportunity_type && (
+                                                <Badge variant="outline" className="text-[10px] capitalize">{aiInsights.expansionOpportunity.opportunity_type.replace(/_/g, ' ')}</Badge>
+                                            )}
+                                        </div>
+                                        <div className="text-sm text-slate-700 dark:text-muted-foreground whitespace-pre-wrap line-clamp-4">
+                                            {aiInsights.expansionOpportunity.content_text}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {aiInsights?.referralRequest && aiInsights.referralRequest.status === 'draft' && (
+                                    <div className="rounded-xl p-3 bg-pink-50/50 dark:bg-pink-950/20 space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-semibold text-pink-700 dark:text-pink-400">Referral Ask</span>
+                                        </div>
+                                        {aiInsights.referralRequest.target_description && (
+                                            <div className="text-xs text-slate-500 dark:text-muted-foreground italic">
+                                                Looking for: {aiInsights.referralRequest.target_description}
+                                            </div>
+                                        )}
+                                        <div className="text-sm text-slate-700 dark:text-muted-foreground whitespace-pre-wrap line-clamp-4">
+                                            {aiInsights.referralRequest.content_text}
+                                        </div>
+                                        {aiInsights.referralRequest.forwardable_intro_text && (
+                                            <div className="text-xs text-slate-500 dark:text-muted-foreground border-t dark:border-border pt-2">
+                                                <span className="font-semibold">Forwardable intro: </span>
+                                                <span className="whitespace-pre-wrap line-clamp-3">{aiInsights.referralRequest.forwardable_intro_text}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {!aiInsights?.pipelineStatus && !aiInsights?.proposal && !aiInsights?.executiveBrief && !aiInsights?.onboardingHandoff &&
+                                 !(aiInsights?.reengagementTouch?.status === 'draft') && !(aiInsights?.expansionOpportunity?.status === 'draft') && !(aiInsights?.referralRequest?.status === 'draft') && (
                                     <div className="text-xs text-slate-400 italic">No AI-generated content for this deal yet.</div>
                                 )}
                             </div>

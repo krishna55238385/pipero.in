@@ -318,6 +318,71 @@ export interface NurtureTouch {
   createdAt: string
 }
 
+// Agent 41 — Re-engagement
+export interface ReengagementTouch {
+  id: number
+  dealId: string
+  touchNumber: number
+  triggerReason: string | null
+  contentText: string | null
+  status: string // draft | held | opted_out
+  heldReason: string | null
+  createdAt: string
+}
+
+// Agent 42 — Champion Tracker
+export interface ChampionMove {
+  id: number
+  contactId: string
+  contactName: string | null
+  originalCompany: string | null
+  newCompanyName: string | null
+  newTitle: string | null
+  isCompetitor: boolean
+  contentText: string | null
+  status: string // detected | competitor_skip | held | drafted
+  heldReason: string | null
+  createdAt: string
+}
+
+// Agent 43 — Expansion & Upsell
+export interface ExpansionOpportunity {
+  id: number
+  dealId: string
+  opportunityType: string | null
+  contentText: string | null
+  status: string // draft | held
+  heldReason: string | null
+  createdAt: string
+}
+
+// Agent 44 — Referral
+export interface ReferralRequest {
+  id: number
+  dealId: string
+  targetDescription: string | null
+  contentText: string | null
+  forwardableIntroText: string | null
+  status: string // draft | held
+  heldReason: string | null
+  createdAt: string
+}
+
+// Agent 45 — Revenue Intelligence
+export interface RevenueIntelligenceSnapshot {
+  id: number
+  closedDealCount: number
+  minSampleMet: boolean
+  winRate: number | null
+  avgDealSizeWon: number | null
+  avgDealSizeLost: number | null
+  avgSalesCycleDaysWon: number | null
+  segmentBreakdown: Record<string, { won: number; lost: number; win_rate: number | null }>
+  keyInsights: string[]
+  recommendations: string[]
+  generatedAt: string
+}
+
 export interface OutreachBundle {
   personalisation: {
     angles: Array<Record<string, unknown>>

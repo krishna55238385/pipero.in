@@ -204,9 +204,13 @@ export async function getDeals(searchQuery?: string) {
 // getDeals()'s own org check, and these newer tables don't reliably have
 // organization_id populated on every row yet.
 export async function getAiInsightsForDeal(dealId: string) {
-  if (!dealId) return { proposal: null, executiveBrief: null, pipelineStatus: null, onboardingHandoff: null }
+  const empty = {
+    proposal: null, executiveBrief: null, pipelineStatus: null, onboardingHandoff: null,
+    reengagementTouch: null, expansionOpportunity: null, referralRequest: null,
+  }
+  if (!dealId) return empty
   try {
-    const [proposalRes, briefRes, pipelineRes, handoffRes] = await Promise.all([
+    const [proposalRes, briefRes, pipelineRes, handoffRes, reengageRes, expansionRes, referralRes] = await Promise.all([
       pool.query(`SELECT * FROM public.deal_proposals WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
       pool.query(`SELECT * FROM public.executive_briefs WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
       pool.query(`SELECT * FROM public.pipeline_status WHERE deal_id = $1 ORDER BY reviewed_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
@@ -214,16 +218,26 @@ export async function getAiInsightsForDeal(dealId: string) {
       // per deal_id, unique). Not org-filtered for the same reason as the
       // other three: dealId is already scoped via getDeals()'s own org check.
       pool.query(`SELECT * FROM public.onboarding_handoffs WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
+      // Agent 41 — Re-engagement. Only relevant for lost deals, but harmless
+      // to query unconditionally (empty result for deals with no attempt).
+      pool.query(`SELECT * FROM public.reengagement_touches WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
+      // Agent 43 — Expansion & Upsell. Only relevant for won, onboarded deals.
+      pool.query(`SELECT * FROM public.expansion_opportunities WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
+      // Agent 44 — Referral. Only relevant for won, onboarded deals.
+      pool.query(`SELECT * FROM public.referral_requests WHERE deal_id = $1 ORDER BY created_at DESC LIMIT 1`, [dealId]).catch(() => ({ rows: [] })),
     ])
     return {
       proposal: proposalRes.rows[0] ?? null,
       executiveBrief: briefRes.rows[0] ?? null,
       pipelineStatus: pipelineRes.rows[0] ?? null,
       onboardingHandoff: handoffRes.rows[0] ?? null,
+      reengagementTouch: reengageRes.rows[0] ?? null,
+      expansionOpportunity: expansionRes.rows[0] ?? null,
+      referralRequest: referralRes.rows[0] ?? null,
     }
   } catch (err: any) {
     console.error('Error fetching AI insights for deal:', err.message)
-    return { proposal: null, executiveBrief: null, pipelineStatus: null, onboardingHandoff: null }
+    return empty
   }
 }
 

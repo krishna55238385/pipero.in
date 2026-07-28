@@ -1,11 +1,11 @@
 'use client'
 
-import { BrainCircuit, Coins, Hash, Activity, Globe2, Layers, TrendingUp, TrendingDown, ClipboardList, AlertTriangle, CheckCircle2, ArrowUpRight, ArrowDownRight, PiggyBank, Info } from 'lucide-react'
+import { BrainCircuit, Coins, Hash, Activity, Globe2, Layers, TrendingUp, TrendingDown, ClipboardList, AlertTriangle, CheckCircle2, ArrowUpRight, ArrowDownRight, PiggyBank, Info, Lightbulb, UserCheck } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import type { Icp, MarketSegment, RevenueForecast, BoardReport, RoiAttributionSnapshot } from '@/types/gtm'
+import type { Icp, MarketSegment, RevenueForecast, BoardReport, RoiAttributionSnapshot, RevenueIntelligenceSnapshot, ChampionMove } from '@/types/gtm'
 
 function fmtUsdFull(n: number): string {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -316,6 +316,145 @@ function BoardReportCard({ report }: { report: BoardReport | null }) {
   )
 }
 
+// Agent 45 — Revenue Intelligence
+function RevenueIntelligenceCard({ snapshot }: { snapshot: RevenueIntelligenceSnapshot | null }) {
+  return (
+    <Card className="bg-white dark:bg-background border-gray-200 dark:border-border rounded-2xl overflow-hidden shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-lg font-bold flex items-center gap-2">
+          <Lightbulb className="h-5 w-5 text-amber-600" />
+          Revenue Intelligence
+        </CardTitle>
+        <CardDescription>Patterns learned from closed deals — for human review, not auto-applied.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!snapshot ? (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            No revenue intelligence snapshot generated yet. Run the pipeline to populate this.
+          </p>
+        ) : !snapshot.minSampleMet ? (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            Only {snapshot.closedDealCount} closed deal(s) so far — needs at least 20 before generating pattern insights.
+          </p>
+        ) : (
+          <div className="space-y-5">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Win rate</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">
+                  {snapshot.winRate !== null ? `${snapshot.winRate}%` : 'N/A'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Avg deal (won)</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">
+                  {snapshot.avgDealSizeWon !== null ? fmtUsdFull(snapshot.avgDealSizeWon) : 'N/A'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Avg cycle (won)</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">
+                  {snapshot.avgSalesCycleDaysWon !== null ? `${snapshot.avgSalesCycleDaysWon}d` : 'N/A'}
+                </p>
+              </div>
+            </div>
+
+            {snapshot.keyInsights.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Key insights</div>
+                <ul className="space-y-1">
+                  {snapshot.keyInsights.map((item, i) => (
+                    <li key={i} className="text-sm text-foreground">• {item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {snapshot.recommendations.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Recommendations (human review required)</div>
+                <ul className="space-y-1">
+                  {snapshot.recommendations.map((item, i) => (
+                    <li key={i} className="text-sm text-foreground">→ {item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {Object.keys(snapshot.segmentBreakdown).length > 0 && (
+              <div className="overflow-x-auto rounded-lg border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Segment</TableHead>
+                      <TableHead className="text-right">Won</TableHead>
+                      <TableHead className="text-right">Lost</TableHead>
+                      <TableHead className="text-right">Win rate</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Object.entries(snapshot.segmentBreakdown).map(([segment, s]) => (
+                      <TableRow key={segment}>
+                        <TableCell className="text-sm capitalize">{segment}</TableCell>
+                        <TableCell className="text-right text-sm tabular-nums">{s.won}</TableCell>
+                        <TableCell className="text-right text-sm tabular-nums">{s.lost}</TableCell>
+                        <TableCell className="text-right text-sm tabular-nums">{s.win_rate !== null ? `${s.win_rate}%` : '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Agent 42 — Champion Tracker
+function ChampionMovesCard({ moves }: { moves: ChampionMove[] }) {
+  return (
+    <Card className="bg-white dark:bg-background border-gray-200 dark:border-border rounded-2xl overflow-hidden shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-lg font-bold flex items-center gap-2">
+          <UserCheck className="h-5 w-5 text-violet-600" />
+          Champion Moves
+        </CardTitle>
+        <CardDescription>Past customers who've changed companies — warm re-connects, competitor moves skipped.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {moves.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            No champion moves detected yet.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {moves.map((m) => (
+              <div key={m.id} className="rounded-xl border border-gray-200 dark:border-border p-3 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-sm text-slate-900 dark:text-foreground">{m.contactName || 'Unknown contact'}</span>
+                  {m.isCompetitor ? (
+                    <Badge variant="outline" className="text-[10px] bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30">Moved to competitor</Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30">Warm re-connect drafted</Badge>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {m.originalCompany || '?'} → {m.newCompanyName || '?'}{m.newTitle ? ` (${m.newTitle})` : ''}
+                </div>
+                {!m.isCompetitor && m.contentText && (
+                  <p className="text-sm text-slate-700 dark:text-muted-foreground whitespace-pre-wrap line-clamp-3 pt-1">{m.contentText}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 type LlmUsageSummary = {
   totalCost: number
   totalCalls: number
@@ -347,6 +486,8 @@ export default function GtmAnalytics({
   forecast,
   boardReport,
   roi,
+  revenueIntelligence,
+  championMoves,
 }: {
   usage: LlmUsageSummary
   market: MarketSegment[]
@@ -354,6 +495,8 @@ export default function GtmAnalytics({
   forecast: RevenueForecast | null
   boardReport: BoardReport | null
   roi: RoiAttributionSnapshot | null
+  revenueIntelligence: RevenueIntelligenceSnapshot | null
+  championMoves: ChampionMove[]
 }) {
   const icpName = new Map(icps.map((i) => [i.id, i.name]))
   const maxPhaseCost = Math.max(1e-9, ...usage.byPhase.map((p) => p.cost))
@@ -375,6 +518,12 @@ export default function GtmAnalytics({
 
         {/* ---------------- ROI Attribution (Agent 36) ---------------- */}
         <RoiAttributionCard roi={roi} />
+
+        {/* ---------------- Revenue Intelligence (Agent 45) ---------------- */}
+        <RevenueIntelligenceCard snapshot={revenueIntelligence} />
+
+        {/* ---------------- Champion Moves (Agent 42) ---------------- */}
+        <ChampionMovesCard moves={championMoves} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

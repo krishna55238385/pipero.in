@@ -38,6 +38,8 @@ import {
   type StakeholderMap,
   type StakeholderRow,
   type VisitorSignalRow,
+  type ChampionMove,
+  type RevenueIntelligenceSnapshot,
 } from '@/types/gtm'
 
 // Per-request memoized org lookup
@@ -454,6 +456,61 @@ export async function getDataQualityReport(): Promise<DataQualityReport | null> 
       generatedAt: row.generated_at,
     }
   } catch (err: any) { console.error('getDataQualityReport error:', err.message); return null }
+}
+
+// Agent 45 — Revenue Intelligence. Latest snapshot only (append-only table).
+// min_sample_met=false means the PDF's own 20-closed-deal minimum wasn't
+// reached yet — the UI should show the raw counts honestly rather than the
+// (empty) insights/recommendations lists as if there's nothing to say.
+export async function getRevenueIntelligence(): Promise<RevenueIntelligenceSnapshot | null> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return null
+    const r = await pool.query(
+      `SELECT * FROM public.revenue_intelligence_snapshots WHERE organization_id = $1 ORDER BY generated_at DESC LIMIT 1`, [org])
+    const row = r.rows[0]
+    if (!row) return null
+    return {
+      id: row.id,
+      closedDealCount: row.closed_deal_count || 0,
+      minSampleMet: Boolean(row.min_sample_met),
+      winRate: row.win_rate !== null ? Number(row.win_rate) : null,
+      avgDealSizeWon: row.avg_deal_size_won !== null ? Number(row.avg_deal_size_won) : null,
+      avgDealSizeLost: row.avg_deal_size_lost !== null ? Number(row.avg_deal_size_lost) : null,
+      avgSalesCycleDaysWon: row.avg_sales_cycle_days_won !== null ? Number(row.avg_sales_cycle_days_won) : null,
+      segmentBreakdown: row.segment_breakdown || {},
+      keyInsights: row.key_insights || [],
+      recommendations: row.recommendations || [],
+      generatedAt: row.generated_at,
+    }
+  } catch (err: any) { console.error('getRevenueIntelligence error:', err.message); return null }
+}
+
+// Agent 42 — Champion Tracker. Only rows worth a human's attention: an
+// actual drafted re-connect, or a detected move to a competitor (still
+// worth knowing about even though no outreach was drafted). 'held' rows
+// (no move found / thin evidence) are noise for this view and excluded.
+export async function getChampionMoves(limit = 50): Promise<ChampionMove[]> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return []
+    const r = await pool.query(
+      `SELECT * FROM public.champion_moves WHERE organization_id = $1 AND status IN ('drafted','competitor_skip') ORDER BY created_at DESC LIMIT $2`,
+      [org, limit])
+    return r.rows.map((row: any) => ({
+      id: row.id,
+      contactId: row.contact_id,
+      contactName: row.contact_name,
+      originalCompany: row.original_company,
+      newCompanyName: row.new_company_name,
+      newTitle: row.new_title,
+      isCompetitor: Boolean(row.is_competitor),
+      contentText: row.content_text,
+      status: row.status,
+      heldReason: row.held_reason,
+      createdAt: row.created_at,
+    }))
+  } catch (err: any) { console.error('getChampionMoves error:', err.message); return [] }
 }
 
 // Agent 38 — Inbound Signal Capture. Recent captures across all statuses
