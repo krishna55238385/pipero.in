@@ -751,6 +751,182 @@ CREATE INDEX IF NOT EXISTS idx_reengagement_touches_deal_id ON reengagement_touc
 CREATE INDEX IF NOT EXISTS idx_reengagement_touches_status ON reengagement_touches(status);
 
 -- ---------------------------------------------------------------------------
+-- Agent 42 — Champion Tracker (phase4/RETAIN & GROW)
+-- ---------------------------------------------------------------------------
+-- Population is contacts on WON deals ("previously engaged positively or
+-- been customers" — PDF's own rule). No FK to `contacts`/`deals` (CRM-owned
+-- tables), same no-FK convention as reengagement_touches/onboarding_handoffs.
+--
+-- Known scope limitations, documented honestly (see
+-- agent_42_champion_tracker.py module docstring):
+-- - "Alert within 48 hours of detection" is satisfied by run frequency
+--   (this agent should be scheduled to run at least daily), not true
+--   real-time push alerting — this codebase has no event/webhook layer.
+-- - "Monitor all contacts who have previously engaged positively" is scoped
+--   to WON-deal contacts only (verified customers), not the broader set of
+--   anyone who "engaged positively" without becoming a customer — that
+--   would need a defined signal for "positive engagement" this system
+--   doesn't track yet.
+-- One row per detected move, upserted-in-spirit via a dedupe check in the
+-- agent itself (skips re-flagging the same contact -> same new_company_name
+-- pair on a later run).
+CREATE TABLE IF NOT EXISTS champion_moves (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    contact_id UUID NOT NULL,
+    contact_name TEXT,
+    original_company TEXT,
+    original_deal_id UUID,
+    new_company_name TEXT,
+    new_title TEXT,
+    is_competitor BOOLEAN DEFAULT FALSE,
+    content_text TEXT,
+    status TEXT NOT NULL DEFAULT 'detected',   -- detected | competitor_skip | held | drafted
+    held_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS contact_id UUID NOT NULL;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS contact_name TEXT;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS original_company TEXT;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS original_deal_id UUID;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS new_company_name TEXT;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS new_title TEXT;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS is_competitor BOOLEAN DEFAULT FALSE;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS content_text TEXT;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'detected';
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS held_reason TEXT;
+ALTER TABLE champion_moves ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_champion_moves_contact_id ON champion_moves(contact_id);
+CREATE INDEX IF NOT EXISTS idx_champion_moves_status ON champion_moves(status);
+
+-- ---------------------------------------------------------------------------
+-- Agent 43 — Expansion & Upsell (phase4/RETAIN & GROW)
+-- ---------------------------------------------------------------------------
+-- Population is won deals with a confirmed/delivered onboarding_handoffs row
+-- (the PDF's own gate: "expansion conversations must only begin after client
+-- is successfully onboarded"), past a 60-day cooldown since handoff. One-shot
+-- per deal — any existing row here permanently skips future runs. Same
+-- documented v1 scope choice as Agent 42 (no periodic re-check cadence yet).
+--
+-- "Must have evidence of value delivered" is approximated using the
+-- onboarding_handoffs.what_was_promised/success_criteria fields already on
+-- file — this codebase has no product-usage/analytics integration to
+-- measure ACTUAL delivered value, so the LLM works from what was promised at
+-- handoff time rather than verified usage data. Documented limitation, see
+-- agent_43_expansion_upsell.py module docstring.
+CREATE TABLE IF NOT EXISTS expansion_opportunities (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    deal_id UUID NOT NULL,
+    contact_id UUID,
+    company_name TEXT,
+    opportunity_type TEXT,
+    content_text TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',   -- draft | held
+    held_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS deal_id UUID NOT NULL;
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS contact_id UUID;
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS opportunity_type TEXT;
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS content_text TEXT;
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS held_reason TEXT;
+ALTER TABLE expansion_opportunities ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_expansion_opportunities_deal_id ON expansion_opportunities(deal_id);
+CREATE INDEX IF NOT EXISTS idx_expansion_opportunities_status ON expansion_opportunities(status);
+
+-- ---------------------------------------------------------------------------
+-- Agent 44 — Referral (phase4/RETAIN & GROW)
+-- ---------------------------------------------------------------------------
+-- Same onboarding-confirmed gate and one-shot-per-deal pattern as Agent 43.
+-- Known scope limitations, documented honestly (see
+-- agent_44_referral.py module docstring): the PDF's "follow up within 2
+-- weeks if no introduction received" and "send a thank-you and close the
+-- loop on outcome" rules are NOT built in v1 — both need a way to track
+-- what happened after the ask was sent (did the champion respond? did the
+-- introduction happen? did the referred lead convert?), which requires
+-- outcome tracking this system doesn't have wired up yet. v1 covers the
+-- ask itself: identifying the right moment and drafting a specific,
+-- easy-to-forward request.
+CREATE TABLE IF NOT EXISTS referral_requests (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    deal_id UUID NOT NULL,
+    contact_id UUID,
+    company_name TEXT,
+    target_description TEXT,
+    content_text TEXT,
+    forwardable_intro_text TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',   -- draft | held
+    held_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS deal_id UUID NOT NULL;
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS contact_id UUID;
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS target_description TEXT;
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS content_text TEXT;
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS forwardable_intro_text TEXT;
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS held_reason TEXT;
+ALTER TABLE referral_requests ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_referral_requests_deal_id ON referral_requests(deal_id);
+CREATE INDEX IF NOT EXISTS idx_referral_requests_status ON referral_requests(status);
+
+-- ---------------------------------------------------------------------------
+-- Agent 45 — Revenue Intelligence (phase4/RETAIN & GROW)
+-- ---------------------------------------------------------------------------
+-- Append-only snapshot, same pattern as revenue_forecasts/board_reports —
+-- each run is a new row, not an overwrite, so period-over-period comparison
+-- stays possible.
+--
+-- Known scope limitations, documented honestly (see
+-- agent_45_revenue_intelligence.py module docstring): the PDF's "win/loss
+-- reasons must be captured for every deal" isn't satisfied — `deals` has no
+-- loss_reason column anywhere in this codebase, so analysis works from what
+-- IS captured (deal value, sales cycle length, company industry) rather than
+-- structured win/loss reasons. "Recommendations must feed back into ICP
+-- scoring, copywriting, and channel strategy" is intentionally NOT an
+-- automated feedback loop — the PDF's own separate rule requires human
+-- review before system-wide implementation, so recommendations are surfaced
+-- for a human to act on, never auto-applied to other agents' configs.
+CREATE TABLE IF NOT EXISTS revenue_intelligence_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    closed_deal_count INTEGER NOT NULL DEFAULT 0,
+    min_sample_met BOOLEAN NOT NULL DEFAULT FALSE,
+    win_rate NUMERIC,
+    avg_deal_size_won NUMERIC,
+    avg_deal_size_lost NUMERIC,
+    avg_sales_cycle_days_won NUMERIC,
+    segment_breakdown JSONB DEFAULT '{}'::jsonb,
+    key_insights JSONB DEFAULT '[]'::jsonb,
+    recommendations JSONB DEFAULT '[]'::jsonb,
+    generated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS closed_deal_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS min_sample_met BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS win_rate NUMERIC;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS avg_deal_size_won NUMERIC;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS avg_deal_size_lost NUMERIC;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS avg_sales_cycle_days_won NUMERIC;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS segment_breakdown JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS key_insights JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS recommendations JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE revenue_intelligence_snapshots ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_revenue_intelligence_snapshots_generated_at ON revenue_intelligence_snapshots(generated_at);
+
+-- ---------------------------------------------------------------------------
 -- Agent 32 — CRM Sync (phase4/MANAGE & REPORT)
 -- ---------------------------------------------------------------------------
 -- Scoped honestly, not to the PDF's full spec (see agent_32_crm_sync.py

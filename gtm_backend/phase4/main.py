@@ -87,6 +87,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_reengage.add_argument("--limit", type=int, default=None)
 
+    p_champion = sub.add_parser(
+        "track-champions",
+        help="Agent 42: check won-deal contacts for job changes, draft warm re-connects (skips competitors)",
+    )
+    p_champion.add_argument("--limit", type=int, default=None)
+
+    p_expansion = sub.add_parser(
+        "find-expansion-opportunities",
+        help="Agent 43: identify upsell/expansion angles for onboarded won deals past a 60-day cooldown",
+    )
+    p_expansion.add_argument("--limit", type=int, default=None)
+
+    p_referral = sub.add_parser(
+        "run-referral",
+        help="Agent 44: draft specific referral asks for onboarded won deals past a 60-day cooldown",
+    )
+    p_referral.add_argument("--limit", type=int, default=None)
+
+    sub.add_parser(
+        "generate-revenue-intelligence",
+        help="Agent 45: analyse win/loss patterns across closed deals (needs 20+ closed deals for insights)",
+    )
+
     return parser
 
 
@@ -136,6 +159,18 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "run-reengagement":
         from gtm_backend.phase4.agents.agent_41_reengagement import run_reengagement
         run_reengagement(args.limit)
+    elif command == "track-champions":
+        from gtm_backend.phase4.agents.agent_42_champion_tracker import run_champion_tracker
+        run_champion_tracker(args.limit)
+    elif command == "find-expansion-opportunities":
+        from gtm_backend.phase4.agents.agent_43_expansion_upsell import run_expansion_upsell
+        run_expansion_upsell(args.limit)
+    elif command == "run-referral":
+        from gtm_backend.phase4.agents.agent_44_referral import run_referral
+        run_referral(args.limit)
+    elif command == "generate-revenue-intelligence":
+        from gtm_backend.phase4.agents.agent_45_revenue_intelligence import generate_revenue_intelligence
+        generate_revenue_intelligence()
     return 0
 
 

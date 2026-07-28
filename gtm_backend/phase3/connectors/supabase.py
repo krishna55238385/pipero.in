@@ -56,6 +56,7 @@ _JSONB_COLUMNS = {
     "angles", "steps", "channel_sequence", "deal_breakdown", "pain_points_referenced",
     "pipeline_by_stage", "top_risks", "going_well", "needs_attention",
     "cost_by_phase", "channel_breakdown", "related_lead_ids", "key_stakeholders",
+    "segment_breakdown", "key_insights", "recommendations",
 }
 
 
@@ -1450,6 +1451,19 @@ def get_contact_by_id(contact_id: str | None) -> dict | None:
     return rows[0] if rows else None
 
 
+def get_company_by_id(company_id: str | None) -> dict | None:
+    """Full CRM company row by id (name/website/industry) — used by Agent 42
+    to know a champion's original company name. Same defensive-read pattern
+    as get_contact_by_id."""
+    if not company_id:
+        return None
+    try:
+        rows = _get("/companies", params=_scope_to_org({"id": f"eq.{company_id}", "limit": 1}))
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
 def get_reengagement_touch_history(deal_id: str) -> list[dict]:
     """Every past reengagement_touches row for a deal, newest first — used
     to enforce the cooldown cadence and to know the next touch_number."""
@@ -1473,6 +1487,140 @@ def create_reengagement_touch(**fields) -> dict | None:
         if _missing_table(exc, "reengagement_touches"):
             print(
                 "[supabase] reengagement_touches table missing — touch not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+# -- Agent 42 — Champion Tracker (phase4) -----------------------------------
+
+_WON_STATUSES = {"won", "closed_won"}
+
+
+def get_won_deals_with_contacts(limit: int | None = None) -> list[dict]:
+    """Every CRM deal marked won that has a contact_id on file — the PDF's
+    champion population ('previously engaged positively or been customers').
+    Filtered in Python like get_closed_lost_deals, same reasoning: `status`
+    has no fixed enum, and only deals with a contact_id are trackable here."""
+    try:
+        rows = _get("/deals", params=_scope_to_org({"order": "created_at.asc"}))
+    except SupabaseError:
+        return []
+    won = [
+        r for r in rows
+        if (r.get("status") or "").lower() in _WON_STATUSES and r.get("contact_id")
+    ]
+    if limit is not None:
+        won = won[:limit]
+    return won
+
+
+def get_champion_move_history(contact_id: str) -> list[dict]:
+    """Every past champion_moves row for a contact — used to dedupe (don't
+    re-flag the same contact -> same new company on a later run)."""
+    try:
+        return _get(
+            "/champion_moves",
+            params={"contact_id": f"eq.{contact_id}", "order": "created_at.desc"},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "champion_moves"):
+            return []
+        raise
+
+
+def create_champion_move(**fields) -> dict | None:
+    """Insert one champion_moves row — one per detection run outcome, so
+    every check is logged even when nothing was found (PDF rule: 'all
+    champion move activity must be logged and tracked')."""
+    try:
+        rows = _post("/champion_moves", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "champion_moves"):
+            print(
+                "[supabase] champion_moves table missing — move not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+# -- Agent 43 — Expansion & Upsell (phase4) ----------------------------------
+
+def get_expansion_history(deal_id: str) -> list[dict]:
+    """Every past expansion_opportunities row for a deal — used to dedupe
+    (one-shot per deal in v1, see agent_43_expansion_upsell.py docstring)."""
+    try:
+        return _get(
+            "/expansion_opportunities",
+            params={"deal_id": f"eq.{deal_id}", "order": "created_at.desc"},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "expansion_opportunities"):
+            return []
+        raise
+
+
+def create_expansion_opportunity(**fields) -> dict | None:
+    """Insert one expansion_opportunities row."""
+    try:
+        rows = _post("/expansion_opportunities", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "expansion_opportunities"):
+            print(
+                "[supabase] expansion_opportunities table missing — opportunity not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+# -- Agent 44 — Referral (phase4) --------------------------------------------
+
+def get_referral_history(deal_id: str) -> list[dict]:
+    """Every past referral_requests row for a deal — used to dedupe
+    (one-shot per deal in v1, see agent_44_referral.py docstring)."""
+    try:
+        return _get(
+            "/referral_requests",
+            params={"deal_id": f"eq.{deal_id}", "order": "created_at.desc"},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "referral_requests"):
+            return []
+        raise
+
+
+def create_referral_request(**fields) -> dict | None:
+    """Insert one referral_requests row."""
+    try:
+        rows = _post("/referral_requests", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "referral_requests"):
+            print(
+                "[supabase] referral_requests table missing — request not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+# -- Agent 45 — Revenue Intelligence (phase4) --------------------------------
+
+def create_revenue_intelligence_snapshot(**fields) -> dict | None:
+    """Insert one revenue_intelligence_snapshots row. Append-only, same
+    reasoning as revenue_forecasts/board_reports."""
+    try:
+        rows = _post("/revenue_intelligence_snapshots", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "revenue_intelligence_snapshots"):
+            print(
+                "[supabase] revenue_intelligence_snapshots table missing — snapshot not persisted. "
                 "Apply schema: python -m phase3 print-schema"
             )
             return None
