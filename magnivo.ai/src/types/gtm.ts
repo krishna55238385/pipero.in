@@ -264,6 +264,33 @@ export interface RoiAttributionSnapshot {
   generatedAt: string
 }
 
+// Agent 32 — CRM Sync (data hygiene audit)
+export type CrmSyncFlagType = 'duplicate_contact' | 'invalid_contact' | 'stale_deal' | string
+
+export interface CrmSyncFlag {
+  id: number
+  flagType: CrmSyncFlagType
+  dedupeKey: string
+  crmLeadId: string | null
+  dealId: string | null
+  relatedLeadIds: string[]
+  details: string | null
+  detectedAt: string
+  resolvedAt: string | null
+  resolvedNote: string | null
+}
+
+// Agent 37 — Data Refresh
+export interface DataQualityReport {
+  id: number
+  leadsExamined: number
+  reverifiedCount: number
+  stillStaleCount: number
+  avgQualityScore: number | null
+  bounceRate: number | null
+  generatedAt: string
+}
+
 export interface OutreachBundle {
   personalisation: {
     angles: Array<Record<string, unknown>>

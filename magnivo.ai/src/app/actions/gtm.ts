@@ -26,6 +26,8 @@ import {
   type RevenueForecast,
   type BoardReport,
   type RoiAttributionSnapshot,
+  type CrmSyncFlag,
+  type DataQualityReport,
   type OutreachBundle,
   type PhaseRun,
   type ProspectLeadRow,
@@ -391,6 +393,65 @@ export async function getRoiAttribution(): Promise<RoiAttributionSnapshot | null
       generatedAt: row.generated_at,
     }
   } catch (err: any) { console.error('getRoiAttribution error:', err.message); return null }
+}
+
+// Agent 32 — CRM Sync. Unresolved flags only — resolved ones are historical
+// audit trail, not something a user needs staring at them in a hygiene list.
+export async function getUnresolvedCrmSyncFlags(): Promise<CrmSyncFlag[]> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return []
+    const r = await pool.query(
+      `SELECT * FROM public.crm_sync_flags WHERE organization_id = $1 AND resolved_at IS NULL ORDER BY detected_at DESC LIMIT 200`, [org])
+    return r.rows.map((row: any) => ({
+      id: row.id,
+      flagType: row.flag_type,
+      dedupeKey: row.dedupe_key,
+      crmLeadId: row.crm_lead_id,
+      dealId: row.deal_id,
+      relatedLeadIds: row.related_lead_ids || [],
+      details: row.details,
+      detectedAt: row.detected_at,
+      resolvedAt: row.resolved_at,
+      resolvedNote: row.resolved_note,
+    }))
+  } catch (err: any) { console.error('getUnresolvedCrmSyncFlags error:', err.message); return [] }
+}
+
+// Direct status flip, same pattern as approveGtmBrief/rejectReplyDraft — the
+// Python agent only ever creates these flags (upsert on conflict), it never
+// resolves them; resolution is explicitly a human/CRM-side action.
+export async function resolveCrmSyncFlag(flagId: number, note?: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return { ok: false, error: 'no organization' }
+    await pool.query(
+      `UPDATE public.crm_sync_flags SET resolved_at = $1, resolved_note = $2 WHERE id = $3 AND organization_id = $4`,
+      [new Date().toISOString(), note || null, flagId, org])
+    revalidatePath('/analytics')
+    return { ok: true }
+  } catch (err: any) { return { ok: false, error: err.message } }
+}
+
+// Agent 37 — Data Refresh. Latest snapshot only (append-only table).
+export async function getDataQualityReport(): Promise<DataQualityReport | null> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return null
+    const r = await pool.query(
+      `SELECT * FROM public.data_quality_reports WHERE organization_id = $1 ORDER BY generated_at DESC LIMIT 1`, [org])
+    const row = r.rows[0]
+    if (!row) return null
+    return {
+      id: row.id,
+      leadsExamined: row.leads_examined || 0,
+      reverifiedCount: row.reverified_count || 0,
+      stillStaleCount: row.still_stale_count || 0,
+      avgQualityScore: row.avg_quality_score !== null ? Number(row.avg_quality_score) : null,
+      bounceRate: row.bounce_rate !== null ? Number(row.bounce_rate) : null,
+      generatedAt: row.generated_at,
+    }
+  } catch (err: any) { console.error('getDataQualityReport error:', err.message); return null }
 }
 
 export async function getCompetitors(icpId: number): Promise<CompetitorIntel[]> {
