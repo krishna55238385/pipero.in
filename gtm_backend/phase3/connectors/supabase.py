@@ -1417,6 +1417,69 @@ def create_nurture_touch(**fields) -> dict | None:
     return rows[0] if rows else None
 
 
+# -- Agent 41 — Re-engagement (phase4) --------------------------------------
+
+_LOST_STATUSES = {"lost", "closed_lost"}
+
+
+def get_closed_lost_deals(limit: int | None = None) -> list[dict]:
+    """Every CRM deal currently marked lost — the PDF-defined re-engagement
+    population ('previously lost deals'). Filtered in Python like Agent 33's
+    get_active_deals, since `deals.status` has no fixed enum and a SQL-level
+    filter risks missing values the CRM UI actually uses."""
+    try:
+        rows = _get("/deals", params=_scope_to_org({"order": "created_at.asc"}))
+    except SupabaseError:
+        return []
+    lost = [r for r in rows if (r.get("status") or "").lower() in _LOST_STATUSES]
+    if limit is not None:
+        lost = lost[:limit]
+    return lost
+
+
+def get_contact_by_id(contact_id: str | None) -> dict | None:
+    """Full CRM contact row by id — used for email (unsubscribe check) and
+    name. Read defensively; contacts is a newer table (crm_core_entities
+    migration) some older orgs' deals may predate."""
+    if not contact_id:
+        return None
+    try:
+        rows = _get("/contacts", params=_scope_to_org({"id": f"eq.{contact_id}", "limit": 1}))
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
+def get_reengagement_touch_history(deal_id: str) -> list[dict]:
+    """Every past reengagement_touches row for a deal, newest first — used
+    to enforce the cooldown cadence and to know the next touch_number."""
+    try:
+        return _get(
+            "/reengagement_touches",
+            params={"deal_id": f"eq.{deal_id}", "order": "created_at.desc"},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "reengagement_touches"):
+            return []
+        raise
+
+
+def create_reengagement_touch(**fields) -> dict | None:
+    """Insert one reengagement_touches row — append-per-attempt, same
+    history-log pattern as create_nurture_touch."""
+    try:
+        rows = _post("/reengagement_touches", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "reengagement_touches"):
+            print(
+                "[supabase] reengagement_touches table missing — touch not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
 # -- Agent 33 — Pipeline Management (phase4) -------------------------------
 
 _CLOSED_STATUSES = {"won", "lost", "closed_won", "closed_lost"}

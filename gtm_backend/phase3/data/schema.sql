@@ -704,6 +704,53 @@ CREATE INDEX IF NOT EXISTS idx_nurture_touches_lead_id ON nurture_touches(lead_i
 CREATE INDEX IF NOT EXISTS idx_nurture_touches_status ON nurture_touches(status);
 
 -- ---------------------------------------------------------------------------
+-- Agent 41 — Re-engagement (phase4/RETAIN & GROW)
+-- ---------------------------------------------------------------------------
+-- Population is closed-lost `deals` (owned by the CRM app, not gtm_backend —
+-- no FK here, same convention as onboarding_handoffs.deal_id). No FK to
+-- `deals` deliberately: this table lives in gtm_backend's schema, `deals`
+-- lives in the CRM app's schema; both point at the same physical Postgres
+-- instance but are logically separate owners, exactly like onboarding_handoffs.
+--
+-- Known scope limitation, documented honestly (see agent_41_reengagement.py
+-- module docstring): the PDF's "conditions changed" trigger ideally means a
+-- fresh buying signal on the account. That's not wired here — buying_signals
+-- is keyed to phase1's leads_raw.id, and CRM deals/leads don't currently
+-- share a key with leads_raw, so there's no reliable join between the two
+-- systems yet. Until that link exists, this agent operationalizes "conditions
+-- changed" as a minimum cooling-off period since the deal closed, combined
+-- with an LLM gate that must ground the message in the deal's own history
+-- (or hold rather than send a hollow "just checking in").
+CREATE TABLE IF NOT EXISTS reengagement_touches (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID,
+    deal_id UUID NOT NULL,
+    crm_lead_id UUID,
+    company_name TEXT,
+    touch_number INTEGER NOT NULL DEFAULT 1,
+    trigger_reason TEXT,
+    content_text TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',   -- draft | held | opted_out
+    held_reason TEXT,
+    next_eligible_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS deal_id UUID NOT NULL;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS crm_lead_id UUID;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS touch_number INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS trigger_reason TEXT;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS content_text TEXT;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS held_reason TEXT;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS next_eligible_at TIMESTAMPTZ;
+ALTER TABLE reengagement_touches ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_reengagement_touches_deal_id ON reengagement_touches(deal_id);
+CREATE INDEX IF NOT EXISTS idx_reengagement_touches_status ON reengagement_touches(status);
+
+-- ---------------------------------------------------------------------------
 -- Agent 32 — CRM Sync (phase4/MANAGE & REPORT)
 -- ---------------------------------------------------------------------------
 -- Scoped honestly, not to the PDF's full spec (see agent_32_crm_sync.py

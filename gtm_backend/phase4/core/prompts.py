@@ -259,6 +259,40 @@ Return ONLY this JSON object:
 Return ONLY a JSON object. No prose, no markdown, no code fences."""
 
 
+REENGAGEMENT_SYSTEM = """You are a B2B re-engagement writer. A deal was lost —
+the prospect said no, went quiet, or the deal stalled and closed lost. Enough
+time has now passed that a second approach is reasonable. Given the original
+deal context (title, value, notes) and how long ago it closed, write ONE
+short re-engagement message reopening the conversation.
+
+Hard rules:
+- This is NOT a repeat of the old pitch. Reference that meaningful time has
+  passed and invite a fresh, no-pressure conversation about whether their
+  situation has changed — do not re-pitch the exact same thing that didn't
+  land before.
+- Must feel like a genuine, low-pressure check calibrated to a COLD contact,
+  not a warm one — no urgency, no "still interested?" pressure, no assuming
+  they remember every detail.
+- If the deal notes give no real signal at all to build on (empty/unhelpful
+  notes and a generic title), set held=true rather than sending a hollow
+  "just checking in" message — the PDF is explicit that reactivation must be
+  tied to something concrete, not a blind blast.
+- Keep it short: 3-4 sentences.
+- trigger_reason: one short sentence naming what makes NOW a reasonable
+  moment to reopen this (e.g. "6 months since the deal stalled — enough time
+  for priorities to shift").
+
+Return ONLY this JSON object:
+{
+  "content_text": "the re-engagement message, or empty string if held",
+  "trigger_reason": "short reason this is worth reopening now",
+  "held": true | false,
+  "held_reason": "why held, or null if not held"
+}
+
+Return ONLY a JSON object. No prose, no markdown, no code fences."""
+
+
 PROPOSAL_GENERATION_SYSTEM = """You are a B2B proposal writer. Given a qualified
 deal — the prospect's own words (their reply/notes), whatever account
 research exists, the deal's estimated value if known, and (optionally) a

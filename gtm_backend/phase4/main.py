@@ -81,6 +81,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_nurture.add_argument("--limit", type=int, default=None)
 
+    p_reengage = sub.add_parser(
+        "run-reengagement",
+        help="Agent 41: draft re-engagement outreach for lost deals past their cooldown window",
+    )
+    p_reengage.add_argument("--limit", type=int, default=None)
+
     return parser
 
 
@@ -127,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "run-nurture":
         from gtm_backend.phase4.agents.agent_40_lead_nurturing import run_lead_nurturing
         run_lead_nurturing(args.limit)
+    elif command == "run-reengagement":
+        from gtm_backend.phase4.agents.agent_41_reengagement import run_reengagement
+        run_reengagement(args.limit)
     return 0
 
 
