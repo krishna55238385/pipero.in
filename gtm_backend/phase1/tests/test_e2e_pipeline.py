@@ -1,27 +1,26 @@
 """End-to-end test for the Phase 1 pipeline.
 
 Drives ``phase1.main.main(["run-all", "--prompt", ...])`` with every outbound
-HTTP call mocked via ``respx``. No real OpenAI/SerpAPI/Disify/Supabase/DNS
-traffic. A small in-memory Supabase clone tracks inserts and updates so the
-assertions can verify the agents actually wrote what we expect.
+call mocked. OpenAI/SerpAPI/Disify/DNS still go over real HTTP transport in
+production, so those stay mocked via ``respx``. Supabase does not — the
+connector migrated from Supabase's REST API to direct Postgres/RDS access via
+psycopg2, so faking it at the HTTP layer no longer intercepts anything real.
+Instead this test patches the connector's own module-level ``_get``/``_post``/
+``_patch``/``_delete`` functions — the exact seam every public function in
+``phase1.connectors.supabase`` calls through, regardless of transport — with
+an in-memory store that mimics the old PostgREST filter semantics (``eq.``,
+``is.null``, ``or=(...)``, etc.) the agents' calls already speak in.
 """
 from __future__ import annotations
 
 import itertools
 import json
 import os
-import re
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import respx
-
-
-SUPABASE_BASE = "https://fake.supabase.co/rest/v1"
-SUPABASE_LEADS_URL = f"{SUPABASE_BASE}/leads_raw"
-SUPABASE_ICP_URL = f"{SUPABASE_BASE}/icp_profiles"
-SUPABASE_SIGNALS_URL = f"{SUPABASE_BASE}/buying_signals"
 
 
 # --- LLM canned responses ----------------------------------------------------
@@ -63,6 +62,18 @@ _LEAD_NORMALIZATION_RESPONSE: dict[str, Any] = {
             "source_url": "https://betapeople.io",
         },
     ],
+}
+
+_COMPANY_ENRICHMENT_RESPONSE: dict[str, Any] = {
+    "company_city": "Bangalore",
+    "company_state": None,
+    "company_country": "India",
+    "company_address": None,
+    "company_phone": None,
+    "company_industry": "HR Tech",
+    "company_size": "51-200",
+    "company_size_is_estimate": True,
+    "company_linkedin_url": "https://linkedin.com/company/acmehr",
 }
 
 _CONTACT_RESPONSE: dict[str, Any] = {
@@ -126,6 +137,8 @@ def _openai_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_openai_message(_ICP_RESPONSE))
     if "extract company records" in system:
         return httpx.Response(200, json=_openai_message(_LEAD_NORMALIZATION_RESPONSE))
+    if "Extract structured company details" in system:
+        return httpx.Response(200, json=_openai_message(_COMPANY_ENRICHMENT_RESPONSE))
     if "decision-maker contact" in system:
         return httpx.Response(200, json=_openai_message(_CONTACT_RESPONSE))
     if "generate Google search queries" in system:
@@ -289,87 +302,78 @@ class _FakeSupabase:
                 return False
         return True
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        path = urlsplit(str(request.url)).path
-        table = path.rsplit("/", 1)[-1]
+    @staticmethod
+    def _table_from_path(path: str) -> str:
+        return path.lstrip("/")
+
+    def fake_get(self, path: str, params: dict | None = None) -> list[dict[str, Any]]:
+        table = self._table_from_path(path)
         if table not in {"icp_profiles", "leads_raw", "buying_signals"}:
-            return httpx.Response(404, text=f"unknown table {table}")
-
-        method = request.method.upper()
-        if method == "POST":
-            return self._handle_post(table, request)
-        if method == "GET":
-            return self._handle_get(table, request)
-        if method == "PATCH":
-            return self._handle_patch(table, request)
-        if method == "DELETE":
-            return self._handle_delete(table, request)
-        return httpx.Response(405, text=f"method {method} not allowed")
-
-    def _handle_post(self, table: str, request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content.decode("utf-8"))
-        rows = payload if isinstance(payload, list) else [payload]
-        inserted: list[dict[str, Any]] = []
-        for row in rows:
-            new_row = dict(row)
-            new_row["id"] = self._next_id(table)
-            self._table(table).append(new_row)
-            inserted.append(new_row)
-        return httpx.Response(201, json=inserted)
-
-    def _handle_get(self, table: str, request: httpx.Request) -> httpx.Response:
-        query = parse_qs(urlsplit(str(request.url)).query)
-        filters = self._parse_filters(query)
+            return []
+        filters = {k: str(v) for k, v in (params or {}).items()}
         limit_raw = filters.get("limit")
         limit = int(limit_raw) if limit_raw and limit_raw.isdigit() else None
 
         rows = [row for row in self._table(table) if self._matches(row, filters)]
         if limit is not None:
             rows = rows[:limit]
-        return httpx.Response(200, json=rows)
+        return rows
 
-    def _handle_patch(self, table: str, request: httpx.Request) -> httpx.Response:
-        query = parse_qs(urlsplit(str(request.url)).query)
-        filters = self._parse_filters(query)
-        updates = json.loads(request.content.decode("utf-8"))
+    def fake_post(self, path: str, json_body: list | dict) -> list[dict[str, Any]]:
+        table = self._table_from_path(path)
+        rows = json_body if isinstance(json_body, list) else [json_body]
+        inserted: list[dict[str, Any]] = []
+        for row in rows:
+            new_row = dict(row)
+            new_row["id"] = self._next_id(table)
+            self._table(table).append(new_row)
+            inserted.append(new_row)
+        return inserted
+
+    def fake_patch(self, path: str, params: dict, json_body: dict) -> list[dict[str, Any]]:
+        table = self._table_from_path(path)
+        filters = {k: str(v) for k, v in (params or {}).items()}
         updated: list[dict[str, Any]] = []
         for row in self._table(table):
             if self._matches(row, filters):
-                row.update(updates)
+                row.update(json_body)
                 updated.append(row)
-        return httpx.Response(200, json=updated)
+        return updated
 
-    def _handle_delete(self, table: str, request: httpx.Request) -> httpx.Response:
-        query = parse_qs(urlsplit(str(request.url)).query)
-        filters = self._parse_filters(query)
+    def fake_delete(self, path: str, params: dict) -> None:
+        table = self._table_from_path(path)
+        filters = {k: str(v) for k, v in (params or {}).items()}
         kept = [row for row in self._table(table) if not self._matches(row, filters)]
         setattr(self, table, kept)
-        return httpx.Response(204)
 
 
 # --- The actual test ---------------------------------------------------------
 
 
-def _install_routes(router: respx.Router, store: _FakeSupabase) -> None:
+def _install_routes(router: respx.Router) -> None:
     router.post("https://api.groq.com/openai/v1/chat/completions").mock(
         side_effect=_openai_handler,
     )
     router.get("https://serpapi.com/search").mock(side_effect=_serpapi_handler)
-    router.route(url__regex=r"^https://www\.disify\.com/api/email/.*").mock(
+    router.route(url__regex=r"^https://(www\.)?disify\.com/api/email/.*").mock(
         side_effect=_disify_handler,
     )
     router.get(url__regex=r"^https://cloudflare-dns\.com/dns-query.*").mock(
         side_effect=_doh_handler,
     )
-    router.route(url__regex=rf"^{re.escape(SUPABASE_BASE)}/.*").mock(
-        side_effect=store.handle,
-    )
 
 
-def test_run_all_end_to_end() -> None:
+def test_run_all_end_to_end(mocker) -> None:
+    from gtm_backend.phase1.connectors import supabase as supabase_mod
+
     store = _FakeSupabase()
+    mocker.patch.object(supabase_mod, "_get", side_effect=store.fake_get)
+    mocker.patch.object(supabase_mod, "_post", side_effect=store.fake_post)
+    mocker.patch.object(supabase_mod, "_patch", side_effect=store.fake_patch)
+    mocker.patch.object(supabase_mod, "_delete", side_effect=store.fake_delete)
+
     with respx.mock(assert_all_called=False) as router:
-        _install_routes(router, store)
+        _install_routes(router)
         from gtm_backend.phase1.main import main
 
         exit_code = main(["run-all", "--prompt", "HR-tech SaaS in Bangalore and Mumbai"])

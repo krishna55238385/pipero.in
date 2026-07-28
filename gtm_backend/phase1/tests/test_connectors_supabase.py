@@ -1,37 +1,36 @@
 """Focused tests for ``phase1.connectors.supabase``.
 
-Covers HTTP shape (paths, params, payloads), the Lead schema integer coercion
-on the wire, and the ``SupabaseError`` behavior surfacing 4xx response bodies.
+Covers the payload/params shape each public function builds, Lead schema
+integer coercion, and SupabaseError propagation.
+
+These tests mock at the ``_get``/``_post``/``_patch`` module-level seam —
+the same boundary every public function in this module calls through,
+regardless of transport. This module used to talk to Supabase's REST API
+(mocked here via respx/httpx); it was migrated to talk directly to
+Postgres/RDS via psycopg2, but these tests were never updated and kept
+mocking the old REST calls, which the code no longer makes — so every test
+either connected to nothing (respx routes never matched) or crashed trying
+to open a real Postgres connection. Mocking `_get`/`_post`/`_patch` instead
+of the transport verifies the exact same thing the original tests intended
+(did the function build the right payload/params) without caring how that
+payload is actually delivered — the correct abstraction level for these
+tests, and stable across future transport changes.
 """
 from __future__ import annotations
 
-import json
-from urllib.parse import unquote
-
-import httpx
 import pytest
-import respx
 
 
-BASE_URL = "https://fake.supabase.co/rest/v1"
-
-
-def _read_request_json(request: httpx.Request) -> object:
-    return json.loads(request.content.decode("utf-8"))
-
-
-@respx.mock
-def test_insert_icp_posts_payload_and_returns_id() -> None:
+@pytest.fixture
+def supabase_mod():
     from gtm_backend.phase1.connectors import supabase
+    return supabase
+
+
+def test_insert_icp_posts_payload_and_returns_id(mocker, supabase_mod) -> None:
     from gtm_backend.phase1.core.schemas import ICP
 
-    captured: dict[str, object] = {}
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = _read_request_json(request)
-        return httpx.Response(201, json=[{"id": 7}])
-
-    respx.post(f"{BASE_URL}/icp_profiles").mock(side_effect=_handler)
+    post_mock = mocker.patch.object(supabase_mod, "_post", return_value=[{"id": 7}])
 
     icp = ICP(
         name="Test ICP",
@@ -40,11 +39,12 @@ def test_insert_icp_posts_payload_and_returns_id() -> None:
         geography=["India"],
         buyer_titles=["CEO"],
     )
-    icp_id = supabase.insert_icp(icp, user_prompt="HR tech in India")
+    icp_id = supabase_mod.insert_icp(icp, user_prompt="HR tech in India")
 
     assert icp_id == 7
-    body = captured["body"]
-    assert isinstance(body, dict)
+    post_mock.assert_called_once()
+    path, body = post_mock.call_args[0]
+    assert path == "/icp_profiles"
     assert body["name"] == "Test ICP"
     assert body["industry"] == ["SaaS"]
     assert body["prompts"] == "HR tech in India"
@@ -53,18 +53,12 @@ def test_insert_icp_posts_payload_and_returns_id() -> None:
     assert isinstance(body["last_reviewed_at"], str) and body["last_reviewed_at"]
 
 
-@respx.mock
-def test_insert_leads_drops_id_and_coerces_company_size() -> None:
-    from gtm_backend.phase1.connectors import supabase
+def test_insert_leads_drops_id_and_coerces_company_size(mocker, supabase_mod) -> None:
     from gtm_backend.phase1.core.schemas import Lead
 
-    captured: dict[str, object] = {}
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = _read_request_json(request)
-        return httpx.Response(201, json=[{"id": 101}, {"id": 102}])
-
-    respx.post(f"{BASE_URL}/leads_raw").mock(side_effect=_handler)
+    post_mock = mocker.patch.object(
+        supabase_mod, "_post", return_value=[{"id": 101}, {"id": 102}]
+    )
 
     leads = [
         Lead(
@@ -80,10 +74,12 @@ def test_insert_leads_drops_id_and_coerces_company_size() -> None:
             company_domain="betahr.io",
         ),
     ]
-    ids = supabase.insert_leads(leads)
+    ids = supabase_mod.insert_leads(leads)
 
     assert ids == [101, 102]
-    body = captured["body"]
+    post_mock.assert_called_once()
+    path, body = post_mock.call_args[0]
+    assert path == "/leads_raw"
     assert isinstance(body, list) and len(body) == 2
     assert "id" not in body[0]
     assert body[0]["company_size"] == 200
@@ -91,24 +87,17 @@ def test_insert_leads_drops_id_and_coerces_company_size() -> None:
     assert body[0]["company_name"] == "Acme HR"
 
 
-def test_insert_leads_empty_returns_empty_list_without_http() -> None:
-    from gtm_backend.phase1.connectors import supabase
+def test_insert_leads_empty_returns_empty_list_without_http(mocker, supabase_mod) -> None:
+    post_mock = mocker.patch.object(supabase_mod, "_post")
 
-    assert supabase.insert_leads([]) == []
+    assert supabase_mod.insert_leads([]) == []
+    post_mock.assert_not_called()
 
 
-@respx.mock
-def test_insert_signals_serializes_detected_at_as_iso_string() -> None:
-    from gtm_backend.phase1.connectors import supabase
+def test_insert_signals_serializes_detected_at_as_iso_string(mocker, supabase_mod) -> None:
     from gtm_backend.phase1.core.schemas import BuyingSignal
 
-    captured: dict[str, object] = {}
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = _read_request_json(request)
-        return httpx.Response(201, json=[{"id": 9}])
-
-    respx.post(f"{BASE_URL}/buying_signals").mock(side_effect=_handler)
+    post_mock = mocker.patch.object(supabase_mod, "_post", return_value=[{"id": 9}])
 
     signal = BuyingSignal(
         lead_id=42,
@@ -119,10 +108,11 @@ def test_insert_signals_serializes_detected_at_as_iso_string() -> None:
         signal_source_url="https://news/x",
         buying_intent="high",
     )
-    ids = supabase.insert_signals([signal])
+    ids = supabase_mod.insert_signals([signal])
 
     assert ids == [9]
-    body = captured["body"]
+    path, body = post_mock.call_args[0]
+    assert path == "/buying_signals"
     assert isinstance(body, list) and len(body) == 1
     detected_at = body[0]["detected_at"]
     assert isinstance(detected_at, str)
@@ -130,19 +120,10 @@ def test_insert_signals_serializes_detected_at_as_iso_string() -> None:
     assert detected_at.endswith("+00:00") or detected_at.endswith("Z")
 
 
-@respx.mock
-def test_update_lead_score_patches_with_scoring_fields() -> None:
-    from gtm_backend.phase1.connectors import supabase
+def test_update_lead_score_patches_with_scoring_fields(mocker, supabase_mod) -> None:
     from gtm_backend.phase1.core.schemas import ScoreResult
 
-    captured: dict[str, object] = {}
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
-        captured["body"] = _read_request_json(request)
-        return httpx.Response(200, json=[{"id": 55}])
-
-    respx.patch(f"{BASE_URL}/leads_raw").mock(side_effect=_handler)
+    patch_mock = mocker.patch.object(supabase_mod, "_patch", return_value=[{"id": 55}])
 
     score = ScoreResult(
         lead_id=55,
@@ -151,13 +132,14 @@ def test_update_lead_score_patches_with_scoring_fields() -> None:
         score_breakdown={"geography": {"points": 18, "max": 18, "detail": "match"}},
         score_reasoning="Strong fit",
     )
-    supabase.update_lead_score(score)
+    supabase_mod.update_lead_score(score)
 
-    url = captured["url"]
-    assert isinstance(url, str)
-    assert "id=eq.55" in url
-    body = captured["body"]
-    assert isinstance(body, dict)
+    patch_mock.assert_called_once()
+    path = patch_mock.call_args[0][0]
+    params = patch_mock.call_args.kwargs["params"]
+    body = patch_mock.call_args.kwargs["json_body"]
+    assert path == "/leads_raw"
+    assert params == {"id": "eq.55"}
     assert body["icp_score"] == 82
     assert body["score_tier"] == "hot"
     assert body["score_breakdown"] == {
@@ -168,67 +150,54 @@ def test_update_lead_score_patches_with_scoring_fields() -> None:
     assert isinstance(body["scored_at"], str) and body["scored_at"]
 
 
-@respx.mock
-def test_get_leads_for_enrichment_filters_by_icp_id() -> None:
-    from gtm_backend.phase1.connectors import supabase
+def test_get_leads_for_enrichment_filters_by_icp_id(mocker, supabase_mod) -> None:
+    get_mock = mocker.patch.object(supabase_mod, "_get", return_value=[])
 
-    captured: dict[str, object] = {}
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
-        return httpx.Response(200, json=[])
-
-    respx.get(f"{BASE_URL}/leads_raw").mock(side_effect=_handler)
-
-    rows = supabase.get_leads_for_enrichment(limit=10, icp_id=42)
+    rows = supabase_mod.get_leads_for_enrichment(limit=10, icp_id=42)
 
     assert rows == []
-    url = captured["url"]
-    assert isinstance(url, str)
-    decoded = unquote(url)
-    assert "icp_id=eq.42" in decoded
-    assert "company_domain=not.is.null" in decoded
-    assert "limit=10" in decoded
+    get_mock.assert_called_once()
+    path, kwargs = get_mock.call_args[0][0], get_mock.call_args[1]
+    params = kwargs.get("params") if kwargs else get_mock.call_args[0][1]
+    assert path == "/leads_raw"
+    assert params["icp_id"] == "eq.42"
+    assert params["company_domain"] == "not.is.null"
+    assert params["limit"] == 10
     # Email OR missing-firmographic clause drives the backfill behavior.
-    assert "contact_email.is.null" in decoded
-    assert "company_city.is.null" in decoded
-    assert "company_country.is.null" in decoded
-    assert "company_size.is.null" in decoded
+    or_clause = params["or"]
+    assert "contact_email.is.null" in or_clause
+    assert "company_city.is.null" in or_clause
+    assert "company_country.is.null" in or_clause
+    assert "company_size.is.null" in or_clause
 
 
-@respx.mock
-def test_get_leads_for_enrichment_omits_icp_filter_when_none() -> None:
-    from gtm_backend.phase1.connectors import supabase
+def test_get_leads_for_enrichment_omits_icp_filter_when_none(mocker, supabase_mod) -> None:
+    get_mock = mocker.patch.object(supabase_mod, "_get", return_value=[])
 
-    captured: dict[str, object] = {}
+    supabase_mod.get_leads_for_enrichment(limit=10, icp_id=None)
 
-    def _handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
-        return httpx.Response(200, json=[])
-
-    respx.get(f"{BASE_URL}/leads_raw").mock(side_effect=_handler)
-
-    supabase.get_leads_for_enrichment(limit=10, icp_id=None)
-
-    url = captured["url"]
-    assert isinstance(url, str)
-    assert "icp_id" not in url
+    path, kwargs = get_mock.call_args[0][0], get_mock.call_args[1]
+    params = kwargs.get("params") if kwargs else get_mock.call_args[0][1]
+    assert path == "/leads_raw"
+    assert "icp_id" not in params
 
 
-@respx.mock
-def test_supabase_error_surfaces_response_body() -> None:
-    from gtm_backend.phase1.connectors import supabase
+def test_supabase_error_surfaces_response_body(mocker, supabase_mod) -> None:
     from gtm_backend.phase1.core.schemas import ICP
 
     error_body = '{"code":"23505","message":"duplicate key value"}'
-    respx.post(f"{BASE_URL}/icp_profiles").mock(
-        return_value=httpx.Response(400, text=error_body),
+    mocker.patch.object(
+        supabase_mod,
+        "_post",
+        side_effect=supabase_mod.SupabaseError(
+            "POST", "/icp_profiles", 400, error_body
+        ),
     )
 
     icp = ICP(name="Conflict ICP")
 
-    with pytest.raises(supabase.SupabaseError) as exc_info:
-        supabase.insert_icp(icp, user_prompt="trigger conflict")
+    with pytest.raises(supabase_mod.SupabaseError) as exc_info:
+        supabase_mod.insert_icp(icp, user_prompt="trigger conflict")
 
     rendered = str(exc_info.value)
     assert "400" in rendered
