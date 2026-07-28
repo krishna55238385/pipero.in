@@ -1,11 +1,11 @@
 'use client'
 
-import { BrainCircuit, Coins, Hash, Activity, Globe2, Layers, TrendingUp, TrendingDown, ClipboardList, AlertTriangle, CheckCircle2, ArrowUpRight, ArrowDownRight } from 'lucide-react'
+import { BrainCircuit, Coins, Hash, Activity, Globe2, Layers, TrendingUp, TrendingDown, ClipboardList, AlertTriangle, CheckCircle2, ArrowUpRight, ArrowDownRight, PiggyBank, Info } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import type { Icp, MarketSegment, RevenueForecast, BoardReport } from '@/types/gtm'
+import type { Icp, MarketSegment, RevenueForecast, BoardReport, RoiAttributionSnapshot } from '@/types/gtm'
 
 function fmtUsdFull(n: number): string {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -83,6 +83,116 @@ function RevenueForecastCard({ forecast }: { forecast: RevenueForecast | null })
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function fmtUsdPrecise(n: number): string {
+  if (Math.abs(n) < 0.01 && n !== 0) return `$${n.toFixed(4)}`
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+}
+
+// Agent 36 — ROI Attribution
+function RoiAttributionCard({ roi }: { roi: RoiAttributionSnapshot | null }) {
+  return (
+    <Card className="bg-white dark:bg-background border-gray-200 dark:border-border rounded-2xl overflow-hidden shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-lg font-bold flex items-center gap-2">
+          <PiggyBank className="h-5 w-5 text-teal-600" />
+          ROI Attribution
+        </CardTitle>
+        <CardDescription>What the AI pipeline costs vs. what it's produced.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!roi ? (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            No ROI snapshot generated yet. Run the ROI attribution pipeline to populate this.
+          </p>
+        ) : (
+          <div className="space-y-5">
+            {roi.flaggedNegativeRoi && (
+              <div className="flex items-center gap-2 rounded-lg border border-red-200 dark:border-red-900/40 bg-red-50/60 dark:bg-red-950/20 px-3 py-2">
+                <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
+                <span className="text-sm font-medium text-red-700 dark:text-red-400">Negative ROI flagged this snapshot</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Total AI spend</div>
+                <p className="mt-1 text-xl font-bold text-slate-900 dark:text-foreground tabular-nums">{fmtUsdPrecise(roi.totalLlmCostUsd)}</p>
+              </div>
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">ROI ratio</div>
+                <p className={`mt-1 text-xl font-bold tabular-nums ${roi.roiRatio === null ? 'text-slate-900 dark:text-foreground' : roi.roiRatio >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  {roi.roiRatio !== null ? `${roi.roiRatio >= 0 ? '+' : ''}${(roi.roiRatio * 100).toFixed(0)}%` : 'N/A'}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Cost / lead</div>
+                <p className="mt-1 text-sm font-bold text-slate-900 dark:text-foreground tabular-nums">
+                  {roi.costPerLead !== null ? fmtUsdPrecise(roi.costPerLead) : 'N/A'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Cost / qualified deal</div>
+                <p className="mt-1 text-sm font-bold text-slate-900 dark:text-foreground tabular-nums">
+                  {roi.costPerQualifiedDeal !== null ? fmtUsdPrecise(roi.costPerQualifiedDeal) : 'N/A'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-gray-200 dark:border-border p-3">
+                <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground">Cost / closed deal</div>
+                <p className="mt-1 text-sm font-bold text-slate-900 dark:text-foreground tabular-nums">
+                  {roi.costPerClosedDeal !== null ? fmtUsdPrecise(roi.costPerClosedDeal) : 'N/A'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <span>{roi.leadCount} leads</span>
+              <span>·</span>
+              <span>{roi.qualifiedDealCount} qualified</span>
+              <span>·</span>
+              <span>{roi.closedWonCount} closed-won ({fmtUsdPrecise(roi.closedWonRevenue)})</span>
+            </div>
+
+            {roi.channelBreakdown.length > 0 && (
+              <div className="overflow-x-auto rounded-lg border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Channel</TableHead>
+                      <TableHead className="text-right">Spend</TableHead>
+                      <TableHead className="text-right">Leads</TableHead>
+                      <TableHead className="text-right">Closed-won</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {roi.channelBreakdown.map((c, i) => (
+                      <TableRow key={c.channel ?? i}>
+                        <TableCell className="text-sm capitalize">{c.channel}</TableCell>
+                        <TableCell className="text-right text-sm tabular-nums">{fmtUsdPrecise(c.cost_usd)}</TableCell>
+                        <TableCell className="text-right text-sm tabular-nums">{c.leads}</TableCell>
+                        <TableCell className="text-right text-sm tabular-nums">{c.closed_won_deals}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {roi.limitationsNote && (
+              <div className="flex items-start gap-1.5 text-[11px] text-muted-foreground bg-muted/30 rounded-lg p-2.5">
+                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>{roi.limitationsNote}</span>
               </div>
             )}
           </div>
@@ -236,12 +346,14 @@ export default function GtmAnalytics({
   icps,
   forecast,
   boardReport,
+  roi,
 }: {
   usage: LlmUsageSummary
   market: MarketSegment[]
   icps: Icp[]
   forecast: RevenueForecast | null
   boardReport: BoardReport | null
+  roi: RoiAttributionSnapshot | null
 }) {
   const icpName = new Map(icps.map((i) => [i.id, i.name]))
   const maxPhaseCost = Math.max(1e-9, ...usage.byPhase.map((p) => p.cost))
@@ -260,6 +372,9 @@ export default function GtmAnalytics({
 
         {/* ---------------- Board Report (Agent 35) ---------------- */}
         <BoardReportCard report={boardReport} />
+
+        {/* ---------------- ROI Attribution (Agent 36) ---------------- */}
+        <RoiAttributionCard roi={roi} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

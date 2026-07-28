@@ -234,6 +234,36 @@ export interface BoardReport {
   generatedAt: string
 }
 
+// Agent 36 — ROI Attribution
+export interface RoiChannelBreakdown {
+  channel: string
+  cost_usd: number
+  leads: number
+  qualified_deals: number
+  closed_won_deals: number
+  closed_won_revenue: number
+}
+
+export interface RoiAttributionSnapshot {
+  id: number
+  totalLlmCostUsd: number
+  costByPhase: Record<string, number>
+  leadCount: number
+  qualifiedDealCount: number
+  closedWonCount: number
+  closedWonRevenue: number
+  costPerLead: number | null
+  costPerQualifiedDeal: number | null
+  costPerClosedDeal: number | null
+  channelBreakdown: RoiChannelBreakdown[]
+  sourcedPipelineValue: number | null
+  influencedPipelineValue: number | null
+  roiRatio: number | null
+  flaggedNegativeRoi: boolean
+  limitationsNote: string | null
+  generatedAt: string
+}
+
 export interface OutreachBundle {
   personalisation: {
     angles: Array<Record<string, unknown>>

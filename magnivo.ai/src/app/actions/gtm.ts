@@ -25,6 +25,7 @@ import {
   type MarketSegment,
   type RevenueForecast,
   type BoardReport,
+  type RoiAttributionSnapshot,
   type OutreachBundle,
   type PhaseRun,
   type ProspectLeadRow,
@@ -359,6 +360,37 @@ export async function getBoardReport(): Promise<BoardReport | null> {
       generatedAt: row.generated_at,
     }
   } catch (err: any) { console.error('getBoardReport error:', err.message); return null }
+}
+
+// Agent 36 — ROI Attribution. Latest snapshot only (append-only table).
+export async function getRoiAttribution(): Promise<RoiAttributionSnapshot | null> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return null
+    const r = await pool.query(
+      `SELECT * FROM public.roi_attribution_snapshots WHERE organization_id = $1 ORDER BY generated_at DESC LIMIT 1`, [org])
+    const row = r.rows[0]
+    if (!row) return null
+    return {
+      id: row.id,
+      totalLlmCostUsd: Number(row.total_llm_cost_usd || 0),
+      costByPhase: row.cost_by_phase || {},
+      leadCount: row.lead_count || 0,
+      qualifiedDealCount: row.qualified_deal_count || 0,
+      closedWonCount: row.closed_won_count || 0,
+      closedWonRevenue: Number(row.closed_won_revenue || 0),
+      costPerLead: row.cost_per_lead !== null ? Number(row.cost_per_lead) : null,
+      costPerQualifiedDeal: row.cost_per_qualified_deal !== null ? Number(row.cost_per_qualified_deal) : null,
+      costPerClosedDeal: row.cost_per_closed_deal !== null ? Number(row.cost_per_closed_deal) : null,
+      channelBreakdown: row.channel_breakdown || [],
+      sourcedPipelineValue: row.sourced_pipeline_value !== null ? Number(row.sourced_pipeline_value) : null,
+      influencedPipelineValue: row.influenced_pipeline_value !== null ? Number(row.influenced_pipeline_value) : null,
+      roiRatio: row.roi_ratio !== null ? Number(row.roi_ratio) : null,
+      flaggedNegativeRoi: Boolean(row.flagged_negative_roi),
+      limitationsNote: row.limitations_note,
+      generatedAt: row.generated_at,
+    }
+  } catch (err: any) { console.error('getRoiAttribution error:', err.message); return null }
 }
 
 export async function getCompetitors(icpId: number): Promise<CompetitorIntel[]> {
