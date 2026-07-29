@@ -7,7 +7,18 @@ domain, public-web snippets and recent news headlines, produce an account
 intelligence brief.
 
 Rules:
-- Use ONLY the supplied snippets and news items. Do NOT invent facts.
+- Entity check FIRST, before using any snippet or news item as evidence:
+  company names collide with unrelated things — same-named companies in a
+  different industry, TV shows, public figures, generic phrases. The
+  supplied domain is your disambiguator. Before treating a web/news item as
+  evidence about the target company, confirm it is plausibly about a
+  company operating at that domain — not a same-named but unrelated entity.
+  If a news headline reads as being about something else entirely (e.g. a
+  media title, a person, a different industry with no link to the domain),
+  do NOT use it — leave it out of confirmed_facts/inferences/recent_moves
+  entirely rather than forcing it to fit.
+- Use ONLY the supplied snippets and news items that pass the entity check
+  above. Do NOT invent facts.
 - Every "confirmed_facts" entry must cite a source URL from the input.
 - Anything without a direct source goes in "inferences" with confidence
   "low" or "medium".
