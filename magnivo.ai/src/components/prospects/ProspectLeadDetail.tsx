@@ -146,8 +146,9 @@ export function ProspectLeadDetail({
         )}
       </div>
 
-      {/* Phase 1 — Lead + enrichment (Agents 02/03) */}
-      <Section step="P1" agent="Agents 02–03" title="Company & contact" icon={<Building2 className="h-4 w-4 text-muted-foreground" />}>
+      {/* Phase 1 — Lead generation + enrichment (Agent 02; enrichment is an
+          unnumbered support step, not a separate numbered agent). */}
+      <Section step="P1" agent="Agent 02" title="Company & contact" icon={<Building2 className="h-4 w-4 text-muted-foreground" />}>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <Field label="Contact" value={lead.contactName} />
           <Field label="Title" value={lead.title} />
@@ -173,10 +174,12 @@ export function ProspectLeadDetail({
         )}
       </Section>
 
-      {/* Phase 1 — Score (Agent 05) */}
+      {/* Phase 1 — Score (Agent 03: ICP Scoring). Was mislabeled "Agent 05"
+          here — leftover from before the 03/05 agent-numbering fix; Agent 05
+          is actually Lookalike Finder, a different agent entirely. */}
       <Section
         step="P1"
-        agent="Agent 05"
+        agent="Agent 03"
         title="ICP score"
         icon={<Gauge className="h-4 w-4 text-muted-foreground" />}
         empty={lead.icpScore === null && !lead.scoreTier}
