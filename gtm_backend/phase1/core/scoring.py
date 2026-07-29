@@ -37,6 +37,7 @@ Net effect: a complete, reachable, on-ICP lead clears "warm" comfortably (~75), 
 lead with a strong fresh buying signal clears "hot" (~85+), and only genuinely weak
 leads (missing firmographics / off-ICP / bounced) land "cold".
 """
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -152,9 +153,29 @@ def _score_reachability(lead: dict) -> tuple[int, str]:
 
 
 def _score_industry(lead: dict, icp: dict) -> tuple[int, str]:
-    """Industry fit — the strongest ICP signal. Full credit on a match; partial
-    credit when the lead has *an* industry but phrased differently from the ICP
-    (enrichment returns e.g. 'Software Development' vs an ICP's 'B2B SaaS')."""
+    """Industry fit — the strongest ICP signal. Full credit on a match; small,
+    capped partial credit otherwise.
+
+    v2.1 gave a flat 60% partial credit any time the lead had *some* industry
+    string that didn't literally match the ICP — whether that was genuinely
+    the same business phrased differently ('Software Development' vs a
+    'B2B SaaS' ICP) or a fundamentally different business type ('Consulting'
+    vs a 'B2B SaaS' ICP). Both got treated identically, which let a lead in a
+    wholly unrelated industry stack up enough other points (geography, buyer
+    title, signals) to land in HOT territory — caught via a real lead
+    ('White Lotus', a consulting firm, scoring 86/100 against a
+    'Series A-C B2B SaaS in India' ICP).
+
+    Fixed by checking for a *related-word* overlap between the lead's industry
+    string and the ICP's industry list (e.g. shared tokens like "software",
+    "saas", "tech") before granting partial credit at all. A true phrasing
+    variant almost always shares at least one such token with the ICP string;
+    a genuinely different business (Consulting, Retail, Manufacturing) does
+    not. Related-but-differently-phrased still gets generous credit (0.6);
+    an industry that shares no discernible relation gets a much smaller,
+    non-zero credit (0.2) — present but far too weak on its own to push an
+    off-ICP lead into a hot tier.
+    """
     max_pts = FIRMOGRAPHIC_WEIGHTS["industry"]
     industries = icp.get("industry") or []
     company_industry = lead.get("company_industry")
@@ -165,8 +186,61 @@ def _score_industry(lead: dict, icp: dict) -> tuple[int, str]:
         return 0, "No company industry"
     if _array_contains(industries, company_industry):
         return max_pts, f"Industry match ({company_industry})"
-    # Has an industry but phrased differently from the ICP -> generous partial credit.
-    return int(round(max_pts * 0.6)), f"Industry present, partial fit ({company_industry})"
+    if _industry_related(industries, company_industry):
+        # Has an industry that shares meaningful overlap with the ICP but is
+        # phrased differently -> generous partial credit.
+        return int(round(max_pts * 0.6)), f"Industry present, partial fit ({company_industry})"
+    # Has an industry, but it shares no discernible relation to the ICP's
+    # industries -> present but weak credit only; not enough on its own to
+    # push a mismatched lead into a hot tier.
+    return int(round(max_pts * 0.2)), f"Industry present, unrelated to ICP ({company_industry})"
+
+
+_STOPWORDS = {"b2b", "b2c", "and", "the", "of", "in", "for", "services", "solutions"}
+
+# Small curated synonym clusters for the industry words that show up most
+# often phrased differently between an ICP string and an enriched lead's
+# industry (e.g. an ICP saying "B2B SaaS" and a lead enriched as "Software
+# Development"). Token-overlap alone misses this pair entirely ("software"
+# vs "saas" share no literal token), which is exactly the gap that let this
+# heuristic fail on its own motivating example — so tokens are expanded to
+# their cluster before comparing, rather than compared literally.
+_INDUSTRY_SYNONYM_CLUSTERS = [
+    {"software", "saas", "tech", "technology", "it", "development", "platform",
+     "app", "application", "cloud", "digital"},
+    {"hr", "hrtech", "human", "resources", "recruiting", "recruitment", "talent"},
+    {"fintech", "finance", "financial", "banking", "payments"},
+    {"health", "healthcare", "medical", "clinical", "pharma"},
+    {"ecommerce", "commerce", "retail", "marketplace"},
+]
+
+
+def _expand_with_synonyms(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for cluster in _INDUSTRY_SYNONYM_CLUSTERS:
+        if tokens & cluster:
+            expanded |= cluster
+    return expanded
+
+
+def _industry_related(icp_industries: list[str], company_industry: str) -> bool:
+    """True if company_industry shares a meaningful word (directly, or via a
+    small synonym cluster) with any ICP industry string. Deliberately simple
+    — good enough to tell 'Software Development' (related to a 'B2B SaaS'
+    ICP) apart from 'Consulting' (not) without an LLM call per lead."""
+    company_tokens = {
+        t for t in re.split(r"[^a-z0-9]+", company_industry.lower()) if t and t not in _STOPWORDS
+    }
+    if not company_tokens:
+        return False
+    company_tokens = _expand_with_synonyms(company_tokens)
+    for icp_industry in icp_industries:
+        icp_tokens = {
+            t for t in re.split(r"[^a-z0-9]+", str(icp_industry).lower()) if t and t not in _STOPWORDS
+        }
+        if company_tokens & icp_tokens:
+            return True
+    return False
 
 
 def _score_completeness(lead: dict) -> tuple[int, str]:
