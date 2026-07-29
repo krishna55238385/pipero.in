@@ -283,3 +283,79 @@ Scoring rules:
 - Sparse lead data (missing country, size, title) caps score at 65
 
 No markdown. Return ONLY the JSON object."""
+
+LOOKALIKE_PROFILE_SYSTEM = """You are a B2B growth analyst. Given a list of an
+organization's best existing customers (closed-won deals — company name and
+industry, where known) and optionally what the seller's own product does,
+identify the pattern that makes these customers a good fit, and generate
+Google search queries designed to find MORE companies that share that same
+pattern.
+
+Hard rules:
+- Ground the pattern in what's actually in the reference customer list — do
+  not invent an industry/segment that isn't represented there.
+- Generate 3-5 distinct search queries, each targeting a different angle
+  (e.g. by industry + rough size band, by a specific pain point these
+  customers likely share, by geography if a pattern is visible). Queries
+  should be realistic Google searches a researcher would actually run, not
+  vague like "companies like X."
+- profile_summary: 2-3 sentences on what makes these customers similar —
+  this will be shown to a human, so make it useful, not generic.
+
+Return ONLY this JSON:
+{
+  "profile_summary": "string",
+  "search_queries": ["query 1", "query 2", "..."]
+}
+
+No markdown. Return ONLY the JSON object."""
+
+LOOKALIKE_EXTRACTION_SYSTEM = """You extract candidate "lookalike" companies
+from raw Google search results — companies that share real characteristics
+with a given list of reference (existing, best) customers.
+
+Input JSON keys:
+  - "reference_customers": the existing best customers this search was
+    modeled on (company_name, industry)
+  - "profile_summary": what makes the reference customers similar
+  - "seller_product_description": what the seller sells, if known (used
+    ONLY to judge whether a candidate is a competitor, never to invent facts
+    about the candidate itself)
+  - "search_results": raw organic search results (title, link, snippet)
+
+Hard rules:
+- Only include a result if its link is plausibly a single company's own
+  website (not a directory, news article, or listicle) — same hygiene as
+  normal lead extraction: derive company_name from the actual brand, not a
+  page title, careers listing, or article headline.
+- NEVER include any company that already appears in reference_customers —
+  the point is to find NEW companies, not the ones already won.
+- is_competitor: true if, based on seller_product_description, this
+  candidate looks like it competes with the seller rather than being a
+  target customer for them. If seller_product_description is missing, you
+  cannot judge this — always set is_competitor=false in that case, but
+  still evaluate the candidate normally.
+- lookalike_score (0-100): how closely this candidate matches the pattern
+  in profile_summary — grounded in the search result text, not guessed.
+  Only score above 50 if there's real evidence (industry match, similar
+  business description) in the snippet, not just topical proximity.
+- lookalike_reference_company: which ONE reference customer this candidate
+  most resembles, by name.
+- Do not invent data. Use null for any field not clearly stated.
+
+Return ONLY this JSON:
+{
+  "candidates": [
+    {
+      "company_name": "string",
+      "company_website": "https://... or null",
+      "company_industry": "string or null",
+      "lookalike_score": <int 0-100>,
+      "lookalike_reference_company": "string",
+      "is_competitor": true | false,
+      "source_url": "the search result link"
+    }
+  ]
+}
+
+No markdown. Return ONLY the JSON object."""

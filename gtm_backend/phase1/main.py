@@ -10,6 +10,7 @@ from gtm_backend.phase1.agents.lead_enrichment import enrich_leads
 from gtm_backend.phase1.agents.agent_04_signals import detect_signals
 from gtm_backend.phase1.agents.agent_03_icp_scoring import score_leads
 from gtm_backend.phase1.agents.agent_20_social_listening import run_social_listening
+from gtm_backend.phase1.agents.agent_05_lookalike import find_lookalikes
 from gtm_backend.phase1.connectors import supabase
 
 _SCHEMA_PATH = Path(__file__).resolve().parent / "data" / "schema.sql"
@@ -38,7 +39,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sig.add_argument("--days", type=int, default=90, dest="lookback_days")
     p_sig.add_argument("--limit", type=int, default=50)
 
-    p_score = sub.add_parser("score", help="Agent 05: score leads")
+    p_score = sub.add_parser("score", help="Agent 03: score leads")
     p_score.add_argument("--mode", choices=["unscored", "icp_id", "lead_id"], default="unscored")
     p_score.add_argument("--icp", type=int, default=None, dest="icp_id")
     p_score.add_argument("--lead-id", type=int, default=None, dest="lead_id")
@@ -50,6 +51,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_social.add_argument("--icp", type=int, default=None, dest="icp_id")
     p_social.add_argument("--limit", type=int, default=None, help="max ICPs to scan when --icp is omitted")
+
+    p_lookalike = sub.add_parser(
+        "lookalike",
+        help="Agent 05: find new leads that resemble closed-won deals (needs 5+ won deals)",
+    )
+    p_lookalike.add_argument("--icp", type=int, required=True, dest="icp_id")
+    p_lookalike.add_argument("--limit", type=int, default=20)
 
     p_all = sub.add_parser("run-all", help="Chain 01 → 02 → 03 → 04 → 05")
     p_all.add_argument("--prompt", type=str, required=True)
@@ -123,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         score_leads(args.mode, args.lead_id, args.icp_id, args.limit)
     elif command == "social-listening":
         run_social_listening(args.icp_id, args.limit)
+    elif command == "lookalike":
+        find_lookalikes(args.icp_id, args.limit)
     elif command == "run-all":
         start = time.perf_counter()
         icp_id = define_icp(args.prompt)
