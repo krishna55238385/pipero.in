@@ -1,6 +1,7 @@
 import hashlib
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -59,6 +60,11 @@ def _serper_request(params: dict) -> dict:
         body["location"] = params["location"]
     if params.get("gl"):
         body["gl"] = params["gl"]
+    if params.get("tbs"):
+        # Serper accepts the same tbs syntax as SerpAPI/Google (qdr:* and
+        # cdr:1,cd_min:...,cd_max:...) — pass it through so the fallback path
+        # respects the same lookback window as the primary SerpAPI path.
+        body["tbs"] = params["tbs"]
     headers = {"X-API-KEY": _settings.serper_api_key, "Content-Type": "application/json"}
     response = _client.post(url, json=body, headers=headers)
     response.raise_for_status()
@@ -154,12 +160,26 @@ def _request(params: dict) -> dict:
 
 
 def _days_to_tbs(days: int) -> str:
+    """Translate a lookback window into a Google date-range filter.
+
+    Google's relative buckets (qdr:d/w/m/y) only cover day/week/month/year —
+    anything over 30 days used to collapse straight to "past year" (qdr:y),
+    so a 90-day request could silently return results up to 365 days old.
+    For any window that doesn't map cleanly onto a qdr bucket, build an exact
+    custom date range (cdr:1,cd_min:M/D/YYYY,cd_max:M/D/YYYY) anchored on
+    today, so "90 days" actually means the last 90 days, not the last year.
+    """
     if days <= 1:
         return "qdr:d"
     if days <= 7:
         return "qdr:w"
     if days <= 30:
         return "qdr:m"
+    if days <= 365:
+        today = datetime.now(timezone.utc).date()
+        start = today - timedelta(days=days)
+        fmt = lambda d: f"{d.month}/{d.day}/{d.year}"
+        return f"cdr:1,cd_min:{fmt(start)},cd_max:{fmt(today)}"
     return "qdr:y"
 
 

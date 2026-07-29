@@ -21,6 +21,9 @@ from gtm_backend.phase2.core.prompts import (
     COMPETITOR_DISCOVERY_SYSTEM,
 )
 from gtm_backend.phase2.core.schemas import Competitor, LeadCompetitorUsage
+# Cross-phase read, same precedent as Agent 05: seller_product_description
+# lives on the org settings row, which only phase3's connector reads.
+from gtm_backend.phase3.connectors import supabase as crm_supabase
 
 
 _COMPETITOR_QUERY_NUM = 8
@@ -171,10 +174,19 @@ def _discover_competitor_names(icp: dict) -> list[str]:
 
 
 def _discover_competitor_names_llm(icp: dict) -> list[str]:
+    seller_product_description = None
+    org_id = icp.get("organization_id")
+    if org_id:
+        try:
+            seller_product_description = crm_supabase.get_org_product_description(org_id)
+        except Exception as exc:
+            print(f"  [Agent 08] could not fetch seller product description: {exc}")
+
     payload = json.dumps({
         "industry": icp.get("industry") or [],
         "geography": icp.get("geography") or [],
         "buyer_titles": icp.get("buyer_titles") or [],
+        "seller_product_description": seller_product_description,
     })
     try:
         raw = llm.chat_json(

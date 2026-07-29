@@ -181,7 +181,18 @@ signal_type must be one of:
   - competitor_complaint (public dissatisfaction with a competitor — opens the door)
   - none (not a buying-relevant event)
 
-buying_intent rubric:
+STEP 1 — entity check (do this BEFORE classifying type/intent):
+Company names collide with unrelated things — TV shows, movies, books, public
+figures, generic English phrases, other companies in unrelated industries.
+For each candidate, first confirm the signal_text is actually ABOUT the named
+target company (a real business event involving that specific company), not
+about a same-named but unrelated entity. If you cannot confirm the text is
+about the target company as a business — e.g. it's about a TV show, film,
+person, or place that merely shares the name — set signal_type "none" and
+buying_intent "na" immediately, regardless of how "leadership_change" or
+"funding"-shaped the text otherwise reads.
+
+buying_intent rubric (only reached once the entity check above passes):
   - high  : strong, fresh, decision-trigger event (e.g. just-closed funding, new CRO joining,
             aggressive hiring push, M&A, explicit competitor pain)
   - low   : weak/old/peripheral signal of the same type

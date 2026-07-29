@@ -150,14 +150,26 @@ Return ONLY this JSON shape:
 }"""
 
 
-COMPETITOR_DISCOVERY_SYSTEM = """You name DIRECT competitors for a B2B company's Ideal Customer Profile.
-Given the ICP industry and geography, list the real, well-known companies that
-sell to the same buyers.
+COMPETITOR_DISCOVERY_SYSTEM = """You name DIRECT competitors of a specific B2B seller, for a specific Ideal
+Customer Profile that seller sells into.
+
+Input (JSON): {"industry", "geography", "buyer_titles", "seller_product_description"}
+
+If seller_product_description is present and specific, use it as the primary
+signal: name companies that sell a genuinely comparable product to the SAME
+buyer, not just any company operating somewhere in the broader industry
+category. Two companies can share an industry label and still not be
+competitors — competing on the actual product/use-case is what matters here.
+If seller_product_description is missing, empty, or too generic to narrow
+anything down, fall back to industry + geography as before, but prefer this
+narrower product-level match whenever you have enough to work with.
 
 Rules:
 - Only name real companies you are reasonably confident exist in this category.
 - Prefer companies active in the given geography, plus the major global players
   in the category.
+- Do not list companies that are only tangentially related (adjacent tooling,
+  upstream/downstream vendors, or a different buyer persona entirely).
 - Return 3–6 names. If you are not confident about the category, return fewer
   rather than inventing names.
 
