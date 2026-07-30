@@ -36,13 +36,17 @@ def map_stakeholders(icp_id: int | None = None, limit: int | None = None) -> dic
     leads = supabase.get_leads_for_account_intel(icp_id=icp_id, limit=limit)
     print(f"  → {len(leads)} candidate accounts")
 
+    # Batched (one query for all leads) instead of one get_account_brief()
+    # call per lead in the loop below — was an N+1 query pattern.
+    briefs_by_lead = supabase.get_account_briefs([lead["id"] for lead in leads])
+
     icp_cache: dict[int, dict] = {}
     built = 0
     multi_threaded = 0
     coverage_incomplete = 0
     champion_budget_flags = 0
     for lead in leads:
-        brief = supabase.get_account_brief(lead["id"])
+        brief = briefs_by_lead.get(lead["id"])
         if not brief:
             print(f"  [Agent 07] {lead.get('company_name','?'):<28} → skipped (no brief)")
             continue

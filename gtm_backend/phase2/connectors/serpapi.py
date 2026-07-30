@@ -1,15 +1,58 @@
 """SerpAPI wrapper for phase 2. Same shape as phase1 but specialised helpers
 for news + LinkedIn people search used by Agents 06, 07, 08.
 """
+import hashlib
+import json
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
 import httpx
 
-from gtm_backend.phase2.core.config import get_settings
+from gtm_backend.phase2.core.config import REPO_ROOT, get_settings
 from gtm_backend.phase2.core.retries import retry_on_transient
 
 
 _settings = get_settings()
 _BASE_URL = "https://serpapi.com/search"
 _client = httpx.Client(timeout=30.0)
+
+# Disk-backed cache, ported from phase1/connectors/serpapi.py: phase2's
+# Agents 06/07/08 were re-spending a live SerpAPI credit for the same
+# company/ICP on every re-run within days, with no caching at all (phase1
+# already had this). Same 4-day TTL and cache-key scheme as phase1 so repeat
+# runs against the same company/ICP reuse results instead of paying again.
+_CACHE_DIR = REPO_ROOT / ".cache" / "serpapi_phase2"
+_CACHE_TTL_SECONDS = 4 * 24 * 60 * 60  # 4 days
+
+
+def _cache_key(params: dict) -> str:
+    normalized = json.dumps(params, sort_keys=True)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _cache_path(key: str) -> Path:
+    return _CACHE_DIR / f"{key}.json"
+
+
+def _cache_get(params: dict) -> dict | None:
+    path = _cache_path(_cache_key(params))
+    if not path.exists():
+        return None
+    try:
+        if time.time() - path.stat().st_mtime > _CACHE_TTL_SECONDS:
+            return None
+        return json.loads(path.read_text())
+    except Exception:
+        return None  # corrupt/unreadable cache entry — fall through to a live call
+
+
+def _cache_set(params: dict, data: dict) -> None:
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _cache_path(_cache_key(params)).write_text(json.dumps(data))
+    except Exception:
+        pass  # caching is best-effort — never let a disk issue break a search
 
 # Once SerpAPI returns 429 (free plan out of searches / rate-limited), there is
 # no point retrying every subsequent query with exponential backoff for the rest
@@ -80,12 +123,20 @@ def _serper_request(params: dict) -> dict:
 @retry_on_transient()
 def _request(params: dict) -> dict:
     global _quota_exhausted
+
+    cached = _cache_get(params)
+    if cached is not None:
+        return cached
+
     if _quota_exhausted:
         if _serper_available():
-            return _serper_request(params)
+            data = _serper_request(params)
+            _cache_set(params, data)
+            return data
         raise SerpQuotaError("SerpAPI quota exhausted earlier this run — skipping search")
-    params = {**params, "api_key": _settings.serp_api_key}
-    response = _client.get(_BASE_URL, params=params)
+
+    live_params = {**params, "api_key": _settings.serp_api_key}
+    response = _client.get(_BASE_URL, params=live_params)
     if response.status_code == 429:
         _quota_exhausted = True
         print(
@@ -95,19 +146,36 @@ def _request(params: dict) -> dict:
                     "fallbacks (direct website reads / model knowledge).")
         )
         if _serper_available():
-            return _serper_request(params)
+            data = _serper_request(params)
+            _cache_set(params, data)
+            return data
         raise SerpQuotaError("SerpAPI returned 429 (out of searches)")
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    _cache_set(params, data)
+    return data
 
 
 def _days_to_tbs(days: int) -> str:
+    """Translate a lookback window into a Google date-range filter.
+
+    Same fix as phase1/connectors/serpapi.py: Google's relative buckets
+    (qdr:d/w/m/y) only cover day/week/month/year, so anything over 30 days
+    used to collapse straight to "past year" — a 90-day Agent 06 news lookback
+    could silently return results up to 365 days old. Build an exact custom
+    date range for any window under a year instead.
+    """
     if days <= 1:
         return "qdr:d"
     if days <= 7:
         return "qdr:w"
     if days <= 30:
         return "qdr:m"
+    if days <= 365:
+        today = datetime.now(timezone.utc).date()
+        start = today - timedelta(days=days)
+        fmt = lambda d: f"{d.month}/{d.day}/{d.year}"
+        return f"cdr:1,cd_min:{fmt(start)},cd_max:{fmt(today)}"
     return "qdr:y"
 
 

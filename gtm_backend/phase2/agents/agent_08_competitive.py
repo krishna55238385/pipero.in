@@ -110,9 +110,12 @@ def _flag_competitor_usage(icp: dict, competitor_names: list[str]) -> int:
     if not names:
         return 0
     leads = supabase.get_leads_for_account_intel(icp_id=icp.get("id"))
+    # Batched (one query for all leads) instead of one get_account_brief()
+    # call per lead in the loop below — was an N+1 query pattern.
+    briefs_by_lead = supabase.get_account_briefs([lead["id"] for lead in leads])
     written = 0
     for lead in leads:
-        brief = supabase.get_account_brief(lead["id"])
+        brief = briefs_by_lead.get(lead["id"])
         if not brief:
             continue
         blob = " ".join(str(brief.get(f) or "") for f in _USAGE_SCAN_FIELDS).lower()

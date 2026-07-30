@@ -1827,6 +1827,29 @@ def update_lead_raw(lead_id: int, **fields) -> None:
         raise
 
 
+def bulk_update_leads_raw(updates: list[dict]) -> None:
+    """Batched form of update_lead_raw — one statement for many leads instead
+    of one per lead. Added for Agent 37 Data Refresh, which previously called
+    update_lead_raw() once per lead inside its main loop; for a large lead
+    volume that's hundreds/thousands of individual UPDATEs where one bulk
+    upsert does the same work.
+
+    Each dict in ``updates`` must include "id" plus whichever fields are
+    being set, and every dict must have the SAME set of keys (this is a
+    single multi-row INSERT ... ON CONFLICT (id) DO UPDATE, so the column
+    list is fixed once from the first row) — true for Agent 37's use, which
+    always sets the same 4 fields for every lead it examines.
+    """
+    if not updates:
+        return
+    try:
+        _upsert("/leads_raw", updates, on_conflict="id")
+    except SupabaseError as exc:
+        if _missing_table(exc, "leads_raw"):
+            return
+        raise
+
+
 def create_data_quality_report(**fields) -> dict | None:
     """Insert one data_quality_reports snapshot row. Append-only, same
     reasoning as revenue_forecasts/board_reports/roi_attribution_snapshots."""

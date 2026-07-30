@@ -200,11 +200,14 @@ def test_phase2_pipeline_end_to_end(
     ):
         mocker.patch(module_path, return_value=[fake_lead])
 
-    for module_path in (
-        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_brief",
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_briefs",
+        return_value={fake_lead["id"]: fake_brief_row},
+    )
+    mocker.patch(
         "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_account_brief",
-    ):
-        mocker.patch(module_path, return_value=fake_brief_row)
+        return_value=fake_brief_row,
+    )
 
     for module_path in (
         "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_icp",

@@ -360,6 +360,33 @@ def get_account_brief(lead_id: int) -> dict | None:
     return rows[0] if rows else None
 
 
+def get_account_briefs(lead_ids: list[int]) -> dict[int, dict]:
+    """Batched form of get_account_brief — one query for many leads instead of
+    one query per lead. Added for Agent 08's _flag_competitor_usage, which
+    previously called get_account_brief() once per lead in a loop (an N+1
+    query pattern — same fix already applied to get_signals_for_leads)."""
+    if not lead_ids:
+        return {}
+    in_clause = ",".join(str(lid) for lid in lead_ids)
+    try:
+        rows = _get(
+            "/account_intelligence",
+            params={"lead_id": f"in.({in_clause})"},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "account_intelligence"):
+            return {}
+        raise
+    # Most-recent-per-lead: keep the first row seen per lead_id (rows aren't
+    # guaranteed ordered here, but account_intelligence is upserted on a
+    # unique lead_id conflict target, so there's at most one row per lead
+    # anyway — this just guards against that assumption ever changing).
+    briefs: dict[int, dict] = {}
+    for row in rows:
+        briefs.setdefault(row["lead_id"], row)
+    return briefs
+
+
 def _account_brief_payload(brief: AccountBrief) -> dict:
     raw = brief.model_dump(mode="json")
     raw["refreshed_at"] = brief.refreshed_at.isoformat()

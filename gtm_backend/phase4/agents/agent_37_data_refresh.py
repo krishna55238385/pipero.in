@@ -59,6 +59,11 @@ def run_data_refresh(limit: int | None = None) -> dict:
     reverified = 0
     quality_scores: list[int] = []
     bounced_count = 0
+    # Collected and written in one bulk upsert after the loop instead of one
+    # update_lead_raw() call per lead inside it — was hundreds/thousands of
+    # individual UPDATE statements for a large lead volume where one batched
+    # statement does the same work.
+    pending_updates: list[dict] = []
 
     for lead in leads:
         needs_reverify, reason = _needs_reverification(lead)
@@ -79,13 +84,15 @@ def run_data_refresh(limit: int | None = None) -> dict:
         if bounce_status in _BOUNCED_STATUSES:
             bounced_count += 1
 
-        supabase.update_lead_raw(
-            lead["id"],
-            verified=verified,
-            bounce_status=bounce_status,
-            last_verified_at=last_verified_at,
-            data_quality_score=score,
-        )
+        pending_updates.append({
+            "id": lead["id"],
+            "verified": verified,
+            "bounce_status": bounce_status,
+            "last_verified_at": last_verified_at,
+            "data_quality_score": score,
+        })
+
+    supabase.bulk_update_leads_raw(pending_updates)
 
     # Every lead flagged needs_reverification above was processed in this
     # same pass, so "examined but still stale" is 0 by construction — this

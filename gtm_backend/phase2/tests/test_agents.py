@@ -233,8 +233,8 @@ def test_agent_07_skips_lead_without_brief(mocker, fake_lead, fake_icp):
         return_value=[fake_lead],
     )
     mocker.patch(
-        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_brief",
-        return_value=None,
+        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_briefs",
+        return_value={},
     )
     mocker.patch(
         "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_icp",
@@ -291,8 +291,8 @@ def test_agent_07_builds_map_with_multi_threading(
         return_value=[fake_lead],
     )
     mocker.patch(
-        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_brief",
-        return_value=fake_brief_row,
+        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_briefs",
+        return_value={fake_lead["id"]: fake_brief_row},
     )
     mocker.patch(
         "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_icp",
@@ -346,8 +346,8 @@ def test_agent_07_drops_blocker_as_entry_point(
         return_value=[fake_lead],
     )
     mocker.patch(
-        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_brief",
-        return_value=fake_brief_row,
+        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_briefs",
+        return_value={fake_lead["id"]: fake_brief_row},
     )
     mocker.patch(
         "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_icp",
@@ -786,8 +786,8 @@ def _patch_agent_07_reads(mocker, fake_lead, fake_icp, fake_brief_row, llm_paylo
         return_value=[fake_lead],
     )
     mocker.patch(
-        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_brief",
-        return_value=fake_brief_row,
+        "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_account_briefs",
+        return_value={fake_lead["id"]: fake_brief_row},
     )
     mocker.patch(
         "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.get_icp",
@@ -922,8 +922,8 @@ def test_agent_08_flags_lead_using_competitor(mocker, fake_icp, fake_lead):
         return_value=[fake_lead],
     )
     mocker.patch(
-        "gtm_backend.phase2.agents.agent_08_competitive.supabase.get_account_brief",
-        return_value=brief,
+        "gtm_backend.phase2.agents.agent_08_competitive.supabase.get_account_briefs",
+        return_value={fake_lead["id"]: brief},
     )
     usage_mock = mocker.patch(
         "gtm_backend.phase2.agents.agent_08_competitive.supabase.upsert_lead_competitor_usage",
