@@ -973,3 +973,46 @@ ALTER TABLE crm_sync_flags ADD COLUMN IF NOT EXISTS resolved_note TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_crm_sync_flags_type_key ON crm_sync_flags(flag_type, dedupe_key);
 CREATE INDEX IF NOT EXISTS idx_crm_sync_flags_resolved_at ON crm_sync_flags(resolved_at);
+
+-- ---------------------------------------------------------------------------
+-- Organization-supplied API keys (BYO key / model choice feature)
+-- ---------------------------------------------------------------------------
+-- Lets a client organization supply their OWN SerpAPI key and pick their own
+-- LLM (via OpenRouter, one connector covering 300+ models) instead of always
+-- riding the platform's shared keys. Motivated by a real production incident:
+-- the platform's shared SerpAPI+Serper quota both ran out simultaneously,
+-- silently degrading search-dependent agents for every org at once. A
+-- client with their own key is isolated from that — their quota is theirs
+-- alone, and their exhaustion doesn't affect anyone else.
+--
+-- One row per (organization_id, provider). provider is 'serpapi' or
+-- 'openrouter'. encrypted_key is the raw API key encrypted at rest via
+-- pgcrypto's pgp_sym_encrypt, keyed off the API_KEY_ENCRYPTION_SECRET env
+-- var (server-side only, never stored in this table or sent to the browser).
+-- model is only meaningful for provider='openrouter' (e.g.
+-- "anthropic/claude-haiku-4.5", "deepseek/deepseek-v4-flash") — null means
+-- "use the platform's default model choice".
+--
+-- Missing extension: pgp_sym_encrypt/decrypt require the pgcrypto extension.
+-- Apply once per database: CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- (Needs a role with CREATE privilege — same ownership caveat as every other
+-- schema apply this session: run this line separately if the app role lacks
+-- permission, using a superuser/rds-superuser connection.)
+CREATE TABLE IF NOT EXISTS organization_api_keys (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id UUID NOT NULL,
+    provider TEXT NOT NULL,           -- 'serpapi' | 'openrouter'
+    encrypted_key BYTEA NOT NULL,
+    model TEXT,                       -- openrouter only; null = platform default model
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE organization_api_keys ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE organization_api_keys ADD COLUMN IF NOT EXISTS provider TEXT;
+ALTER TABLE organization_api_keys ADD COLUMN IF NOT EXISTS encrypted_key BYTEA;
+ALTER TABLE organization_api_keys ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE organization_api_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE organization_api_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_organization_api_keys_org_provider ON organization_api_keys(organization_id, provider);

@@ -260,6 +260,14 @@ def _build_one(icp: dict, competitor_name: str) -> Competitor | None:
         print(f"  [Agent 08] {competitor_name:<28} → LLM error: {exc}")
         return None
 
+    if not isinstance(raw, dict):
+        # chat_json's json.loads() doesn't guarantee an object back — the LLM
+        # can return a bare JSON array instead, which crashed the whole
+        # phase2 run-all subprocess here (raw.get() on a list). Skip this one
+        # competitor instead of killing the entire "prepare" pipeline.
+        print(f"  [Agent 08] {competitor_name:<28} → LLM returned non-object JSON ({type(raw).__name__}), skipping")
+        return None
+
     sources = [s.get("source_url") for s in snippets if s.get("source_url")]
     sources += [n.get("link") for n in news if n.get("link")]
     card = _card_from_raw(icp, competitor_name, raw, sources)
@@ -289,6 +297,10 @@ def _build_from_knowledge(icp: dict, competitor_name: str) -> Competitor | None:
         )
     except Exception as exc:
         print(f"  [Agent 08] {competitor_name:<28} → LLM error (knowledge fallback): {exc}")
+        return None
+
+    if not isinstance(raw, dict):
+        print(f"  [Agent 08] {competitor_name:<28} → LLM returned non-object JSON ({type(raw).__name__}) on knowledge fallback, skipping")
         return None
 
     card = _card_from_raw(icp, competitor_name, raw, sources=["llm_internal_knowledge"])

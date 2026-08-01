@@ -27,6 +27,19 @@ _client_fallback = (
 # this process — go straight to the fallback client on every subsequent call.
 _use_fallback = False
 
+# BYO LLM (org-supplied API key/model, via OpenRouter): when a client saves
+# their own OpenRouter key + model choice in the CRM settings page,
+# gtm_service/runner.py injects OPENROUTER_API_KEY/OPENROUTER_MODEL into this
+# subprocess's environment before launching it. When present, every chat_json
+# call routes through the client's own OpenRouter account/model instead of
+# the platform's shared Groq key. Unset = no change from today's behaviour.
+_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "") or "meta-llama/llama-3.3-70b-instruct"
+_client_openrouter = (
+    OpenAI(base_url="https://openrouter.ai/api/v1", api_key=_OPENROUTER_KEY, timeout=30.0)
+    if _OPENROUTER_KEY else None
+)
+
 _ORG_ID = _settings.gtm_org_id or None
 
 
@@ -75,6 +88,19 @@ def _chat_completion_with_fallback(model: str, system: str, user: str, temperatu
         {"role": "system", "content": f"{system}\n\nRespond only in valid JSON format."},
         {"role": "user", "content": user},
     ]
+    if _client_openrouter is not None:
+        try:
+            return _client_openrouter.chat.completions.create(
+                model=_OPENROUTER_MODEL, messages=messages, temperature=temperature,
+                response_format={"type": "json_object"},
+            )
+        except Exception as exc:
+            # Client's own OpenRouter key/model failed (bad key, model quota,
+            # etc.) — fall through to the platform's own Groq key below
+            # rather than failing this call outright. Matches the layered
+            # fallback used everywhere else in this codebase: client key ->
+            # platform default -> per-item skip (handled by the caller).
+            print(f"  [OpenRouter] org-supplied key/model failed ({exc}) — falling back to platform default.")
     if _use_fallback and _client_fallback is not None:
         return _client_fallback.chat.completions.create(
             model=model, messages=messages, temperature=temperature,
@@ -106,10 +132,15 @@ def chat_json(
     icp_id: int | None = None,
     phase: str = "phase1",
 ) -> dict:
-    """Call OpenRouter with JSON mode. Returns parsed dict. Raises on failure.
+    """Call Groq (platform default) with JSON mode, unless this process has an
+    org-supplied OPENROUTER_API_KEY, in which case OpenRouter is used instead
+    (see _chat_completion_with_fallback). Returns parsed dict. Raises on
+    failure once every available fallback has also failed.
 
-    The model defaults to OPENROUTER_MODEL from the root .env (the project's
-    single source of truth); callers may still pass an explicit override.
+    The model defaults to GROQ_MODEL from the root .env when calling Groq;
+    callers may still pass an explicit override. When routed through
+    OpenRouter, the model is whatever the org chose (_OPENROUTER_MODEL),
+    ignoring this parameter.
     """
     model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     response = _chat_completion_with_fallback(model, system, user, temperature)
@@ -119,6 +150,14 @@ def chat_json(
     prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
     total_tokens = getattr(usage, "total_tokens", 0) or 0
+    # NOTE: this always prices against Groq's own per-token rates, even for a
+    # call that actually routed through a client's OpenRouter key/model above.
+    # Token counts are still accurate; the $ estimate just isn't meaningful
+    # for OpenRouter-routed calls (different providers/models price
+    # differently) — acceptable for now since it only affects our OWN cost
+    # dashboard, not anything the client is billed for (they pay OpenRouter
+    # directly on their own key). Worth revisiting if per-model cost accuracy
+    # ever matters here.
     cost = (
         prompt_tokens * _settings.groq_input_cost_per_1m
         + completion_tokens * _settings.groq_output_cost_per_1m

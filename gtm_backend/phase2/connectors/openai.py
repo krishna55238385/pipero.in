@@ -36,6 +36,18 @@ _client_fallback = (
 )
 _use_fallback = False
 
+# BYO LLM (org-supplied API key/model, via OpenRouter) — see phase1's
+# connector for the full explanation. gtm_service/runner.py injects
+# OPENROUTER_API_KEY/OPENROUTER_MODEL into this subprocess's environment when
+# the org has saved their own key in the CRM settings page; unset = no
+# change from today's behaviour.
+_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "") or "meta-llama/llama-3.3-70b-instruct"
+_client_openrouter = (
+    OpenAI(base_url="https://openrouter.ai/api/v1", api_key=_OPENROUTER_KEY, timeout=30.0)
+    if _OPENROUTER_KEY else None
+)
+
 
 def _chat_completion_with_fallback(model: str, system: str, user: str, temperature: float):
     global _use_fallback
@@ -43,6 +55,14 @@ def _chat_completion_with_fallback(model: str, system: str, user: str, temperatu
         {"role": "system", "content": f"{system}\n\nRespond only in valid JSON format."},
         {"role": "user", "content": user},
     ]
+    if _client_openrouter is not None:
+        try:
+            return _client_openrouter.chat.completions.create(
+                model=_OPENROUTER_MODEL, messages=messages, temperature=temperature,
+                response_format={"type": "json_object"},
+            )
+        except Exception as exc:
+            print(f"  [OpenRouter] org-supplied key/model failed ({exc}) — falling back to platform default.")
     if _use_fallback and _client_fallback is not None:
         return _client_fallback.chat.completions.create(
             model=model, messages=messages, temperature=temperature,

@@ -174,6 +174,22 @@ def run_commands(
     if org:
         env["GTM_ORG_ID"] = org
 
+    # BYO API keys: if this org has its own SerpAPI key and/or OpenRouter
+    # key+model saved (CRM settings page), override the subprocess's env so
+    # every connector picks them up automatically — same mechanism as
+    # GTM_ORG_ID above, zero changes needed in any of the 52 agents, since
+    # each pipeline step is already a fresh subprocess that reads its
+    # connector keys from the environment at import time. Missing/no custom
+    # keys = env stays untouched = falls through to the platform's own
+    # default keys, exactly like today's behavior.
+    org_keys = db.get_org_api_keys(org) if org else {}
+    if org_keys.get("serpapi_key"):
+        env["SERP_API_KEY"] = org_keys["serpapi_key"]
+    if org_keys.get("openrouter_key"):
+        env["OPENROUTER_API_KEY"] = org_keys["openrouter_key"]
+        if org_keys.get("openrouter_model"):
+            env["OPENROUTER_MODEL"] = org_keys["openrouter_model"]
+
     logs = ""
     db.update_phase_run(run_id, status="running", started_at=_now_iso())
 

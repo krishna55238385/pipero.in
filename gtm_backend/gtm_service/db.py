@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import os
 from datetime import datetime, timezone
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -55,6 +56,46 @@ def get_phase_run(run_id: str) -> dict | None:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM phase_runs WHERE id = %s LIMIT 1", (run_id,))
             return cur.fetchone()
+
+def get_org_api_keys(organization_id: str | None) -> dict:
+    """Decrypt and return this org's custom API keys, if any.
+
+    Returns {"serpapi_key": str|None, "openrouter_key": str|None,
+    "openrouter_model": str|None}. Missing organization_id, missing table, or
+    a missing/unset API_KEY_ENCRYPTION_SECRET all resolve to "no custom keys"
+    (all None) rather than raising — callers fall back to the platform's own
+    default keys in that case, same as any other optional per-org override
+    in this codebase. Never logs or returns the encryption secret itself.
+    """
+    empty = {"serpapi_key": None, "openrouter_key": None, "openrouter_model": None}
+    if not organization_id:
+        return empty
+    secret = os.getenv("API_KEY_ENCRYPTION_SECRET")
+    if not secret:
+        return empty
+    try:
+        with _get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT provider, pgp_sym_decrypt(encrypted_key, %s) AS key, model
+                    FROM organization_api_keys
+                    WHERE organization_id = %s
+                    """,
+                    (secret, organization_id),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        return empty
+    result = dict(empty)
+    for row in rows:
+        if row.get("provider") == "serpapi":
+            result["serpapi_key"] = row.get("key")
+        elif row.get("provider") == "openrouter":
+            result["openrouter_key"] = row.get("key")
+            result["openrouter_model"] = row.get("model")
+    return result
+
 
 def has_existing_leads(icp_id: int) -> bool:
     """True if this ICP already has at least one row in leads_raw.
