@@ -12,6 +12,7 @@ import {
   Search,
   Sparkles,
   Target,
+  UserPlus,
   Users,
   Zap,
 } from 'lucide-react'
@@ -25,6 +26,7 @@ import { PipelineRunsPanel } from '@/components/prospects/PipelineRunsPanel'
 import { toText } from '@/lib/gtm-render'
 import {
   runFindAndPrepare,
+  runFindMoreLeads,
   runPhase1Search,
 } from '@/app/actions/gtm'
 import { sendNowForIcp } from '@/app/actions/engage'
@@ -117,16 +119,26 @@ function IcpCard({ icp }: { icp: Icp }) {
             <RunPhaseButton
               run={() => runFindAndPrepare(icp.id)}
               label="Find leads"
-              runningLabel="Finding & preparing…"
+              runningLabel="Preparing…"
               icon={<Search className="h-4 w-4" />}
+              size="sm"
+              onDone={refresh}
+            />
+            <RunPhaseButton
+              run={() => runFindMoreLeads(icp.id)}
+              label="Search for more leads"
+              runningLabel="Searching…"
+              icon={<UserPlus className="h-4 w-4" />}
               size="sm"
               onDone={refresh}
             />
             <SendNowButton icpId={icp.id} onDone={refresh} />
           </div>
           <p className="text-[10px] leading-snug text-muted-foreground">
-            <span className="font-medium text-foreground">Find leads</span> finds, enriches, scores &amp; writes each lead&apos;s
-            personalized 5-step emails (no send) ·{' '}
+            <span className="font-medium text-foreground">Find leads</span> enriches, scores &amp; writes each existing lead&apos;s
+            personalized 5-step emails (no send) — skips re-searching for new companies if this ICP already has leads ·{' '}
+            <span className="font-medium text-foreground">Search for more leads</span> forces a fresh company search for this
+            ICP, then preps the results the same way ·{' '}
             <span className="font-medium text-foreground">Send now</span> instantly emails only the new, un-contacted leads
             from the database and tracks them under this ICP&apos;s campaign
           </p>

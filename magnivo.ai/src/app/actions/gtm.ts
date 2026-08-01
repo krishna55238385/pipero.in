@@ -814,7 +814,17 @@ export async function runPhase2(icpId: number, limit?: number): Promise<RunResul
   return callService('/run/phase2', { icp_id: icpId, limit })
 }
 export async function runFindAndPrepare(icpId: number, limit?: number): Promise<RunResult> {
+  // Backend now skips the Agent 02 lead-search step automatically when this
+  // ICP already has leads (avoids re-spending SerpAPI + LLM search on every
+  // click) — enrich/signals/score/phase2/phase3 still run every time. To
+  // force a fresh lead search regardless, use runFindMoreLeads below.
   return callService('/run/prepare', { icp_id: icpId, limit })
+}
+export async function runFindMoreLeads(icpId: number, limit?: number): Promise<RunResult> {
+  // Explicit "search for new companies" action — forces the lead-search step
+  // even if this ICP already has leads, then still preps them (enrich/
+  // signals/score/phase2/phase3) same as Find leads.
+  return callService('/run/prepare', { icp_id: icpId, limit, force_leads: true })
 }
 export async function runGenerateSignals(icpId?: number, limit = 200): Promise<RunResult> {
   return callService('/run/signals', icpId ? { icp_id: icpId, limit } : { limit })
