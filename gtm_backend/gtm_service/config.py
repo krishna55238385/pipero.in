@@ -6,6 +6,7 @@ themselves read their own OPENAI/SERP/SUPABASE keys from the environment too
 (pydantic BaseSettings reads real env vars), so set those on the host as well.
 """
 import os
+import sys
 from pathlib import Path
 
 # Repo root = two levels up (gtm_backend, then root) so `python -m gtm_backend.phase1` resolves.
@@ -66,7 +67,12 @@ class Config:
     TRIGGER_TOKEN: str = os.getenv("GTM_TRIGGER_TOKEN", "")
 
     # --- Execution ----------------------------------------------------------
-    PYTHON_BIN: str = os.getenv("GTM_PYTHON_BIN", "python")
+    # Default to the interpreter actually running this process (the venv's
+    # python under systemd) rather than a bare "python" looked up on PATH --
+    # there's no guarantee a "python" alias exists (this box only has
+    # python3), and PATH lookup depends entirely on how the process was
+    # launched (systemd pins PATH to .venv/bin; a manual shell won't).
+    PYTHON_BIN: str = os.getenv("GTM_PYTHON_BIN") or sys.executable
     REPO_ROOT: str = os.getenv("GTM_REPO_ROOT", str(REPO_ROOT))
     # Hard ceiling per individual CLI step (seconds).
     STEP_TIMEOUT: int = int(os.getenv("GTM_STEP_TIMEOUT", "1800"))
