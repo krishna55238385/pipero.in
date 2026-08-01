@@ -56,6 +56,30 @@ def get_phase_run(run_id: str) -> dict | None:
             cur.execute("SELECT * FROM phase_runs WHERE id = %s LIMIT 1", (run_id,))
             return cur.fetchone()
 
+def has_existing_leads(icp_id: int) -> bool:
+    """True if this ICP already has at least one row in leads_raw.
+
+    Used by the "prepare" phase (the CRM's "Find leads" button) to decide
+    whether to re-run Agent 02 lead generation: previously it always
+    re-searched for companies on every click, even when the ICP already had
+    leads from a prior run (e.g. the initial "define ICP" flow, which itself
+    already ran the full phase1 chain once) — a real cost, not just a
+    correctness no-op, since dedup only discards *after* paying for the
+    SerpAPI + LLM search. Missing table = treat as "no leads yet" so the
+    search still runs rather than silently skipping on a fresh install.
+    """
+    try:
+        with _get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT EXISTS(SELECT 1 FROM leads_raw WHERE icp_id = %s) AS exists_flag",
+                    (icp_id,),
+                )
+                row = cur.fetchone()
+                return bool(row and row.get("exists_flag"))
+    except Exception:
+        return False
+
 # --------------------------------------------------------------------------- #
 # gtm_schedules
 # --------------------------------------------------------------------------- #

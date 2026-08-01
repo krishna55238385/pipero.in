@@ -40,12 +40,15 @@ def build_commands(phase: str, params: dict) -> list[list[str]]:
             raise ValueError("phase1 requires either 'prompt' or 'icp_id'")
         # Re-run discovery/enrich/signals/score for an existing ICP.
         lim = str(limit) if limit is not None else "50"
-        return [
-            ["-m", "gtm_backend.phase1", "leads", "--icp", str(icp_id), "--max", str(max_leads)],
+        steps: list[list[str]] = []
+        if not params.get("skip_leads"):
+            steps.append(["-m", "gtm_backend.phase1", "leads", "--icp", str(icp_id), "--max", str(max_leads)])
+        steps += [
             ["-m", "gtm_backend.phase1", "enrich", "--icp", str(icp_id), "--limit", lim],
             ["-m", "gtm_backend.phase1", "signals", "--icp", str(icp_id), "--limit", lim],
             ["-m", "gtm_backend.phase1", "score", "--mode", "icp_id", "--icp", str(icp_id), "--limit", lim],
         ]
+        return steps
 
     if phase == "signals":
         # Regenerate buying signals on demand. icp_id is optional: when omitted
@@ -75,11 +78,23 @@ def build_commands(phase: str, params: dict) -> list[list[str]]:
     # enrich → signals → score (phase1) → account intel etc. (phase2) →
     # personalize → copywrite → channel plan (phase3 generate, --dry-run so
     # NOTHING is sent). The CRM "Send now" then dispatches from the DB.
+    #
+    # The "find" step (Agent 02 lead search) used to run unconditionally on
+    # every "prepare" click — including the very first click right after ICP
+    # creation, which had already just run a full lead search moments earlier.
+    # Re-searching costs real SerpAPI + LLM spend even when it finds nothing
+    # new (dedup only discards results *after* paying for them). Now it's
+    # skipped whenever the ICP already has leads, unless the caller explicitly
+    # asks for a fresh search via force_leads=True (the CRM's separate
+    # "search for more leads" action).
     if phase == "prepare":
         if icp_id is None:
             raise ValueError("prepare requires 'icp_id'")
+        force_leads = bool(params.get("force_leads"))
+        skip_leads = (not force_leads) and db.has_existing_leads(icp_id)
+        phase1_params = {**params, "skip_leads": skip_leads}
         return (
-            build_commands("phase1", params)
+            build_commands("phase1", phase1_params)
             + build_commands("phase2", params)
             + build_commands("phase3", {**params, "dry_run": True, "sender": None, "campaign_id": None})
         )

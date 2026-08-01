@@ -88,6 +88,9 @@ class RunRequest(BaseModel):
     sender: Optional[str] = None       # phase3: gmail | instantly
     campaign_id: Optional[str] = None  # phase3: stamp this CRM campaign on every outreach_log row
     triggered_by: Optional[str] = None  # CRM user id
+    force_leads: bool = False          # prepare: force a fresh Agent 02 lead search
+                                        # even if this ICP already has leads (the CRM's
+                                        # explicit "search for more leads" action)
 
 
 class Ga4SyncRequest(BaseModel):
