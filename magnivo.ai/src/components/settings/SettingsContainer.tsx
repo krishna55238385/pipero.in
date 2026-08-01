@@ -20,6 +20,7 @@ import WorkspaceSettings from './WorkspaceSettings'
 import UsersAndRoles from './UsersAndRoles'
 import LeadManagement from './LeadManagement'
 import AppearanceSettings from './AppearanceSettings'
+import ApiKeysSettings from './ApiKeysSettings'
 
 const NAV_ITEMS = [
     {
@@ -65,6 +66,7 @@ export default function SettingsContainer({
             case 'workspace': return <WorkspaceSettings initialData={initialOrg} />
             case 'users': return <UsersAndRoles members={initialMembers} invites={initialInvites} />
             case 'leads': return <LeadManagement />
+            case 'ai': return <ApiKeysSettings />
             default: return (
                 <div className="h-96 flex flex-col items-center justify-center border-2 border-dashed border-slate-200 dark:border-border rounded-3xl bg-slate-50/50 dark:bg-card/50">
                     <div className="p-4 bg-white dark:bg-card rounded-2xl shadow-sm mb-4">
