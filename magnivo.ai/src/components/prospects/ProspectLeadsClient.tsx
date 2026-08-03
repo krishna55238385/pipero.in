@@ -48,6 +48,13 @@ function IntentBadge({ score }: { score: IntentScore }) {
   )
 }
 
+function formatAddedDate(value: string | null | undefined): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 function EmailCell({ lead }: { lead: ProspectLeadRow }) {
   if (!lead.email) return <span className="text-muted-foreground text-xs">—</span>
   return (
@@ -226,13 +233,14 @@ export function ProspectLeadsClient({
                         <TableHead>Email</TableHead>
                         <TableHead>Score</TableHead>
                         <TableHead>Signals</TableHead>
+                        <TableHead>Added</TableHead>
                         <TableHead className="w-[150px]">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {leads.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
+                          <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
                             No prospects yet. Run an AI search or a pipeline from the ICP page to populate this list.
                           </TableCell>
                         </TableRow>
@@ -273,6 +281,9 @@ export function ProspectLeadsClient({
                             ) : (
                               <span className="text-muted-foreground text-xs">—</span>
                             )}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
+                            {formatAddedDate(lead.createdAt)}
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1">
