@@ -485,6 +485,12 @@ def _filter_aggregators(raw_results: list[dict]) -> list[dict]:
     return [
         r for r in raw_results
         if not any(agg in (r.get("link") or "") for agg in _AGGREGATOR_DOMAINS)
+        # Pattern-based academic/thesis-repository check, not just the fixed
+        # domain list above — catches hosts like unitesi.unive.it, bni-india.in
+        # profile pages, or any *.edu/*.ac.* site that isn't individually
+        # enumerated. See _is_academic_domain's docstring for why a fixed
+        # list alone will always be one university/directory behind.
+        and not _is_academic_domain(r.get("link") or "")
     ]
 
 
@@ -518,9 +524,33 @@ def _dedupe_raw_by_domain(raw_results: list[dict]) -> list[dict]:
 # LEAD_NORMALIZATION_SYSTEM's rejection rule does for the primary path.
 _LISTICLE_TITLE_RE = re.compile(
     r"^\s*(top|best)\s+\d+\b"    # "Top 10 ...", "Best 25 ..."
-    r"|^\s*\d+\s+(top|best)\b",  # "8 Best ...", "10 Top ..." (number-first phrasing)
+    r"|^\s*\d+\s+(top|best)\b"   # "8 Best ...", "10 Top ..." (number-first phrasing)
+    r"|^\s*(top|best)\b.*\bfor\b"  # "Best ERP Systems for Small Business",
+                                    # "Best WhatsApp Bot Tools for Customer
+                                    # Support" — same superlative-roundup
+                                    # shape as the numbered case above, just
+                                    # without a leading digit.
+    ,
     re.IGNORECASE,
 )
+
+# A bare filename ("multi-page.txt") accidentally surfaced as a search result
+# title — never a company name under any circumstance.
+_FILENAME_TITLE_RE = re.compile(
+    r"^[\w\-. ]+\.(txt|pdf|docx?|xlsx?|pptx?|csv|html?|json|xml)$",
+    re.IGNORECASE,
+)
+
+# Academic/thesis-repository hosts, detected by pattern rather than an
+# exhaustive domain list (which will always be one university behind) — most
+# academic institution domains contain ".ac." (ac.uk, ac.in) or ".edu", or
+# use "thesis"/"tesi" somewhere in the host (unitesi.unive.it, thesis.*).
+_ACADEMIC_DOMAIN_RE = re.compile(r"\.(edu)(\.|$)|\.ac\.[a-z]{2,3}(\.|$)|thesis|tesi\b", re.IGNORECASE)
+
+
+def _is_academic_domain(link: str) -> bool:
+    host = dns_lookup.extract_domain_from_url(link) or ""
+    return bool(_ACADEMIC_DOMAIN_RE.search(host))
 
 # Generic career/marketing phrases that are titles of a company's own page but
 # never the company name itself ("We're Hiring!", "Careers at ...", "Join Our
@@ -593,6 +623,12 @@ def _fallback_normalize(raw_results: list[dict]) -> list[dict]:
             continue
         cleaned = title.split(" - ")[0].split(" | ")[0].strip()[:120]
         is_generic_phrase = cleaned.strip().lower().rstrip("!.") in _GENERIC_PHRASE_TITLES
+        if _FILENAME_TITLE_RE.match(cleaned):
+            # A bare filename ("multi-page.txt") leaking through as a search
+            # result title — never a company name, and no domain-derived
+            # substitute makes sense either (this isn't a real company's
+            # page at all, typically a raw document/asset link).
+            continue
         if _RESEARCH_REPORT_TITLE_RE.search(cleaned):
             # A market-research/report/academic-style title's own domain is
             # almost always the report publisher, not a real prospect company

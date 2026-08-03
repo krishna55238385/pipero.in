@@ -143,35 +143,54 @@ def chat_json(
     ignoring this parameter.
     """
     model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-    response = _chat_completion_with_fallback(model, system, user, temperature)
-    # Record usage for EVERY completed API call — before any content validation
-    # that could raise — so even a malformed/empty response logs the spend.
-    usage = response.usage
-    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-    total_tokens = getattr(usage, "total_tokens", 0) or 0
-    # NOTE: this always prices against Groq's own per-token rates, even for a
-    # call that actually routed through a client's OpenRouter key/model above.
-    # Token counts are still accurate; the $ estimate just isn't meaningful
-    # for OpenRouter-routed calls (different providers/models price
-    # differently) — acceptable for now since it only affects our OWN cost
-    # dashboard, not anything the client is billed for (they pay OpenRouter
-    # directly on their own key). Worth revisiting if per-model cost accuracy
-    # ever matters here.
-    cost = (
-        prompt_tokens * _settings.groq_input_cost_per_1m
-        + completion_tokens * _settings.groq_output_cost_per_1m
-    ) / 1_000_000
-    log_usage(agent=agent, model=model, usage=usage, cost=cost, icp_id=icp_id, phase=phase)
 
-    content = response.choices[0].message.content
-    if not content:
-        raise RuntimeError("OpenAI returned empty/invalid JSON")
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("OpenAI returned empty/invalid JSON") from exc
+    # retry_on_transient (the decorator on this function) deliberately only
+    # retries transport-level failures — never a 200 response whose content
+    # happens to be empty/malformed JSON, since retrying a non-idempotent
+    # write on an HTTP error could duplicate it. But an empty/invalid-JSON
+    # *content* body isn't that risk (nothing was written), and in practice
+    # it's often a one-off flake (occasional truncated/empty completion) that
+    # succeeds cleanly on a second attempt — so it gets its own small, local
+    # retry here instead of silently falling through to the caller's much
+    # weaker regex-only fallback on the very first hiccup (this is what let
+    # junk rows like "Master's Degree in Management Final Thesis" and
+    # "multi-page.txt" reach Agent 02's fallback normalizer on a live run).
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        response = _chat_completion_with_fallback(model, system, user, temperature)
+        # Record usage for EVERY completed API call — before any content
+        # validation that could raise — so even a malformed/empty response on
+        # a retried attempt still logs the spend.
+        usage = response.usage
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        total_tokens = getattr(usage, "total_tokens", 0) or 0
+        # NOTE: this always prices against Groq's own per-token rates, even for a
+        # call that actually routed through a client's OpenRouter key/model above.
+        # Token counts are still accurate; the $ estimate just isn't meaningful
+        # for OpenRouter-routed calls (different providers/models price
+        # differently) — acceptable for now since it only affects our OWN cost
+        # dashboard, not anything the client is billed for (they pay OpenRouter
+        # directly on their own key). Worth revisiting if per-model cost accuracy
+        # ever matters here.
+        cost = (
+            prompt_tokens * _settings.groq_input_cost_per_1m
+            + completion_tokens * _settings.groq_output_cost_per_1m
+        ) / 1_000_000
+        log_usage(agent=agent, model=model, usage=usage, cost=cost, icp_id=icp_id, phase=phase)
 
-    print(f"  [LLM] phase={phase} agent={agent} → {len(parsed)} keys, {total_tokens} tokens, ${cost:.6f}")
+        content = response.choices[0].message.content
+        if content:
+            try:
+                parsed = json.loads(content)
+                print(f"  [LLM] phase={phase} agent={agent} → {len(parsed)} keys, {total_tokens} tokens, ${cost:.6f}")
+                return parsed
+            except json.JSONDecodeError as exc:
+                last_exc = exc
+        else:
+            last_exc = RuntimeError("empty content")
 
-    return parsed
+        if attempt == 0:
+            print(f"  [LLM] phase={phase} agent={agent} → empty/invalid JSON, retrying once")
+
+    raise RuntimeError("OpenAI returned empty/invalid JSON") from last_exc

@@ -14,6 +14,7 @@ and the two related bugs found during live BYO-key verification on Jobraux:
 from gtm_backend.phase1.agents.agent_02_leads import (
     _fallback_normalize,
     _filter_aggregators,
+    _is_academic_domain,
     _normalize_with_llm,
 )
 
@@ -71,6 +72,44 @@ def test_semanticscholar_and_arxiv_are_filtered_as_aggregators():
         _result("Some Paper Title", link="https://semanticscholar.org/paper/123"),
         _result("Another Paper", link="https://arxiv.org/abs/1234.5678"),
     ]
+    filtered = _filter_aggregators(results)
+    assert filtered == []
+
+
+# -- widened rules from a live Jobraux run that slipped past the first fix --
+
+def test_best_x_for_y_superlative_without_leading_number_is_dropped():
+    """"Best ERP Systems for Small Business (2026)" — a superlative roundup
+    with no leading digit, so the original _LISTICLE_TITLE_RE (which only
+    matched "Top N"/"N Best") missed it."""
+    results = [_result("Best ERP Systems for Small Business (2026)", link="https://g2.com/categories/erp")]
+    out = _fallback_normalize(_filter_aggregators(results))
+    # g2.com is already an aggregator, but even against a non-aggregator
+    # domain the superlative title itself must not become the company_name.
+    results2 = [_result("Best WhatsApp Bot Tools for Customer Support", link="https://acmebots.com/blog/best-tools")]
+    out2 = _fallback_normalize(results2)
+    assert len(out2) == 1
+    assert out2[0]["company_name"] != "Best WhatsApp Bot Tools for Customer Support"
+
+
+def test_bare_filename_title_is_dropped_entirely():
+    results = [_result("multi-page.txt", link="https://example.com/uploads/multi-page.txt")]
+    out = _fallback_normalize(results)
+    assert out == []
+
+
+def test_academic_thesis_domain_is_treated_as_academic():
+    assert _is_academic_domain("https://unitesi.unive.it/thesis/12345") is True
+    assert _is_academic_domain("https://someuni.ac.in/papers/x") is True
+    assert _is_academic_domain("https://research.someuniversity.edu/paper") is True
+    assert _is_academic_domain("https://acmehr.com/about") is False
+
+
+def test_academic_domain_result_is_filtered_even_without_known_domain_in_blocklist():
+    """The "Venugopal Vallepu" / bni-india.in case: a domain not in the fixed
+    _AGGREGATOR_DOMAINS list, but still an academic/thesis-style host —
+    caught by pattern instead of requiring the exact host to be enumerated."""
+    results = [_result("Master's Degree in Management Final Thesis", link="https://unitesi.unive.it/thesis/98765")]
     filtered = _filter_aggregators(results)
     assert filtered == []
 
