@@ -438,7 +438,11 @@ def _normalize_with_llm(raw_results: list[dict], icp: dict, icp_id: int) -> list
         )
     except Exception as exc:
         print(f"  [Agent 02] normalization fallback (LLM error: {exc})")
-        return _fallback_normalize(raw_results)
+        # Same aggregator filter used on the "0 companies" fallback path below —
+        # this path used to skip it, so a raw LLM JSON-parse failure could let
+        # aggregator/news/social results straight through into the (much
+        # weaker, regex-only) fallback normalizer.
+        return _fallback_normalize(_filter_aggregators(raw_results))
     companies = raw.get("companies") or []
     if not companies:
         print("  [Agent 02] LLM returned 0 companies, running domain fallback")
@@ -467,6 +471,13 @@ _AGGREGATOR_DOMAINS = {
     # regardless of which country subdomain they're on (fr.scribd.com,
     # us.trabajo.org, etc. all still describe/aggregate, not sell).
     "scribd.com", "trabajo.org", "slideshare.net", "academia.edu",
+    # Academic/research-paper repositories — a search result here is a paper
+    # ABOUT a topic (and its author is a researcher, not a company contact),
+    # never a company's own page. Added after a live run's fallback-normalize
+    # path inserted a paper author's name ("Venugopal Vallepu") as a
+    # company_name with the author's email attached during enrichment.
+    "researchgate.net", "semanticscholar.org", "arxiv.org", "ssrn.com",
+    "jstor.org", "sciencedirect.com", "springer.com", "ieee.org",
 }
 
 
@@ -529,6 +540,22 @@ _ARTICLE_TITLE_RE = re.compile(
     , re.IGNORECASE,
 )
 
+# Market-research/report/academic-style titles ("Dynamic Scheduling Software
+# Market Research Report 2034", "Impact of Artificial Intelligence on
+# Start-ups in Delhi NCR") — never a company's own name, but distinct in
+# shape from the listicle/interrogative patterns above (no "Top N", no "?").
+# Fallback-only, same scope as the other title regexes: the LLM normalize
+# path already rejects these via reasoning; this only guards the weaker
+# regex-only path used when that LLM call itself fails or returns nothing.
+_RESEARCH_REPORT_TITLE_RE = re.compile(
+    r"\b(market\s+research|research\s+report|market\s+size|market\s+share|"
+    r"market\s+forecast|market\s+outlook|industry\s+report|whitepaper|"
+    r"white\s+paper|case\s+study|market\s+analysis|market\s+trends|"
+    r"industry\s+analysis)\b"
+    r"|^\s*(impact|effect|role|importance|study|analysis|overview)\s+of\b"
+    , re.IGNORECASE,
+)
+
 
 # Generic subdomains that are never the brand itself ("blog.cimcloud.com"
 # should yield "Cimcloud", not "Blog").
@@ -566,6 +593,17 @@ def _fallback_normalize(raw_results: list[dict]) -> list[dict]:
             continue
         cleaned = title.split(" - ")[0].split(" | ")[0].strip()[:120]
         is_generic_phrase = cleaned.strip().lower().rstrip("!.") in _GENERIC_PHRASE_TITLES
+        if _RESEARCH_REPORT_TITLE_RE.search(cleaned):
+            # A market-research/report/academic-style title's own domain is
+            # almost always the report publisher, not a real prospect company
+            # — unlike the listicle/article case below (often a genuine
+            # company's own blog post), substituting the domain-derived name
+            # here would just produce a different flavor of junk lead. Drop
+            # entirely rather than keep a bad name of either kind. This is
+            # what let rows like "Dynamic Scheduling Software Market Research
+            # Report 2034" and "impact of artificial intelligence on start-up
+            # in delhi ncr" through as company_name previously.
+            continue
         if _LISTICLE_TITLE_RE.match(cleaned) or _ARTICLE_TITLE_RE.search(cleaned) or is_generic_phrase:
             # The title is a ranking/listicle or article/blog headline, not a
             # company name (this is what previously produced garbage rows like
