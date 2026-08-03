@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { ChevronDown, ChevronRight, Loader2, RefreshCw, Terminal } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2, RefreshCw, Terminal, Trash2 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { getPhaseRun, getPhaseRuns } from '@/app/actions/gtm'
+import { deletePhaseRun, getPhaseRun, getPhaseRuns } from '@/app/actions/gtm'
+import { toast } from 'sonner'
 import type { PhaseRun } from '@/types/gtm'
 
 function StatusBadge({ status }: { status: string }) {
@@ -71,6 +72,7 @@ export function PipelineRunsPanel({
   const [expanded, setExpanded] = useState<string | null>(null)
   const [detail, setDetail] = useState<Record<string, PhaseRun | null>>({})
   const [loadingId, setLoadingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
   const expandedRef = useRef<string | null>(null)
   expandedRef.current = expanded
@@ -130,6 +132,32 @@ export function PipelineRunsPanel({
     })
   }
 
+  async function handleDelete(run: PhaseRun, e: React.MouseEvent) {
+    e.stopPropagation()
+    if (run.status === 'running' || run.status === 'queued') {
+      toast.error("Can't delete a run that's still in progress")
+      return
+    }
+    if (!window.confirm(`Delete this ${run.phase || 'run'} run from the history? This can't be undone.`)) {
+      return
+    }
+    setDeletingId(run.id)
+    try {
+      const res = await deletePhaseRun(run.id)
+      if (res.ok) {
+        setRuns((prev) => prev.filter((r) => r.id !== run.id))
+        if (expanded === run.id) setExpanded(null)
+        toast.success('Run removed')
+      } else {
+        toast.error(res.error || 'Failed to delete run')
+      }
+    } catch {
+      toast.error('Failed to delete run')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <Card className="rounded-xl border bg-card shadow-sm">
       <CardHeader className="pb-3 flex flex-row items-start justify-between gap-2">
@@ -162,10 +190,14 @@ export function PipelineRunsPanel({
             const errorOneLine = run.error || (d ? lastMeaningfulLine(d.logs) : null)
             return (
               <div key={run.id} className="rounded-lg border bg-muted/30 overflow-hidden">
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => toggle(run)}
-                  className="w-full flex items-start gap-3 px-3 py-2.5 text-left hover:bg-muted/50 transition-colors"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(run) }
+                  }}
+                  className="w-full flex items-start gap-3 px-3 py-2.5 text-left hover:bg-muted/50 transition-colors cursor-pointer"
                 >
                   <div className="pt-0.5 shrink-0 text-muted-foreground">
                     {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -190,7 +222,20 @@ export function PipelineRunsPanel({
                   <span className="text-[11px] text-muted-foreground shrink-0 pt-0.5">
                     {isOpen ? 'Hide logs' : 'View logs'}
                   </span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={(e) => handleDelete(run, e)}
+                    disabled={deletingId === run.id || run.status === 'running' || run.status === 'queued'}
+                    title="Delete this run"
+                    className="shrink-0 p-1 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  >
+                    {deletingId === run.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </div>
 
                 {isOpen && (
                   <div className="border-t bg-slate-950 px-3 py-2.5">

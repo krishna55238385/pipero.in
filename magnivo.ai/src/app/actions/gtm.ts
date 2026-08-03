@@ -858,6 +858,29 @@ export async function getPhaseRun(runId: string): Promise<PhaseRun | null> {
   } catch (err: any) { console.error('getPhaseRun error:', err.message); return null }
 }
 
+// Removes one run from this org's pipeline-run history (e.g. clearing out
+// noisy test/verification traffic). Scoped to organization_id in the WHERE
+// clause itself — not just a UI-level filter — so a run ID from a different
+// org can never be deleted via this action even if somehow guessed/passed in.
+export async function deletePhaseRun(runId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const org = await cachedOrgId()
+    if (!org) return { ok: false, error: 'No organization found' }
+    const r = await pool.query(
+      'DELETE FROM public.phase_runs WHERE id = $1 AND organization_id = $2',
+      [runId, org],
+    )
+    if (r.rowCount === 0) {
+      return { ok: false, error: 'Run not found or not in this organization' }
+    }
+    revalidatePath('/prospects')
+    return { ok: true }
+  } catch (err: any) {
+    console.error('deletePhaseRun error:', err.message)
+    return { ok: false, error: err.message }
+  }
+}
+
 // --------------------------------------------------------------------------- //
 // Company-centric prospect view
 // --------------------------------------------------------------------------- //
