@@ -134,3 +134,103 @@ def test_llm_json_error_fallback_path_filters_aggregators_before_regex_fallback(
     names = [c["company_name"] for c in out]
     assert "Venugopal Vallepu" not in names
     assert "Acme HR" in names
+
+
+# -- second round of widened rules: techreviewer.co / remoterocketship.com --
+# -- style junk from a live 5-lead test run --------------------------------
+
+def test_review_profile_title_on_unlisted_domain_is_dropped():
+    """"IT Services India Inc. Profile & Reviews" on techreviewer.co — a
+    review-directory host not in the fixed _AGGREGATOR_DOMAINS list, caught
+    by the title's own reliable "Profile & Reviews" shape instead."""
+    results = [_result("IT Services India Inc. Profile & Reviews", link="https://techreviewer.co/companies/it-services-india")]
+    out = _fallback_normalize(results)
+    assert out == []
+
+
+def test_job_board_listing_title_is_dropped():
+    """"Remote Jobs at Emergence" on remoterocketship.com — a job-board
+    LISTING, not a company profile; the listing names a real company but
+    this page/domain is the job board, not that company's own site."""
+    results = [_result("Remote Jobs at Emergence", link="https://remoterocketship.com/jobs/emergence-123")]
+    out = _fallback_normalize(results)
+    assert out == []
+
+
+def test_tips_for_article_title_is_never_kept_as_literal_company_name():
+    """"Tips for SaaS businesses in Germany" hosted on stripe.com — this is
+    the _ARTICLE_TITLE_RE branch (same one the working NetAtWork listicle
+    case relies on), so it substitutes the domain-derived name ("Stripe")
+    rather than dropping outright: Stripe IS a real company, just a bad ICP
+    fit — catching a bad-fit-but-real company is scoring's job, not the
+    normalizer's. What must never happen is keeping the literal article
+    title as company_name. The regex_fallback/needs_review tag (tested
+    separately) is what flags this kind of domain-substituted result for
+    human review rather than trusting it outright."""
+    results = [_result("Tips for SaaS businesses in Germany", link="https://stripe.com/resources/tips-saas-germany")]
+    out = _fallback_normalize(results)
+    assert len(out) == 1
+    assert out[0]["company_name"] != "Tips for SaaS businesses in Germany"
+    assert out[0]["company_name"] == "Stripe"
+
+
+# -- normalization_method / needs_review flag --------------------------------
+
+def test_llm_path_tags_candidates_as_llm_normalized(mocker):
+    mocker.patch(
+        "gtm_backend.phase1.agents.agent_02_leads.llm.chat_json",
+        return_value={"companies": [{"company_name": "Acme HR"}]},
+    )
+    raw_results = [_result("Acme HR", link="https://acmehr.com")]
+    out = _normalize_with_llm(raw_results, {"industry": "HR Tech", "geography": ["India"]}, icp_id=1)
+    assert out[0]["_normalization_method"] == "llm"
+
+
+def test_fallback_path_tags_candidates_as_regex_fallback(mocker):
+    mocker.patch(
+        "gtm_backend.phase1.agents.agent_02_leads.llm.chat_json",
+        side_effect=ValueError("invalid JSON from LLM"),
+    )
+    raw_results = [_result("Acme HR - People Management Platform", link="https://acmehr.com")]
+    out = _normalize_with_llm(raw_results, {"industry": "HR Tech", "geography": ["India"]}, icp_id=1)
+    assert out[0]["_normalization_method"] == "regex_fallback"
+
+
+def test_to_lead_sets_needs_review_true_for_regex_fallback_candidates():
+    from gtm_backend.phase1.agents.agent_02_leads import _to_lead
+
+    item = {
+        "company_name": "Acme HR",
+        "company_website": "https://acmehr.com",
+        "source_url": "https://acmehr.com",
+        "_normalization_method": "regex_fallback",
+    }
+    lead = _to_lead(item, icp_id=1)
+    assert lead.raw_data["needs_review"] is True
+    assert lead.raw_data["normalization_method"] == "regex_fallback"
+
+
+def test_to_lead_sets_needs_review_false_for_llm_candidates():
+    from gtm_backend.phase1.agents.agent_02_leads import _to_lead
+
+    item = {
+        "company_name": "Acme HR",
+        "company_website": "https://acmehr.com",
+        "source_url": "https://acmehr.com",
+        "_normalization_method": "llm",
+    }
+    lead = _to_lead(item, icp_id=1)
+    assert lead.raw_data["needs_review"] is False
+
+
+def test_to_lead_defaults_to_llm_when_method_unset():
+    """Backward-compat: any candidate dict without the new tag (e.g. an
+    older code path not yet updated) must default to "llm"/not-flagged,
+    never silently treated as needing review just because the key is
+    missing."""
+    from gtm_backend.phase1.agents.agent_02_leads import _to_lead
+
+    item = {"company_name": "Acme HR", "company_website": "https://acmehr.com", "source_url": "https://acmehr.com"}
+    lead = _to_lead(item, icp_id=1)
+    assert lead.raw_data["needs_review"] is False
+    assert lead.raw_data["normalization_method"] == "llm"

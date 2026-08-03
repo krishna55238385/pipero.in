@@ -442,12 +442,34 @@ def _normalize_with_llm(raw_results: list[dict], icp: dict, icp_id: int) -> list
         # this path used to skip it, so a raw LLM JSON-parse failure could let
         # aggregator/news/social results straight through into the (much
         # weaker, regex-only) fallback normalizer.
-        return _fallback_normalize(_filter_aggregators(raw_results))
+        return _tag_normalization_method(
+            _fallback_normalize(_filter_aggregators(raw_results)), "regex_fallback"
+        )
     companies = raw.get("companies") or []
     if not companies:
         print("  [Agent 02] LLM returned 0 companies, running domain fallback")
-        return _fallback_normalize(_filter_aggregators(raw_results))
-    return [c for c in companies if c.get("company_name")]
+        return _tag_normalization_method(
+            _fallback_normalize(_filter_aggregators(raw_results)), "regex_fallback"
+        )
+    return _tag_normalization_method(
+        [c for c in companies if c.get("company_name")], "llm"
+    )
+
+
+def _tag_normalization_method(candidates: list[dict], method: str) -> list[dict]:
+    """Stamps how a candidate's company_name was derived — "llm" (the primary
+    path, which reasons about intent and correctly rejects article/review/job
+    -board content) or "regex_fallback" (only used when the LLM call itself
+    failed twice in a row; a fixed set of title/domain regexes, which will
+    always be a step behind new junk shapes the LLM would have caught by
+    understanding what a page actually IS, not just pattern-matching its
+    title). Carried through to leads_raw.raw_data so a human reviewing a
+    lead — or a future scoring rule — can see it was fallback-derived and
+    treat it with appropriately less trust, instead of every lead looking
+    equally reliable regardless of how it was actually produced."""
+    for c in candidates:
+        c["_normalization_method"] = method
+    return candidates
 
 
 _AGGREGATOR_DOMAINS = {
@@ -552,6 +574,27 @@ def _is_academic_domain(link: str) -> bool:
     host = dns_lookup.extract_domain_from_url(link) or ""
     return bool(_ACADEMIC_DOMAIN_RE.search(host))
 
+
+# Review/directory-profile titles on hosts not in the fixed _AGGREGATOR_DOMAINS
+# list ("IT Services India Inc. Profile & Reviews" on techreviewer.co) —
+# same "a fixed domain list is always one host behind" gap as academic
+# domains, closed here by the title's own reliable shape instead.
+_REVIEW_PROFILE_TITLE_RE = re.compile(
+    r"\b(profile\s*&?\s*reviews?|reviews?\s*&?\s*ratings?)\s*$",
+    re.IGNORECASE,
+)
+
+# Job-board listing titles ("Remote Jobs at Emergence", "Jobs at Acme",
+# "Careers at Acme Corp") — the listing's own title names the REAL target
+# company, but as a job posting, not as a company profile; never itself a
+# lead. Distinct from _GENERIC_PHRASE_TITLES (exact-match "we're hiring" etc.)
+# since this is a "at <company>" shape from a job-board aggregator, not the
+# hiring company's own careers page.
+_JOB_BOARD_TITLE_RE = re.compile(
+    r"^\s*(remote\s+)?(jobs?|careers?|hiring)\s+(at|for)\b",
+    re.IGNORECASE,
+)
+
 # Generic career/marketing phrases that are titles of a company's own page but
 # never the company name itself ("We're Hiring!", "Careers at ...", "Join Our
 # Team"). Fallback-only, same scope as the two regexes above.
@@ -567,6 +610,10 @@ _ARTICLE_TITLE_RE = re.compile(
     r"|\?\s*$"                                             # ends in a question mark
     r"|:\s*a\s+(decision|complete|beginner'?s?)\s+guide"   # "...: A Decision Guide"
     r"|\bvs[.]?\s"                                          # "X vs Traditional Y" comparisons
+    r"|^\s*(tips?\s+(for|to)|guide\s+(to|for)|ultimate\s+guide)\b"  # "Tips for SaaS
+    # businesses in Germany" — a content-marketing article, even when hosted
+    # on a real, large company's own domain (e.g. stripe.com/resources) —
+    # the domain being real doesn't make the article itself a lead.
     , re.IGNORECASE,
 )
 
@@ -629,6 +676,18 @@ def _fallback_normalize(raw_results: list[dict]) -> list[dict]:
             # substitute makes sense either (this isn't a real company's
             # page at all, typically a raw document/asset link).
             continue
+        if _REVIEW_PROFILE_TITLE_RE.search(cleaned):
+            # "IT Services India Inc. Profile & Reviews" on a review-directory
+            # host not in the fixed _AGGREGATOR_DOMAINS list — the domain
+            # itself is the review site, not the reviewed company, so no
+            # domain-derived substitute makes sense either. Drop entirely.
+            continue
+        if _JOB_BOARD_TITLE_RE.match(cleaned):
+            # "Remote Jobs at Emergence" — a job-board LISTING, not a company
+            # profile. The listing names a real company, but this page/domain
+            # is the job board, not that company's own site — drop rather
+            # than mis-derive a lead from the board's domain.
+            continue
         if _RESEARCH_REPORT_TITLE_RE.search(cleaned):
             # A market-research/report/academic-style title's own domain is
             # almost always the report publisher, not a real prospect company
@@ -670,6 +729,7 @@ def _attach_domains(candidates: list[dict]) -> list[dict]:
 
 
 def _to_lead(item: dict, icp_id: int) -> Lead:
+    normalization_method = item.get("_normalization_method", "llm")
     return Lead(
         icp_id=icp_id,
         company_name=item["company_name"],
@@ -682,5 +742,14 @@ def _to_lead(item: dict, icp_id: int) -> Lead:
         company_size=item.get("company_size"),
         source="serpapi",
         sources=["serpapi"],
-        raw_data={"source_url": item.get("source_url")},
+        raw_data={
+            "source_url": item.get("source_url"),
+            "normalization_method": normalization_method,
+            # Set whenever a lead's company_name/domain came from the weaker
+            # regex-only fallback (see _tag_normalization_method) rather than
+            # the LLM's actual reasoning about what the page is — flags it
+            # for human review or a future scoring penalty instead of being
+            # trusted exactly like every other lead.
+            "needs_review": normalization_method == "regex_fallback",
+        },
     )
