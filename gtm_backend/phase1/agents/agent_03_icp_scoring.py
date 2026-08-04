@@ -97,10 +97,22 @@ def score_leads(
         icp = icp_by_id.get(lead.get("icp_id"))
         signals = signals_by_lead.get(lead["id"], [])
         result = score_lead(lead, icp, signals)
-        supabase.update_lead_score(result)
-        counts[result.score_tier] = counts.get(result.score_tier, 0) + 1
-
+        # Compute the LLM re-score BEFORE persisting so the lead's final,
+        # stored icp_score/score_tier reflect the LLM's judgment (which can
+        # correctly downgrade a lead the deterministic rules alone would
+        # over-score — e.g. a geography/industry mismatch) rather than the
+        # raw rule score. See update_lead_score's docstring for why this
+        # previously never made it to the database at all.
         llm_result = _llm_score(lead, icp or {}, signals, result.icp_score)
+        supabase.update_lead_score(result, llm_result)
+        final_tier = llm_result.get("llm_score_tier") or result.score_tier
+        if final_tier not in counts:
+            # Freeform LLM JSON occasionally returns an unexpected tier
+            # string — fall back to the rule tier rather than raising or
+            # silently dropping this lead from the summary counts.
+            final_tier = result.score_tier
+        counts[final_tier] = counts.get(final_tier, 0) + 1
+
         llm_results.append((lead, result, llm_result))
 
     divider = "\u2500" * 72

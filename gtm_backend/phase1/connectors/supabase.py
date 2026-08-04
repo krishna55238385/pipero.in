@@ -484,15 +484,37 @@ def update_lead(lead_id: int, **fields) -> None:
     _patch("/leads_raw", params={"id": f"eq.{lead_id}"}, json_body=fields)
 
 
-def update_lead_score(score: ScoreResult) -> None:
-    payload = {
-        "icp_score": score.icp_score,
-        "score_tier": score.score_tier,
-        "score_breakdown": score.score_breakdown,
-        "score_reasoning": score.score_reasoning,
-        "scored_at": _now_iso(),
-        "score_version": score.score_version,
-    }
+def update_lead_score(score: ScoreResult, llm_result: dict | None = None) -> None:
+    """Persist a lead's score. ``score`` is always the deterministic
+    rule-based result; when ``llm_result`` (Agent 03's LLM re-scoring
+    output) is also given, icp_score/score_tier are set to the LLM's final
+    judgment instead of the rule score, with the rule score preserved
+    separately under rule_icp_score/rule_score_tier and the LLM's own
+    reasoning/intent summary persisted alongside — previously llm_result was
+    computed but only ever printed to the console, never written here at
+    all, so the CRM's tier had never actually reflected it for any lead."""
+    if llm_result is not None:
+        payload = {
+            "icp_score": llm_result["llm_icp_score"],
+            "score_tier": llm_result["llm_score_tier"],
+            "score_breakdown": score.score_breakdown,
+            "score_reasoning": score.score_reasoning,
+            "scored_at": _now_iso(),
+            "score_version": score.score_version,
+            "rule_icp_score": score.icp_score,
+            "rule_score_tier": score.score_tier,
+            "llm_reasoning": llm_result.get("llm_reasoning"),
+            "buying_intent_summary": llm_result.get("buying_intent_summary"),
+        }
+    else:
+        payload = {
+            "icp_score": score.icp_score,
+            "score_tier": score.score_tier,
+            "score_breakdown": score.score_breakdown,
+            "score_reasoning": score.score_reasoning,
+            "scored_at": _now_iso(),
+            "score_version": score.score_version,
+        }
     _patch("/leads_raw", params={"id": f"eq.{score.lead_id}"}, json_body=payload)
 
 

@@ -93,6 +93,19 @@ ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS score_breakdown JSONB;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS score_reasoning TEXT;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS score_version TEXT;
+-- icp_score/score_tier above now hold the FINAL, LLM-adjusted judgment (the
+-- LLM re-scoring step was always meant to override the deterministic rule
+-- score with nuance the rules can't see — e.g. a geography/industry
+-- mismatch the firmographic rules alone don't catch — but until this fix
+-- its output was only ever printed to the console and silently discarded,
+-- so the CRM's HOT/WARM/COLD tier had never reflected it for any lead).
+-- The original deterministic rule score is preserved separately here for
+-- transparency/debugging, and the LLM's own reasoning/intent summary are
+-- now persisted too instead of being thrown away after Agent 03 exits.
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS rule_icp_score INTEGER;
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS rule_score_tier TEXT;
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS llm_reasoning TEXT;
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS buying_intent_summary TEXT;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS is_existing_customer BOOLEAN DEFAULT FALSE;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
