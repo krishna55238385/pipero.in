@@ -8,6 +8,7 @@ import httpx
 
 from gtm_backend.phase1.core.config import REPO_ROOT, get_settings
 from gtm_backend.phase1.core.retries import retry_on_transient
+from gtm_backend.serpapi_fixtures import fixture_response, test_mode_enabled
 
 
 _settings = get_settings()
@@ -127,6 +128,13 @@ def _cache_set(params: dict, data: dict) -> None:
 @retry_on_transient(max_attempts=2)
 def _request(params: dict) -> dict:
     global _quota_exhausted
+
+    if test_mode_enabled():
+        # GTM_TEST_MODE=1: canned fixture data, no network call, no cache
+        # read/write — lets the full pipeline run repeatedly for free to
+        # verify mechanics without spending real SerpAPI/Serper credits.
+        # Unset (the default) = zero change from live-API behavior below.
+        return fixture_response(params)
 
     cached = _cache_get(params)
     if cached is not None:
