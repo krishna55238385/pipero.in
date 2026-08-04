@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { List } from 'lucide-react'
 
 type ListItem = { id: string; name: string; description?: string | null; list_members?: { count?: number }[] }
 type Member = { id: string; list_id: string; member_type: string; member_id: string }
@@ -57,20 +58,25 @@ export default function ListsClient({ lists, members }: { lists: ListItem[]; mem
   const filtered = members.filter((m) => !activeListId || m.list_id === activeListId)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-xl font-semibold text-foreground">Lists</h1>
+        <p className="text-sm text-muted-foreground mt-1">Organize your contacts into lists.</p>
+      </div>
+
       <Card>
         <CardHeader>
-          <CardTitle>Create List</CardTitle>
+          <CardTitle className="text-base">Create List</CardTitle>
         </CardHeader>
         <CardContent>
           <form className="grid grid-cols-1 md:grid-cols-3 gap-3" onSubmit={(e) => { e.preventDefault(); onCreateList(e.currentTarget) }}>
             <div>
-              <Label>Name</Label>
-              <Input name="name" placeholder="List name" />
+              <Label className="text-xs font-medium text-muted-foreground">Name</Label>
+              <Input name="name" placeholder="List name" className="mt-1" />
             </div>
             <div className="md:col-span-2">
-              <Label>Description</Label>
-              <Input name="description" placeholder="Optional description" />
+              <Label className="text-xs font-medium text-muted-foreground">Description</Label>
+              <Input name="description" placeholder="Optional description" className="mt-1" />
             </div>
             <div className="md:col-span-3">
               <Button type="submit" disabled={isPending}>Create List</Button>
@@ -81,89 +87,101 @@ export default function ListsClient({ lists, members }: { lists: ListItem[]; mem
 
       <Card>
         <CardHeader>
-          <CardTitle>Lists ({lists.length})</CardTitle>
+          <CardTitle className="text-base">All Lists ({lists.length})</CardTitle>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Members</TableHead>
-                <TableHead>List ID</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {lists.map((l) => (
-                <TableRow key={l.id}>
-                  <TableCell>{l.name}</TableCell>
-                  <TableCell>{l.description || '-'}</TableCell>
-                  <TableCell>{l.list_members?.[0]?.count || 0}</TableCell>
-                  <TableCell className="font-mono text-xs">{l.id}</TableCell>
-                  <TableCell className="space-x-2">
-                    <Button size="sm" variant="outline" onClick={() => setActiveListId(l.id)}>View Members</Button>
-                    <Button size="sm" variant="destructive" onClick={() => onDeleteList(l.id)}>Delete</Button>
-                  </TableCell>
+          {lists.length === 0 ? (
+            <div className="py-16 text-center">
+              <div className="w-10 h-10 bg-muted rounded-full flex items-center justify-center mx-auto mb-3">
+                <List className="h-5 w-5 text-muted-foreground" />
+              </div>
+              <p className="text-sm font-semibold text-foreground">No lists yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Create your first list above.</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Members</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {lists.map((l) => (
+                  <TableRow key={l.id}>
+                    <TableCell className="font-medium">{l.name}</TableCell>
+                    <TableCell className="text-muted-foreground">{l.description || '-'}</TableCell>
+                    <TableCell className="text-muted-foreground">{l.list_members?.[0]?.count || 0}</TableCell>
+                    <TableCell className="text-right space-x-1">
+                      <Button size="sm" variant="ghost" onClick={() => setActiveListId(l.id)}>View</Button>
+                      <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => onDeleteList(l.id)}>Delete</Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Add List Member</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form className="grid grid-cols-1 md:grid-cols-4 gap-3" onSubmit={(e) => { e.preventDefault(); onAddMember(e.currentTarget) }}>
-            <div>
-              <Label>List ID</Label>
-              <Input name="list_id" defaultValue={activeListId} placeholder="List UUID" />
-            </div>
-            <div>
-              <Label>Member Type</Label>
-              <Input name="member_type" placeholder="contact/lead/company/customer" />
-            </div>
-            <div>
-              <Label>Member ID</Label>
-              <Input name="member_id" placeholder="Entity UUID" />
-            </div>
-            <div className="flex items-end">
-              <Button type="submit" disabled={isPending}>Add Member</Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+      {lists.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Add List Member</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form className="grid grid-cols-1 md:grid-cols-4 gap-3" onSubmit={(e) => { e.preventDefault(); onAddMember(e.currentTarget) }}>
+              <div>
+                <Label className="text-xs font-medium text-muted-foreground">List ID</Label>
+                <Input name="list_id" defaultValue={activeListId} placeholder="List UUID" className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-xs font-medium text-muted-foreground">Member Type</Label>
+                <Input name="member_type" placeholder="contact/lead/company" className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-xs font-medium text-muted-foreground">Member ID</Label>
+                <Input name="member_id" placeholder="Entity UUID" className="mt-1" />
+              </div>
+              <div className="flex items-end">
+                <Button type="submit" disabled={isPending}>Add Member</Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>List Members {activeListId ? `(List: ${activeListId})` : ''}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Type</TableHead>
-                <TableHead>Member ID</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((m) => (
-                <TableRow key={m.id}>
-                  <TableCell>{m.member_type}</TableCell>
-                  <TableCell className="font-mono text-xs">{m.member_id}</TableCell>
-                  <TableCell>
-                    <Button size="sm" variant="destructive" onClick={() => onRemoveMember(m.id)}>Remove</Button>
-                  </TableCell>
+      {lists.length > 0 && filtered.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">List Members ({filtered.length})</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Member ID</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+              </TableHeader>
+              <TableBody>
+                {filtered.map((m) => (
+                  <TableRow key={m.id}>
+                    <TableCell className="font-medium">{m.member_type}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{m.member_id}</TableCell>
+                    <TableCell className="text-right">
+                      <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => onRemoveMember(m.id)}>Remove</Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

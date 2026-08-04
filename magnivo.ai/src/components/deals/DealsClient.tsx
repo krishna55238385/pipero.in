@@ -128,18 +128,18 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
         <div className="fixed inset-0 z-[60] flex" onClick={onClose}>
             <div className="flex-1 bg-black/30 backdrop-blur-sm" />
             <div
-                className="w-full max-w-md bg-white dark:bg-card shadow-2xl overflow-y-auto border-l border-slate-200 dark:border-border animate-in slide-in-from-right duration-200"
+                className="w-full max-w-md bg-card shadow-2xl overflow-y-auto border-l border-border/40 animate-in slide-in-from-right duration-200"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className={`p-5 border-b dark:border-border ${deal.status === 'won' ? 'bg-emerald-50 dark:bg-emerald-950/30' : deal.status === 'lost' ? 'bg-red-50 dark:bg-red-950/30' : 'bg-slate-50 dark:bg-secondary/50'}`}>
+                <div className={`p-5 border-b border-border/40 ${deal.status === 'won' ? 'bg-emerald-50 dark:bg-emerald-950/30' : deal.status === 'lost' ? 'bg-red-50 dark:bg-red-950/30' : 'bg-muted/30'}`}>
                     <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                             {editing ? (
                                 <Input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                                     className="text-lg font-bold h-8 mb-1" />
                             ) : (
-                                <h2 className="text-lg font-bold text-slate-900 dark:text-foreground truncate">{deal.title}</h2>
+                                <h2 className="text-lg font-bold text-foreground truncate">{deal.title}</h2>
                             )}
                             <div className="flex items-center gap-2 mt-1 flex-wrap">
                                 <Badge variant="secondary" className={`text-xs ${col?.color} text-white border-0`}>
@@ -147,7 +147,7 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
                                     {col?.id === 'lost' && '❌ '}
                                     {col?.title}
                                 </Badge>
-                                <span className="text-xs text-slate-500">{daysOpen}d old · {deal.leads?.name}</span>
+                                <span className="text-xs text-muted-foreground">{daysOpen}d old · {deal.leads?.name}</span>
                             </div>
                         </div>
                         <div className="flex gap-1 shrink-0">
@@ -176,7 +176,7 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
                     {/* Value + Probability */}
                     <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
-                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Deal Value</label>
+                            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Deal Value</label>
                             {editing ? (
                                 <Input type="number" value={form.value} onChange={e => setForm(f => ({ ...f, value: e.target.value }))} className="h-8 text-sm" />
                             ) : (
@@ -184,15 +184,15 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
                             )}
                         </div>
                         <div className="space-y-1">
-                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Win Probability</label>
+                            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Win Probability</label>
                             {editing ? (
                                 <Input type="number" min="0" max="100" value={form.probability} onChange={e => setForm(f => ({ ...f, probability: e.target.value }))} className="h-8 text-sm" />
                             ) : (
                                 <div className="flex items-center gap-2">
-                                    <div className="flex-1 h-2 bg-slate-100 dark:bg-secondary rounded-full overflow-hidden">
+                                    <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                                         <div className="h-full bg-gradient-to-r from-blue-400 to-emerald-500 transition-all" style={{ width: `${deal.probability ?? col?.prob ?? 50}%` }} />
                                     </div>
-                                    <span className="text-sm font-bold text-slate-700 dark:text-muted-foreground">{deal.probability ?? col?.prob ?? 50}%</span>
+                                    <span className="text-sm font-bold text-muted-foreground">{deal.probability ?? col?.prob ?? 50}%</span>
                                 </div>
                             )}
                         </div>
@@ -200,21 +200,21 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
 
                     {/* Close Date */}
                     <div className="space-y-1">
-                        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
                             <Calendar className="h-3 w-3" /> Expected Close Date
                         </label>
                         {editing ? (
                             <Input type="date" value={form.close_date} onChange={e => setForm(f => ({ ...f, close_date: e.target.value }))} className="h-8 text-sm" />
                         ) : (
-                            <div className="text-sm text-slate-700 dark:text-muted-foreground">
-                                {deal.close_date ? format(parseISO(deal.close_date), 'MMM d, yyyy') : <span className="text-slate-400 italic">Not set</span>}
+                            <div className="text-sm text-muted-foreground">
+                                {deal.close_date ? format(parseISO(deal.close_date), 'MMM d, yyyy') : <span className="text-muted-foreground/50 italic">Not set</span>}
                             </div>
                         )}
                     </div>
 
                     {/* Assigned To */}
                     <div className="space-y-1">
-                        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
                             <User className="h-3 w-3" /> Assigned To
                         </label>
                         {editing ? (
@@ -232,10 +232,10 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
                                         <div className="h-6 w-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-[10px] font-bold">
                                             {deal.assigned_user.full_name?.[0]?.toUpperCase()}
                                         </div>
-                                        <span className="text-sm text-slate-700 dark:text-muted-foreground">{deal.assigned_user.full_name}</span>
+                                        <span className="text-sm text-muted-foreground">{deal.assigned_user.full_name}</span>
                                     </>
                                 ) : (
-                                    <span className="text-sm text-slate-400 italic">Unassigned</span>
+                                    <span className="text-sm text-muted-foreground/50 italic">Unassigned</span>
                                 )}
                             </div>
                         )}
@@ -243,15 +243,15 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
 
                     {/* Notes */}
                     <div className="space-y-1">
-                        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
                             <MessageSquare className="h-3 w-3" /> Notes
                         </label>
                         {editing ? (
                             <Textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
                                 placeholder="Add notes about this deal..." rows={4} className="text-sm resize-none" />
                         ) : (
-                            <div className="text-sm text-slate-700 dark:text-muted-foreground whitespace-pre-wrap bg-slate-50 dark:bg-secondary/50 rounded-xl p-3 min-h-[60px]">
-                                {deal.notes || <span className="text-slate-400 italic">No notes yet</span>}
+                            <div className="text-sm text-muted-foreground whitespace-pre-wrap bg-muted/30 rounded-xl p-3 min-h-[60px]">
+                                {deal.notes || <span className="text-muted-foreground/50 italic">No notes yet</span>}
                             </div>
                         )}
                     </div>
@@ -389,14 +389,14 @@ function DealSlideOver({ deal, members, onClose, onUpdate, onDelete, canEdit, ca
 
                     {/* Last activity */}
                     {deal.last_activity_at && (
-                        <div className="text-xs text-slate-400 flex items-center gap-1">
+                        <div className="text-xs text-muted-foreground flex items-center gap-1">
                             <Sparkles className="h-3 w-3" />
                             Last updated: {format(new Date(deal.last_activity_at), 'MMM d, yyyy')}
                         </div>
                     )}
 
                     {/* Delete */}
-                    <div className="pt-4 border-t dark:border-border">
+                    <div className="pt-4 border-t border-border/40">
                         <Button
                             variant="outline"
                             className="w-full border-red-200 text-red-500 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-950/30 gap-2"
@@ -447,12 +447,12 @@ function QuickAdd({ columnId, leads, onAdd }: { columnId: string; leads: any[]; 
     )
 
     return (
-        <div className="mt-2 p-3 bg-white dark:bg-secondary rounded-xl border border-blue-200 dark:border-blue-800 shadow-md space-y-2">
+        <div className="mt-2 p-3 bg-card rounded-xl border border-primary/20 shadow-md space-y-2">
             <Input placeholder="Deal title" value={title} onChange={e => setTitle(e.target.value)}
                 className="h-7 text-xs" autoFocus onKeyDown={e => e.key === 'Escape' && setOpen(false)} />
             <Input placeholder="Value" type="number" value={value} onChange={e => setValue(e.target.value)} className="h-7 text-xs" />
             <select value={leadId} onChange={e => setLeadId(e.target.value)}
-                className="w-full h-7 text-xs border border-gray-200 dark:border-border rounded-lg bg-white dark:bg-secondary px-2 focus:outline-none">
+                className="w-full h-7 text-xs border border-border/40 rounded-lg bg-background px-2 focus:outline-none">
                 {leads.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
             <div className="flex gap-1">
@@ -580,15 +580,15 @@ export default function DealsClient({
             {/* ── Header ─────────────────────────────────────────────── */}
             <div className="flex flex-wrap justify-between items-center gap-3">
                 <div>
-                    <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-foreground">Deals Pipeline</h1>
-                    <p className="text-sm text-slate-500 mt-0.5">Drag deals between stages · click a card to view details</p>
+                    <h1 className="text-3xl font-bold tracking-tight text-foreground">Deals Pipeline</h1>
+                    <p className="text-sm text-muted-foreground mt-0.5">Drag deals between stages · click a card to view details</p>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                     <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input placeholder="Search deals..." value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value)}
-                            className="pl-9 h-9 w-52 bg-white dark:bg-secondary/50 rounded-xl text-sm" />
+                            className="pl-9 h-9 w-52 rounded-xl text-sm" />
                     </div>
                     <Button variant={showFilters ? 'secondary' : 'outline'} size="sm" onClick={() => setShowFilters(v => !v)} className="gap-1.5 h-9 rounded-xl">
                         <Filter className="h-4 w-4" /> Filter
@@ -655,15 +655,15 @@ export default function DealsClient({
 
             {/* ── Filters Bar ───────────────────────────────────────── */}
             {showFilters && (
-                <div className="flex items-center gap-3 p-3 bg-white dark:bg-secondary/50 border border-gray-200 dark:border-border rounded-2xl">
-                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Filter by Lead</span>
+                <div className="flex items-center gap-3 p-3 bg-card border border-border/40 rounded-2xl">
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Filter by Lead</span>
                     <select value={filterLead} onChange={e => setFilterLead(e.target.value)}
-                        className="text-sm bg-gray-50 dark:bg-secondary border border-gray-200 dark:border-border rounded-xl px-3 py-1.5 focus:outline-none text-slate-700 dark:text-muted-foreground">
+                        className="text-sm bg-background border border-border/40 rounded-xl px-3 py-1.5 focus:outline-none text-foreground">
                         <option value="">All Leads</option>
                         {leads.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                     </select>
                     {filterLead && (
-                        <Button size="sm" variant="ghost" onClick={() => setFilterLead('')} className="h-7 gap-1 text-xs text-slate-500">
+                        <Button size="sm" variant="ghost" onClick={() => setFilterLead('')} className="h-7 gap-1 text-xs text-muted-foreground">
                             <X className="h-3 w-3" /> Clear
                         </Button>
                     )}
@@ -677,10 +677,10 @@ export default function DealsClient({
                     { label: 'Weighted Pipeline', value: formatCurrency(Math.round(weightedPipeline), currency), sub: 'probability-adjusted', color: 'text-purple-600 dark:text-purple-400' },
                     { label: 'Total Won', value: formatCurrency(totalWon, currency), sub: `${filteredDeals.filter(d => d.status === 'won').length} deals closed`, color: 'text-emerald-600 dark:text-emerald-400', emoji: '🏆' },
                 ].map(s => (
-                    <div key={s.label} className="bg-white dark:bg-card/50 border border-slate-200 dark:border-border rounded-2xl p-4">
+                        <div key={s.label} className="bg-card border border-border/40 rounded-2xl p-4">
                         <div className={`text-xl font-bold ${s.color}`}>{s.emoji && `${s.emoji} `}{s.value}</div>
-                        <div className="text-xs font-semibold text-slate-500 mt-0.5">{s.label}</div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">{s.sub}</div>
+                        <div className="text-xs font-semibold text-muted-foreground mt-0.5">{s.label}</div>
+                        <div className="text-[10px] text-muted-foreground/70 mt-0.5">{s.sub}</div>
                     </div>
                 ))}
             </div>
@@ -699,23 +699,23 @@ export default function DealsClient({
                                 <div key={column.id}
                                     className={`min-w-[290px] w-[290px] flex flex-col shrink-0 rounded-3xl border ${column.border} ${column.lightBg} ${isWon ? 'ring-1 ring-emerald-300 dark:ring-emerald-700' : isLost ? 'ring-1 ring-red-200 dark:ring-red-800' : ''}`}>
                                     {/* Column Header */}
-                                    <div className="p-3 border-b border-inherit flex flex-col gap-1 rounded-t-3xl">
+                                    <div className="p-3 border-b border-border/30 flex flex-col gap-1 rounded-t-3xl">
                                         <div className="flex items-center justify-between">
                                             <div className="flex items-center gap-2">
                                                 <div className={`h-2.5 w-2.5 rounded-full ${column.color}`} />
-                                                <h3 className="font-bold text-xs text-slate-700 dark:text-muted-foreground uppercase tracking-widest">
+                                                <h3 className="font-bold text-xs text-muted-foreground uppercase tracking-widest">
                                                     {column.id === 'won' ? '🏆 ' : column.id === 'lost' ? '❌ ' : ''}
                                                     {column.title}
                                                 </h3>
                                             </div>
-                                            <Badge variant="secondary" className="text-xs font-bold h-5 bg-white dark:bg-secondary border border-current/20 shadow-sm">
+                                            <Badge variant="secondary" className="text-xs font-bold h-5 bg-card border border-border/40 shadow-sm">
                                                 {colDeals.length}
                                             </Badge>
                                         </div>
                                         {/* Column totals */}
                                         <div className="flex items-center justify-between text-xs">
-                                            <span className="font-semibold text-slate-600 dark:text-muted-foreground">{formatCurrency(colTotal, currency)}</span>
-                                            <span className="text-slate-400">{column.prob}% prob</span>
+                                            <span className="font-semibold text-muted-foreground">{formatCurrency(colTotal, currency)}</span>
+                                            <span className="text-muted-foreground/60">{column.prob}% prob</span>
                                         </div>
                                     </div>
 
@@ -753,32 +753,32 @@ export default function DealsClient({
                                                                             {/* Title row */}
                                                                             <div className="flex items-start justify-between gap-2">
                                                                                 <div className="min-w-0 flex-1">
-                                                                                    <p className="font-bold text-sm text-slate-900 dark:text-foreground truncate leading-tight">
+                                                                                    <p className="font-bold text-sm text-foreground truncate leading-tight">
                                                                                         {isWon && '🏆 '}{isLost && '❌ '}{deal.title}
                                                                                     </p>
-                                                                                    <p className="text-[11px] text-slate-500 mt-0.5 truncate">{deal.leads?.name}</p>
+                                                                                    <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{deal.leads?.name}</p>
                                                                                 </div>
                                                                                 <div {...provided.dragHandleProps} onClick={e => e.stopPropagation()}
-                                                                                    className="text-slate-300 hover:text-slate-500 transition-colors shrink-0 mt-0.5 cursor-grab">
+                                                                                    className="text-muted-foreground/40 hover:text-muted-foreground transition-colors shrink-0 mt-0.5 cursor-grab">
                                                                                     <GripVertical className="h-3.5 w-3.5" />
                                                                                 </div>
                                                                             </div>
 
                                                                             {/* Value + probability */}
-                                                                            <div className="flex items-center justify-between">
-                                                                                <span className={`text-sm font-bold ${isWon ? 'text-emerald-600' : isLost ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                                                                                    {formatCurrency(deal.value, currency)}
-                                                                                </span>
-                                                                                <div className="flex items-center gap-1">
-                                                                                    <div className="w-12 h-1 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                                                                                        <div className="h-full bg-gradient-to-r from-blue-400 to-emerald-500" style={{ width: `${deal.probability ?? column.prob}%` }} />
-                                                                                    </div>
-                                                                                    <span className="text-[10px] text-slate-400 font-medium">{deal.probability ?? column.prob}%</span>
+                                                                                <div className="flex items-center justify-between">
+                                                                                    <span className={`text-sm font-bold ${isWon ? 'text-emerald-600' : isLost ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                                                                        {formatCurrency(deal.value, currency)}
+                                                                                    </span>
+                                                                                    <div className="flex items-center gap-1">
+                                                                                        <div className="w-12 h-1 bg-muted rounded-full overflow-hidden">
+                                                                                            <div className="h-full bg-gradient-to-r from-blue-400 to-emerald-500" style={{ width: `${deal.probability ?? column.prob}%` }} />
+                                                                                        </div>
+                                                                                        <span className="text-[10px] text-muted-foreground/60 font-medium">{deal.probability ?? column.prob}%</span>
                                                                                 </div>
                                                                             </div>
 
                                                                             {/* Footer: days open + assignee + close date + location + creation_time */}
-                                                                            <div className="flex items-center justify-between text-[10px] text-slate-400 gap-1 mt-2 border-t dark:border-border pt-1.5">
+                                                                            <div className="flex items-center justify-between text-[10px] text-muted-foreground/60 gap-1 mt-2 border-t border-border/30 pt-1.5">
                                                                                 <div className="flex flex-col gap-0.5 min-w-0">
                                                                                     <span className={`${daysOpen > 30 ? 'text-orange-500 font-semibold' : ''}`}>{daysOpen}d open</span>
                                                                                     <span className="text-[9px] uppercase tracking-wider truncate" title={`Created: ${format(new Date(deal.leads?.created_at || deal.created_at), 'MMM d, h:mm a')}`}>
@@ -788,8 +788,8 @@ export default function DealsClient({
 
                                                                                 <div className="flex items-center gap-1 flex-wrap justify-end">
                                                                                     {deal.leads?.location && (
-                                                                                        <Badge variant="outline" className="text-[9px] h-4 py-0 px-1 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-card">
-                                                                                            <MapPin className="w-2.5 h-2.5 mr-0.5 text-slate-400" />
+                                                                                        <Badge variant="outline" className="text-[9px] h-4 py-0 px-1 border-border/40 bg-muted/30">
+                                                                                            <MapPin className="w-2.5 h-2.5 mr-0.5 text-muted-foreground/60" />
                                                                                             {deal.leads.location.toUpperCase()}
                                                                                         </Badge>
                                                                                     )}
@@ -799,12 +799,12 @@ export default function DealsClient({
                                                                                         </span>
                                                                                     )}
                                                                                     {deal.assigned_user && (
-                                                                                        <div className="flex items-center gap-1 bg-white dark:bg-secondary rounded-full pr-1.5 shadow-sm border border-slate-200 dark:border-border">
+                                                                                        <div className="flex items-center gap-1 bg-card rounded-full pr-1.5 shadow-sm border border-border/40">
                                                                                             <div className="h-4 w-4 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-[8px] font-bold"
                                                                                                 title={deal.assigned_user.full_name}>
                                                                                                 {deal.assigned_user.full_name?.[0]?.toUpperCase()}
                                                                                             </div>
-                                                                                            <span className="text-[9px] font-bold text-slate-700 dark:text-muted-foreground">{deal.assigned_user?.full_name?.split(' ')?.[0] ?? ''}</span>
+                                                                                            <span className="text-[9px] font-bold text-muted-foreground">{deal.assigned_user?.full_name?.split(' ')?.[0] ?? ''}</span>
                                                                                         </div>
                                                                                     )}
                                                                                 </div>
@@ -812,13 +812,13 @@ export default function DealsClient({
 
                                                                             {/* Notes preview */}
                                                                             {deal.notes && (
-                                                                                <p className="text-[10px] text-slate-400 italic line-clamp-1 border-t dark:border-border pt-1.5">
+                                                                                <p className="text-[10px] text-muted-foreground/60 italic line-clamp-1 border-t border-border/30 pt-1.5">
                                                                                     💬 {deal.notes}
                                                                                 </p>
                                                                             )}
 
                                                                             {/* Quick action buttons */}
-                                                                            <div className="hidden group-hover:flex items-center gap-1 border-t dark:border-border pt-1.5" onClick={e => e.stopPropagation()}>
+                                                                            <div className="hidden group-hover:flex items-center gap-1 border-t border-border/30 pt-1.5" onClick={e => e.stopPropagation()}>
                                                                                 {deal.status !== 'won' && (
                                                                                     <button
                                                                                         onClick={async () => {
@@ -845,9 +845,9 @@ export default function DealsClient({
                                                                                         <XCircle className="h-3 w-3" /> Lost
                                                                                     </button>
                                                                                 )}
-                                                                                <button
+                                                                                    <button
                                                                                     onClick={() => setSelectedDeal(deal)}
-                                                                                    className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 font-semibold transition-colors ml-auto"
+                                                                                    className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-lg bg-muted text-muted-foreground hover:bg-accent font-semibold transition-colors ml-auto"
                                                                                 >
                                                                                     <Pencil className="h-2.5 w-2.5" /> Edit
                                                                                 </button>

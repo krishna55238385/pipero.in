@@ -484,29 +484,30 @@ export default function LeadsClient({
             </Dialog>
             <div className="flex justify-between items-start">
                 <div>
-                    <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-foreground">Leads</h1>
-                    <div className="flex gap-4 text-sm text-slate-500 dark:text-muted-foreground mt-2 font-medium">
-                        <span><strong className="text-slate-900 dark:text-foreground">{totalCount}</strong> total leads</span>
-                        <span><strong className="text-slate-900 dark:text-foreground">{hotCount}</strong> hot leads</span>
-                        <span><strong className="text-slate-900 dark:text-foreground">
+                    <h1 className="text-xl font-semibold text-foreground">Leads</h1>
+                    <div className="flex gap-4 text-sm text-muted-foreground mt-1">
+                        <span><strong className="text-foreground">{totalCount}</strong> total</span>
+                        <span><strong className="text-foreground">{hotCount}</strong> hot</span>
+                        <span><strong className="text-foreground">
                             {leads.filter(l => (l.tasks || []).some((t: any) => t.status === 'pending')).length}
                         </strong> need follow-up</span>
-                        <span>Est. Pipeline: <strong className="text-slate-900 dark:text-foreground">
+                        <span>Pipeline: <strong className="text-foreground">
                             {formatCurrency(leads.reduce((sum, l) => sum + (l.deals || []).reduce((s: number, d: any) => s + (Number(d.value) || 0), 0), 0), currency)}
                         </strong></span>
                     </div>
                 </div>
-                <div className="flex gap-3 items-center">
-                    {/* Table / Board toggle — always visible */}
-                    <div className="flex bg-slate-100/80 dark:bg-black/20 p-1 rounded-xl shadow-inner border border-slate-200/50 dark:border-white/5">
+                <div className="flex gap-2 items-center">
+                    {/* Table / Board toggle */}
+                    <div className="flex bg-muted p-0.5 rounded-lg">
                         <Button
                             variant="ghost"
                             size="sm"
                             onClick={() => setViewMode('table')}
-                            className={`px-3 py-1.5 h-8 rounded-lg text-xs font-semibold transition-all ${viewMode === 'table'
-                                ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm ring-1 ring-black/5 dark:ring-white/10'
-                                : 'text-slate-500 dark:text-muted-foreground hover:text-slate-700 dark:hover:text-slate-300 hover:bg-black/5 dark:hover:bg-white/5'
-                                }`}
+                            className={`px-3 py-1.5 h-8 rounded-md text-xs font-medium transition-all ${
+                                viewMode === 'table'
+                                    ? 'bg-background shadow-xs text-foreground'
+                                    : 'text-muted-foreground hover:text-foreground'
+                            }`}
                         >
                             <List className="h-3.5 w-3.5 mr-1.5" /> Table
                         </Button>
@@ -514,10 +515,11 @@ export default function LeadsClient({
                             variant="ghost"
                             size="sm"
                             onClick={() => setViewMode('board')}
-                            className={`px-3 py-1.5 h-8 rounded-lg text-xs font-semibold transition-all ${viewMode === 'board'
-                                ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm ring-1 ring-black/5 dark:ring-white/10'
-                                : 'text-slate-500 dark:text-muted-foreground hover:text-slate-700 dark:hover:text-slate-300 hover:bg-black/5 dark:hover:bg-white/5'
-                                }`}
+                            className={`px-3 py-1.5 h-8 rounded-md text-xs font-medium transition-all ${
+                                viewMode === 'board'
+                                    ? 'bg-background shadow-xs text-foreground'
+                                    : 'text-muted-foreground hover:text-foreground'
+                            }`}
                         >
                             <LayoutGrid className="h-3.5 w-3.5 mr-1.5" /> Board
                         </Button>
@@ -526,7 +528,7 @@ export default function LeadsClient({
                     {isCoreAdmin && (
                         <>
                             <input type="file" accept=".csv" ref={fileInputRef} className="hidden" onChange={handleImportCSV} />
-                            <Button onClick={() => fileInputRef.current?.click()} variant="outline" title="Upload CSV exported from Google Sheets. Expected columns: Name, Email, Phone, UTM_Source, UTM_Campaign, UTM_Medium, Full_URL" className="bg-white/80 dark:bg-secondary/50 backdrop-blur-sm border-gray-200/60 dark:border-white/10 text-slate-700 dark:text-foreground hover:bg-gray-50 dark:hover:bg-slate-700/50 hover:border-blue-200 dark:hover:border-blue-800 transition-all shadow-sm rounded-xl font-medium">
+                            <Button onClick={() => fileInputRef.current?.click()} variant="outline" title="Upload CSV exported from Google Sheets. Expected columns: Name, Email, Phone, UTM_Source, UTM_Campaign, UTM_Medium, Full_URL" className="rounded-lg font-medium">
                                 <Upload className="mr-2 h-4 w-4" /> Sync from Google Sheet (CSV)
                             </Button>
                             <Button
@@ -534,11 +536,11 @@ export default function LeadsClient({
                                 variant="outline"
                                 disabled={isInteraktSyncing}
                                 title="Pull contacts from Interakt. Leads from Zapier and Make are added automatically when their scenarios send to the CRM API."
-                                className="bg-white/80 dark:bg-secondary/50 backdrop-blur-sm border-gray-200/60 dark:border-white/10 text-slate-700 dark:text-foreground hover:bg-gray-50 dark:hover:bg-slate-700/50 hover:border-blue-200 dark:hover:border-blue-800 transition-all shadow-sm rounded-xl font-medium"
+                                className="rounded-lg font-medium"
                             >
                                 <RefreshCw className={`mr-2 h-4 w-4 ${isInteraktSyncing ? 'animate-spin' : ''}`} /> Sync from Interakt, Zapier & Make
                             </Button>
-                            <Button onClick={handleExportCSV} variant="outline" className="bg-white/80 dark:bg-secondary/50 backdrop-blur-sm border-gray-200/60 dark:border-white/10 text-slate-700 dark:text-foreground hover:bg-gray-50 dark:hover:bg-slate-700/50 hover:border-blue-200 dark:hover:border-blue-800 transition-all shadow-sm rounded-xl font-medium">
+                            <Button onClick={handleExportCSV} variant="outline" className="rounded-lg font-medium">
                                 <Download className="mr-2 h-4 w-4" /> Export CSV
                             </Button>
                         </>
@@ -546,38 +548,38 @@ export default function LeadsClient({
                     {canCreate && (
                         <Dialog open={isOpen} onOpenChange={setIsOpen}>
                             <DialogTrigger asChild>
-                                <Button className="hover:opacity-90 text-white shadow-md shadow-blue-500/20 rounded-xl font-semibold transition-all hover:scale-105 active:scale-95" style={{ backgroundColor: 'var(--primary-accent)' }}>
+                                <Button className="bg-primary text-primary-foreground shadow-xs rounded-lg font-medium">
                                     <Plus className="mr-2 h-4 w-4" /> Add Lead
                                 </Button>
                             </DialogTrigger>
-                            <DialogContent className="sm:max-w-[425px] bg-white/95 dark:bg-card/95 backdrop-blur-2xl border-gray-200/50 dark:border-white/10 text-slate-900 dark:text-foreground shadow-2xl rounded-2xl">
+                            <DialogContent className="sm:max-w-[425px]">
                                 <DialogHeader>
-                                    <DialogTitle className="text-xl">Add New Lead</DialogTitle>
-                                    <DialogDescription className="text-slate-500 dark:text-muted-foreground font-medium">
+                                    <DialogTitle className="text-lg">Add New Lead</DialogTitle>
+                                    <DialogDescription className="text-muted-foreground">
                                         Enter the contact details of the new prospect.
                                     </DialogDescription>
                                 </DialogHeader>
                                 <form action={handleAction}>
-                                    <div className="grid gap-4 py-4">
+                                    <div className="grid gap-3 py-4">
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="company" className="text-right font-semibold text-slate-700 dark:text-slate-300">Company</Label>
-                                            <Input id="company" name="company" className="col-span-3 bg-slate-50 dark:bg-secondary/30 border-gray-200/60 dark:border-white/10 focus:ring-blue-500 rounded-xl" required />
+                                            <Label htmlFor="company" className="text-right font-medium">Company</Label>
+                                            <Input id="company" name="company" className="col-span-3" required />
                                         </div>
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="name" className="text-right font-semibold text-slate-700 dark:text-slate-300">Contact</Label>
-                                            <Input id="name" name="name" className="col-span-3 bg-slate-50 dark:bg-secondary/30 border-gray-200/60 dark:border-white/10 focus:ring-blue-500 rounded-xl" />
+                                            <Label htmlFor="name" className="text-right font-medium">Contact</Label>
+                                            <Input id="name" name="name" className="col-span-3" />
                                         </div>
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="phone" className="text-right font-semibold text-slate-700 dark:text-slate-300">Phone</Label>
-                                            <Input id="phone" name="phone" className="col-span-3 bg-slate-50 dark:bg-secondary/30 border-gray-200/60 dark:border-white/10 focus:ring-blue-500 rounded-xl" required />
+                                            <Label htmlFor="phone" className="text-right font-medium">Phone</Label>
+                                            <Input id="phone" name="phone" className="col-span-3" required />
                                         </div>
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="location" className="text-right font-semibold text-slate-700 dark:text-slate-300">Location</Label>
-                                            <Input id="location" name="location" placeholder="City, Country" className="col-span-3 bg-slate-50 dark:bg-secondary/30 border-gray-200/60 dark:border-white/10 focus:ring-blue-500 rounded-xl" />
+                                            <Label htmlFor="location" className="text-right font-medium">Location</Label>
+                                            <Input id="location" name="location" placeholder="City, Country" className="col-span-3" />
                                         </div>
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="temperature" className="text-right font-semibold text-slate-700 dark:text-slate-300">Type</Label>
-                                            <select id="temperature" name="temperature" className="col-span-3 flex h-10 w-full items-center justify-between rounded-xl border border-gray-200/60 dark:border-white/10 bg-slate-50 dark:bg-secondary/30 px-3 py-2 text-sm text-slate-900 dark:text-foreground focus:ring-blue-500 focus:outline-none">
+                                            <Label htmlFor="temperature" className="text-right font-medium">Type</Label>
+                                            <select id="temperature" name="temperature" className="col-span-3 flex h-10 w-full items-center justify-between rounded-lg border border-border/60 bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30">
                                                 <option value="cold">Cold</option>
                                                 <option value="warm">Warm</option>
                                                 <option value="hot">Hot</option>
@@ -585,7 +587,7 @@ export default function LeadsClient({
                                         </div>
                                     </div>
                                     <DialogFooter>
-                                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md shadow-blue-500/20 w-full sm:w-auto transition-all">Save Lead</Button>
+                                        <Button type="submit" className="bg-primary text-primary-foreground rounded-lg shadow-xs w-full sm:w-auto">Save Lead</Button>
                                     </DialogFooter>
                                 </form>
                             </DialogContent>
@@ -595,15 +597,14 @@ export default function LeadsClient({
             </div>
 
             {/* Filter Bar */}
-            <div className="flex flex-col sm:flex-row flex-wrap items-center gap-3 p-3 bg-white/60 dark:bg-card/40 backdrop-blur-xl border border-gray-200/50 dark:border-white/10 rounded-2xl shadow-sm relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 dark:bg-blue-500/10 blur-3xl rounded-full pointer-events-none -mr-16 -mt-16" />
-                <Button variant="ghost" size="sm" className="hidden sm:inline-flex text-slate-600 dark:text-muted-foreground font-semibold hover:bg-slate-100 dark:hover:bg-white/5 rounded-xl transition-colors">
+            <div className="flex flex-col sm:flex-row flex-wrap items-center gap-2 p-2.5 bg-muted/50 border border-border/50 rounded-xl">
+                <Button variant="ghost" size="sm" className="hidden sm:inline-flex text-muted-foreground font-medium hover:text-foreground rounded-lg">
                     <Filter className="mr-2 h-4 w-4" /> Filters
                 </Button>
-                <div className="hidden sm:block h-5 w-px bg-gray-200 dark:bg-white/10 mx-1"></div>
+                <div className="hidden sm:block h-5 w-px bg-border mx-1"></div>
 
-                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 overflow-x-auto pb-1 sm:pb-0 w-full sm:w-auto flex-1 sm:flex-none hide-scrollbar relative z-10">
-                    <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); updateFilters('status', e.target.value) }} className="text-sm bg-white dark:bg-secondary/50 text-slate-700 dark:text-slate-200 font-medium border border-gray-200/60 dark:border-white/10 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 shadow-sm transition-shadow hover:border-blue-200 dark:hover:border-blue-800">
+                <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 w-full sm:w-auto flex-1 sm:flex-none hide-scrollbar">
+                    <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); updateFilters('status', e.target.value) }} className="text-sm bg-background text-foreground font-medium border border-border/60 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring/30 transition-colors hover:border-border">
                         <option>All Statuses</option>
                         {leadStatuses.map(s => {
                             const label = s.label.toLowerCase()
@@ -625,26 +626,26 @@ export default function LeadsClient({
                                 value={ownerFilter}
                                 onFocus={loadOrgMembers}
                                 onChange={(e) => { setOwnerFilter(e.target.value); updateFilters('owner_id', e.target.value) }}
-                                className="text-sm bg-white dark:bg-secondary/50 text-slate-700 dark:text-slate-200 font-medium border border-gray-200/60 dark:border-white/10 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 shadow-sm transition-shadow hover:border-blue-200 dark:hover:border-blue-800"
+                                className="text-sm bg-background text-foreground font-medium border border-border/60 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring/30 transition-colors hover:border-border"
                             >
                                 <option value="">All Owners</option>
                                 {orgMembers.map(m => (
                                     <option key={m.id} value={m.id}>{m.full_name}</option>
                                 ))}
                             </select>
-                            <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); updateFilters('source', e.target.value) }} className="text-sm bg-white dark:bg-secondary/50 text-slate-700 dark:text-slate-200 font-medium border border-gray-200/60 dark:border-white/10 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 shadow-sm transition-shadow hover:border-blue-200 dark:hover:border-blue-800">
+                            <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); updateFilters('source', e.target.value) }} className="text-sm bg-background text-foreground font-medium border border-border/60 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring/30 transition-colors hover:border-border">
                                 <option>All Sources</option>
                                 {filterOptions.sources.map(s => (
                                     <option key={s} value={s}>{s}</option>
                                 ))}
                             </select>
-                            <select value={subjectFilter} onChange={(e) => { setSubjectFilter(e.target.value); updateFilters('subject', e.target.value) }} className="text-sm bg-white dark:bg-secondary/50 text-slate-700 dark:text-slate-200 font-medium border border-gray-200/60 dark:border-white/10 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 shadow-sm transition-shadow hover:border-blue-200 dark:hover:border-blue-800">
+                            <select value={subjectFilter} onChange={(e) => { setSubjectFilter(e.target.value); updateFilters('subject', e.target.value) }} className="text-sm bg-background text-foreground font-medium border border-border/60 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring/30 transition-colors hover:border-border">
                                 <option>All Subjects</option>
                                 {filterOptions.subjects.map(s => (
                                     <option key={s} value={s}>{s}</option>
                                 ))}
                             </select>
-                            <select value={campaignFilter} onChange={(e) => { setCampaignFilter(e.target.value); updateFilters('campaign', e.target.value) }} className="text-sm bg-white dark:bg-secondary/50 text-slate-700 dark:text-slate-200 font-medium border border-gray-200/60 dark:border-white/10 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 shadow-sm transition-shadow hover:border-blue-200 dark:hover:border-blue-800">
+                            <select value={campaignFilter} onChange={(e) => { setCampaignFilter(e.target.value); updateFilters('campaign', e.target.value) }} className="text-sm bg-background text-foreground font-medium border border-border/60 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring/30 transition-colors hover:border-border">
                                 <option>All Campaigns</option>
                                 {filterOptions.campaigns.map(c => (
                                     <option key={c} value={c}>{c}</option>
@@ -655,7 +656,7 @@ export default function LeadsClient({
                                     <Button
                                         id="date"
                                         variant={"outline"}
-                                        className={`w-[240px] justify-start text-left font-medium bg-white dark:bg-secondary/50 border-gray-200/60 dark:border-white/10 shadow-sm text-slate-700 dark:text-slate-200 rounded-xl h-[34px] px-3 transition-colors hover:border-blue-200 dark:hover:border-blue-800 ${!date && "text-muted-foreground"}`}
+                                        className={`w-[240px] justify-start text-left font-medium border-border/60 text-foreground rounded-lg h-[34px] px-3 transition-colors ${!date && "text-muted-foreground"}`}
                                     >
                                         <CalendarIcon className="mr-2 h-4 w-4" />
                                         {date?.from ? (
@@ -688,52 +689,52 @@ export default function LeadsClient({
                     )}
                 </div>
 
-                <div className="relative w-full sm:max-w-[200px] z-10 shrink-0">
-                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
+                <div className="relative w-full sm:max-w-[200px] shrink-0">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input
                         placeholder="Search leads..."
-                        className="pl-9 h-9 w-full bg-white dark:bg-secondary/50 border-gray-200/60 dark:border-white/10 font-medium text-sm text-slate-900 dark:text-foreground placeholder:text-slate-400 rounded-xl focus:ring-blue-500 shadow-sm transition-colors hover:border-blue-200 dark:hover:border-blue-800"
+                        className="pl-9 h-9 w-full border-border/60 font-medium text-sm text-foreground placeholder:text-muted-foreground rounded-lg"
                         value={searchQuery}
                         onChange={handleSearchChange}
                     />
                 </div>
 
-                <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2 justify-end mt-2 sm:mt-0 z-10">
-                    <Button variant={showAdvanced ? "secondary" : "outline"} size="sm" onClick={() => setShowAdvanced(!showAdvanced)} className="bg-white/80 dark:bg-secondary/50 backdrop-blur-sm border-gray-200/60 dark:border-white/10 text-slate-700 dark:text-slate-200 font-semibold hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-700 dark:hover:text-blue-300 hover:border-blue-200 dark:hover:border-blue-800 rounded-xl shadow-sm transition-all">
-                        <Settings2 className="mr-2 h-4 w-4" /> Advanced
+                <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-1.5 justify-end mt-2 sm:mt-0">
+                    <Button variant={showAdvanced ? "secondary" : "outline"} size="sm" onClick={() => setShowAdvanced(!showAdvanced)} className="rounded-lg font-medium text-xs">
+                        <Settings2 className="mr-2 h-3.5 w-3.5" /> Advanced
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={clearFilters} className="text-slate-500 dark:text-muted-foreground font-semibold hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 rounded-xl transition-colors">
-                        <X className="mr-2 h-4 w-4" /> Clear
+                    <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground font-medium hover:text-foreground rounded-lg text-xs">
+                        <X className="mr-2 h-3.5 w-3.5" /> Clear
                     </Button>
                 </div>
             </div>
 
             {/* Tabs & Table */}
             <div className="space-y-4">
-                <div className="flex gap-2 border-b border-gray-200/60 dark:border-border pb-px overflow-x-auto hide-scrollbar">
+                <div className="flex gap-0.5 border-b border-border/50 pb-0 overflow-x-auto hide-scrollbar bg-muted/50 p-0.5 rounded-lg">
                     <button
-                        className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === 'all' ? 'border-blue-600 dark:border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-500/10 rounded-t-lg' : 'border-transparent text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-white/5 rounded-t-lg'}`}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === 'all' ? 'bg-background shadow-xs text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                         onClick={() => { setActiveTab('all'); updateFilters('temperature', 'all') }}
                     >
                         All Leads
                     </button>
                     <button
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === 'hot' ? 'border-red-600 dark:border-red-500 text-red-600 dark:text-red-500 bg-red-50/50 dark:bg-red-500/10 rounded-t-lg' : 'border-transparent text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-white/5 rounded-t-lg'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === 'hot' ? 'bg-background shadow-xs text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                         onClick={() => { setActiveTab('hot'); updateFilters('temperature', 'hot') }}
                     >
-                        <ThermometerSun className="h-4 w-4" /> Hot
+                        <ThermometerSun className="h-3.5 w-3.5" /> Hot
                     </button>
                     <button
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === 'warm' ? 'border-amber-500 dark:border-amber-400 text-amber-600 dark:text-amber-500 bg-amber-50/50 dark:bg-amber-500/10 rounded-t-lg' : 'border-transparent text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-white/5 rounded-t-lg'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === 'warm' ? 'bg-background shadow-xs text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                         onClick={() => { setActiveTab('warm'); updateFilters('temperature', 'warm') }}
                     >
-                        <Thermometer className="h-4 w-4" /> Warm
+                        <Thermometer className="h-3.5 w-3.5" /> Warm
                     </button>
                     <button
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === 'cold' ? 'border-cyan-500 dark:border-cyan-400 text-cyan-600 dark:text-cyan-500 bg-cyan-50/50 dark:bg-cyan-500/10 rounded-t-lg' : 'border-transparent text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-white/5 rounded-t-lg'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === 'cold' ? 'bg-background shadow-xs text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                         onClick={() => { setActiveTab('cold'); updateFilters('temperature', 'cold') }}
                     >
-                        <ThermometerSnowflake className="h-4 w-4" /> Cold
+                        <ThermometerSnowflake className="h-3.5 w-3.5" /> Cold
                     </button>
                 </div>
 
@@ -741,14 +742,14 @@ export default function LeadsClient({
 
             {
                 selectedLeads.length > 0 && (canEdit || canDelete) && (
-                    <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl">
-                        <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                    <div className="flex items-center justify-between p-3 bg-primary/5 border border-primary/20 rounded-xl">
+                        <span className="text-sm font-medium text-primary">
                             {selectedLeads.length} leads selected
                         </span>
                         <div className="flex items-center gap-2">
                             {canEdit && (
                                 <>
-                                    <select onChange={(e) => { if (e.target.value) handleBulkStatusUpdate(e.target.value) }} className="text-sm bg-white dark:bg-secondary text-slate-700 dark:text-muted-foreground border border-blue-200 dark:border-blue-700 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+                                    <select onChange={(e) => { if (e.target.value) handleBulkStatusUpdate(e.target.value) }} className="text-sm bg-background text-foreground border border-border/60 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring/30">
                                         <option value="">Change Status...</option>
                                         {leadStatuses.map(s => {
                                             const label = s.label.toLowerCase()
@@ -768,7 +769,7 @@ export default function LeadsClient({
                                         value={bulkAssignUserId}
                                         onFocus={loadOrgMembers}
                                         onChange={(e) => { setBulkAssignUserId(e.target.value); if (e.target.value) handleBulkAssign(e.target.value) }}
-                                        className="text-sm bg-white dark:bg-secondary text-slate-700 dark:text-muted-foreground border border-blue-200 dark:border-blue-700 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                                        className="text-sm bg-background text-foreground border border-border/60 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring/30"
                                     >
                                         <option value="">Assign To Rep...</option>
                                         {orgMembers.map(m => (
@@ -789,24 +790,23 @@ export default function LeadsClient({
             }
 
             {/* Leads Display */}
-            <div className="bg-white/70 dark:bg-secondary/40 border border-gray-200/60 dark:border-white/10 shadow-xl rounded-2xl overflow-hidden backdrop-blur-2xl ring-1 ring-black/5 dark:ring-white/5 relative">
-                <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-white/10 dark:from-white/5 dark:to-transparent pointer-events-none" />
+            <div className="bg-card border border-border/50 rounded-xl overflow-hidden">
                 {filteredLeads.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-24 text-center relative z-10">
-                        <div className="h-16 w-16 bg-blue-50/50 dark:bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
-                            <ThermometerSnowflake className="h-8 w-8 text-blue-400/50" />
+                        <div className="h-12 w-12 bg-muted rounded-full flex items-center justify-center mb-3">
+                            <ThermometerSnowflake className="h-6 w-6 text-muted-foreground" />
                         </div>
-                        <h3 className="text-slate-900 dark:text-slate-200 font-bold mb-1 text-lg">All clear!</h3>
-                        <p className="text-slate-500 dark:text-muted-foreground text-sm font-medium">No leads in this category.</p>
+                        <h3 className="text-foreground font-semibold mb-1">All clear!</h3>
+                        <p className="text-sm text-muted-foreground">No leads in this category.</p>
                     </div>
                 ) : viewMode === 'board' ? (
-                    <div className="p-4 bg-gray-50/30 dark:bg-card/30 relative z-10">
+                    <div className="p-4 bg-muted/30 relative z-10">
                         <LeadsBoard initialLeads={filteredLeads} />
                     </div>
                 ) : (
                     <div className="relative z-10">
                         <Table>
-                            <TableHeader className="bg-slate-50/50 dark:bg-black/20 border-b border-gray-200/60 dark:border-white/10">
+                            <TableHeader className="bg-muted/50 border-b border-border/50">
                                 <TableRow className="hover:bg-transparent border-none">
                                     <TableHead className="w-[30px] px-2"></TableHead>
                                     <TableHead className="w-[40px] px-2">
@@ -815,30 +815,30 @@ export default function LeadsClient({
                                             onCheckedChange={handleSelectAll}
                                         />
                                     </TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('name')}>
-                                        <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">Company <ArrowUpDown className="h-3 w-3" /></div>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase cursor-pointer hover:text-foreground transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('name')}>
+                                        <div className="flex items-center gap-1.5">Company <ArrowUpDown className="h-3 w-3" /></div>
                                     </TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase hidden md:table-cell cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('contact_person')}>
-                                        <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">Contact Person <ArrowUpDown className="h-3 w-3" /></div>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase hidden md:table-cell cursor-pointer hover:text-foreground transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('contact_person')}>
+                                        <div className="flex items-center gap-1.5">Contact Person <ArrowUpDown className="h-3 w-3" /></div>
                                     </TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase hidden sm:table-cell opacity-80" style={{ padding: 'var(--table-cell-padding)' }}>Phone</TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase hidden sm:table-cell cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('location')}>
-                                        <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">Location <ArrowUpDown className="h-3 w-3" /></div>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase hidden sm:table-cell" style={{ padding: 'var(--table-cell-padding)' }}>Phone</TableHead>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase hidden sm:table-cell cursor-pointer hover:text-foreground transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('location')}>
+                                        <div className="flex items-center gap-1.5">Location <ArrowUpDown className="h-3 w-3" /></div>
                                     </TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('status')}>
-                                        <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">Status <ArrowUpDown className="h-3 w-3" /></div>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase cursor-pointer hover:text-foreground transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('status')}>
+                                        <div className="flex items-center gap-1.5">Status <ArrowUpDown className="h-3 w-3" /></div>
                                     </TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('temperature')}>
-                                        <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">Temp <ArrowUpDown className="h-3 w-3" /></div>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase cursor-pointer hover:text-foreground transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('temperature')}>
+                                        <div className="flex items-center gap-1.5">Temp <ArrowUpDown className="h-3 w-3" /></div>
                                     </TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('lead_score')}>
-                                        <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">Score & Priority <ArrowUpDown className="h-3 w-3" /></div>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase cursor-pointer hover:text-foreground transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('lead_score')}>
+                                        <div className="flex items-center gap-1.5">Score & Priority <ArrowUpDown className="h-3 w-3" /></div>
                                     </TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase opacity-80" style={{ padding: 'var(--table-cell-padding)' }}>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase" style={{ padding: 'var(--table-cell-padding)' }}>
                                         Tags
                                     </TableHead>
-                                    <TableHead className="text-slate-500 dark:text-slate-400 font-bold tracking-wider text-[11px] uppercase text-right hidden lg:table-cell cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('created_at')}>
-                                        <div className="flex items-center justify-end gap-1.5 opacity-80 hover:opacity-100 transition-opacity">Added On <ArrowUpDown className="h-3 w-3" /></div>
+                                    <TableHead className="text-muted-foreground font-medium tracking-wide text-[11px] uppercase text-right hidden lg:table-cell cursor-pointer hover:text-foreground transition-colors" style={{ padding: 'var(--table-cell-padding)' }} onClick={() => handleSort('created_at')}>
+                                        <div className="flex items-center justify-end gap-1.5">Added On <ArrowUpDown className="h-3 w-3" /></div>
                                     </TableHead>
                                     <TableHead className="w-[50px]"></TableHead>
                                 </TableRow>
@@ -846,10 +846,10 @@ export default function LeadsClient({
                             <TableBody>
                                 {filteredLeads.map((lead) => (
                                     <React.Fragment key={lead.id}>
-                                        <TableRow className="border-b border-gray-100 dark:border-border hover:bg-gray-50 dark:hover:bg-slate-800/50 transition-colors">
+                                        <TableRow className="border-b border-border/40 hover:bg-muted/50 transition-colors">
                                             <TableCell className="px-2">
                                                 <button
-                                                    className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded"
+                                                    className="text-muted-foreground hover:text-foreground rounded"
                                                     onClick={() => setExpandedRows(prev => prev.includes(lead.id) ? prev.filter(id => id !== lead.id) : [...prev, lead.id])}
                                                 >
                                                     {expandedRows.includes(lead.id) ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -882,7 +882,7 @@ export default function LeadsClient({
                                                 )}
                                             </TableCell>
                                             <TableCell
-                                                className={`text-slate-600 dark:text-muted-foreground font-medium hidden md:table-cell ${canEdit ? 'cursor-pointer' : ''}`}
+                                                className={`text-muted-foreground font-medium hidden md:table-cell ${canEdit ? 'cursor-pointer' : ''}`}
                                                 style={{ padding: 'var(--table-cell-padding)' }}
                                                 onDoubleClick={() => canEdit && setEditingCell({ id: lead.id, field: 'contact_person', value: lead.contact_person || '' })}
                                             >
@@ -900,7 +900,7 @@ export default function LeadsClient({
                                                 )}
                                             </TableCell>
                                             <TableCell
-                                                className={`text-slate-500 dark:text-muted-foreground hidden sm:table-cell ${canEdit ? 'cursor-pointer' : ''}`}
+                                                className={`text-muted-foreground hidden sm:table-cell ${canEdit ? 'cursor-pointer' : ''}`}
                                                 style={{ padding: 'var(--table-cell-padding)' }}
                                                 onDoubleClick={() => canEdit && setEditingCell({ id: lead.id, field: 'phone_number', value: formatPhoneUS(lead.phone_number || '') })}
                                             >
@@ -918,7 +918,7 @@ export default function LeadsClient({
                                                 )}
                                             </TableCell>
                                             <TableCell
-                                                className={`text-slate-500 dark:text-muted-foreground hidden sm:table-cell ${canEdit ? 'cursor-pointer' : ''}`}
+                                                className={`text-muted-foreground hidden sm:table-cell ${canEdit ? 'cursor-pointer' : ''}`}
                                                 style={{ padding: 'var(--table-cell-padding)' }}
                                                 onDoubleClick={() => canEdit && setEditingCell({ id: lead.id, field: 'location', value: lead.location || '' })}
                                             >
@@ -945,7 +945,7 @@ export default function LeadsClient({
                                                 {editingCell?.id === lead.id && editingCell?.field === 'status' ? (
                                                     <select
                                                         autoFocus
-                                                        className="h-7 text-xs px-1 w-full border border-gray-200 dark:border-border rounded bg-white dark:bg-secondary focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700 dark:text-muted-foreground"
+                                                        className="h-7 text-xs px-1 w-full border border-border/60 rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring/30"
                                                         value={editingCell.value}
                                                         onChange={(e) => setEditingCell({ ...editingCell, value: e.target.value })}
                                                         onBlur={handleInlineSave}
@@ -996,7 +996,7 @@ export default function LeadsClient({
                                                 {editingCell?.id === lead.id && editingCell?.field === 'temperature' ? (
                                                     <select
                                                         autoFocus
-                                                        className="h-7 text-xs px-1 w-full border border-gray-200 dark:border-border rounded bg-white dark:bg-secondary focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700 dark:text-muted-foreground"
+                                                        className="h-7 text-xs px-1 w-full border border-border/60 rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring/30"
                                                         value={editingCell.value}
                                                         onChange={(e) => setEditingCell({ ...editingCell, value: e.target.value })}
                                                         onBlur={handleInlineSave}

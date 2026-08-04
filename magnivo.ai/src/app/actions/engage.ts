@@ -34,7 +34,27 @@ async function getCurrentActor() {
   const session = await getSessionUser()
   if (!session) throw new Error('Authentication required')
   if (!session.orgId) throw new Error('No organization found')
-  return { userId: session.userId, orgId: session.orgId }
+  return { userId: session.userId, orgId: session.orgId, role: session.role }
+}
+
+async function requireMailWrite() {
+  const actor = await getCurrentActor()
+  const { resolveMailPermissions, hasMailPermission } = await import('@/lib/mail-permissions')
+  const perms = resolveMailPermissions(actor.role)
+  if (!hasMailPermission(perms, 'mail.write')) {
+    throw new Error('Permission denied')
+  }
+  return actor
+}
+
+export async function getMailPermissionsForClient() {
+  try {
+    const actor = await getCurrentActor()
+    const { resolveMailPermissions } = await import('@/lib/mail-permissions')
+    return resolveMailPermissions(actor.role)
+  } catch {
+    return { canRead: false, canWrite: false, canManage: false, canAdmin: false }
+  }
 }
 
 export async function upsertGmailMailbox(input: {
@@ -51,6 +71,63 @@ export async function upsertGmailMailbox(input: {
     : null
   const now = new Date().toISOString()
 
+  const { encrypt } = await import('@/lib/encryption')
+  let encryptedAccess: string | null = null
+  let encryptedRefresh: string | null = null
+  try {
+    encryptedAccess = encrypt(input.accessToken)
+    encryptedRefresh = input.refreshToken ? encrypt(input.refreshToken) : null
+  } catch (err) {
+    // MAIL_ENCRYPTION_KEY may be unset in some envs — fall back to legacy columns only
+    const { safeLogMessage } = await import('@/lib/credential-safety')
+    console.error('[engage] token encryption unavailable:', safeLogMessage(err))
+  }
+
+  // Prefer encrypted dual-write when columns exist; otherwise legacy plaintext path.
+  if (encryptedAccess) {
+    try {
+      await pool.query(
+        `INSERT INTO public.engage_mailboxes
+         (user_id, organization_id, provider, email, access_token, refresh_token, token_type, scope, expires_at,
+          encrypted_access_token, encrypted_refresh_token, tokens_encrypted_at, updated_at, connected_at)
+         VALUES ($1,$2,'gmail',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         ON CONFLICT (user_id, provider, email) DO UPDATE SET
+           access_token = EXCLUDED.access_token,
+           refresh_token = EXCLUDED.refresh_token,
+           token_type = EXCLUDED.token_type,
+           scope = EXCLUDED.scope,
+           expires_at = EXCLUDED.expires_at,
+           encrypted_access_token = COALESCE(EXCLUDED.encrypted_access_token, engage_mailboxes.encrypted_access_token),
+           encrypted_refresh_token = COALESCE(EXCLUDED.encrypted_refresh_token, engage_mailboxes.encrypted_refresh_token),
+           tokens_encrypted_at = COALESCE(EXCLUDED.tokens_encrypted_at, engage_mailboxes.tokens_encrypted_at),
+           updated_at = EXCLUDED.updated_at,
+           connected_at = EXCLUDED.connected_at`,
+        [
+          userId,
+          orgId,
+          input.email,
+          '',
+          encryptedRefresh ? '' : (input.refreshToken ?? null),
+          input.tokenType ?? 'Bearer',
+          input.scope ?? null,
+          expiresAt,
+          encryptedAccess,
+          encryptedRefresh,
+          now,
+          now,
+          now,
+        ]
+      )
+      return
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!/encrypted_access_token|encrypted_refresh_token|tokens_encrypted_at/i.test(message)) {
+        throw err
+      }
+      // Migration not applied yet — fall through to legacy write
+    }
+  }
+
   await pool.query(
     `INSERT INTO public.engage_mailboxes
      (user_id, organization_id, provider, email, access_token, refresh_token, token_type, scope, expires_at, updated_at, connected_at)
@@ -63,20 +140,39 @@ export async function upsertGmailMailbox(input: {
        expires_at = EXCLUDED.expires_at,
        updated_at = EXCLUDED.updated_at,
        connected_at = EXCLUDED.connected_at`,
-    [userId, orgId, input.email, input.accessToken, input.refreshToken ?? null,
-     input.tokenType ?? 'Bearer', input.scope ?? null, expiresAt, now, now])
+    [
+      userId,
+      orgId,
+      input.email,
+      input.accessToken,
+      input.refreshToken ?? null,
+      input.tokenType ?? 'Bearer',
+      input.scope ?? null,
+      expiresAt,
+      now,
+      now,
+    ]
+  )
 }
 
-export async function getGmailMailbox() {
+/** Internal row with credentials — never return this from client-facing exports. */
+async function fetchGmailMailboxRow(): Promise<Record<string, unknown> | null> {
   const { userId } = await getCurrentActor()
   const r = await pool.query(
     `SELECT * FROM public.engage_mailboxes WHERE user_id = $1 AND provider = 'gmail' ORDER BY connected_at DESC LIMIT 1`,
-    [userId])
-  return r.rows[0] ?? null
+    [userId]
+  )
+  return (r.rows[0] as Record<string, unknown> | undefined) ?? null
+}
+
+/** Public mailbox snapshot — credentials stripped (PRD §6.1.12). */
+export async function getGmailMailbox() {
+  const { toPublicEngageMailbox } = await import('@/lib/credential-safety')
+  return toPublicEngageMailbox(await fetchGmailMailboxRow())
 }
 
 export async function getMailboxSyncStatus() {
-  const mailbox = await getGmailMailbox()
+  const mailbox = await fetchGmailMailboxRow()
   if (!mailbox) return null
   return {
     email: mailbox.email as string,
@@ -102,26 +198,92 @@ export async function getGmailMailboxes(): Promise<
 }
 
 export async function getValidGmailAccessToken() {
-  const mailbox = await getGmailMailbox()
+  const mailbox = await fetchGmailMailboxRow()
   if (!mailbox) throw new Error('No Gmail mailbox connected')
 
-  const exp = mailbox.expires_at ? new Date(mailbox.expires_at).getTime() : 0
-  const soon = Date.now() + 30_000
-  if (mailbox.access_token && exp > soon) return mailbox.access_token as string
+  let accessToken = (mailbox.access_token as string | null) || null
+  let refreshToken = (mailbox.refresh_token as string | null) || null
 
-  if (!mailbox.refresh_token) throw new Error('Gmail refresh token missing')
-  const refreshed = await refreshAccessToken(mailbox.refresh_token as string)
+  // Only attempt decrypt when encrypted columns are present (migration applied)
+  if (mailbox.encrypted_access_token || mailbox.encrypted_refresh_token) {
+    try {
+      const { decrypt } = await import('@/lib/encryption')
+      if (mailbox.encrypted_access_token) {
+        accessToken = decrypt(mailbox.encrypted_access_token as string)
+      }
+      if (mailbox.encrypted_refresh_token) {
+        refreshToken = decrypt(mailbox.encrypted_refresh_token as string)
+      }
+    } catch {
+      // fall back to legacy plaintext columns
+    }
+  }
+
+  const exp = mailbox.expires_at ? new Date(mailbox.expires_at as string).getTime() : 0
+  const soon = Date.now() + 30_000
+  if (accessToken && exp > soon) return accessToken
+
+  if (!refreshToken) throw new Error('Gmail refresh token missing')
+  const refreshed = await refreshAccessToken(refreshToken)
   const expiresAt = new Date(Date.now() + (refreshed.expires_in ?? 3600) * 1000).toISOString()
+
+  let encryptedAccess: string | null = null
+  let encryptedRefresh: string | null = null
+  try {
+    const { encrypt } = await import('@/lib/encryption')
+    encryptedAccess = encrypt(refreshed.access_token)
+    encryptedRefresh = encrypt(refreshToken)
+  } catch {
+    // encryption optional
+  }
+
+  // Try encrypted dual-write first; fall back if migration not applied
+  if (encryptedAccess) {
+    try {
+      await pool.query(
+        `UPDATE public.engage_mailboxes SET
+           access_token=$1, token_type=$2, scope=$3, expires_at=$4, updated_at=$5,
+           encrypted_access_token = COALESCE($7, encrypted_access_token),
+           encrypted_refresh_token = COALESCE($8, encrypted_refresh_token),
+           tokens_encrypted_at = CASE WHEN $7 IS NOT NULL THEN NOW() ELSE tokens_encrypted_at END
+         WHERE id=$6`,
+        [
+          '',
+          refreshed.token_type ?? 'Bearer',
+          refreshed.scope ?? mailbox.scope,
+          expiresAt,
+          new Date().toISOString(),
+          mailbox.id,
+          encryptedAccess,
+          encryptedRefresh,
+        ]
+      )
+      return refreshed.access_token
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!/encrypted_access_token|encrypted_refresh_token|tokens_encrypted_at/i.test(message)) {
+        throw err
+      }
+    }
+  }
 
   await pool.query(
     `UPDATE public.engage_mailboxes SET access_token=$1, token_type=$2, scope=$3, expires_at=$4, updated_at=$5 WHERE id=$6`,
-    [refreshed.access_token, refreshed.token_type ?? 'Bearer', refreshed.scope ?? mailbox.scope, expiresAt, new Date().toISOString(), mailbox.id])
+    [
+      refreshed.access_token,
+      refreshed.token_type ?? 'Bearer',
+      refreshed.scope ?? mailbox.scope,
+      expiresAt,
+      new Date().toISOString(),
+      mailbox.id,
+    ]
+  )
 
   return refreshed.access_token
 }
 
 export async function registerGmailWatch() {
-  const mailbox = await getGmailMailbox()
+  const mailbox = await fetchGmailMailboxRow()
   if (!mailbox) throw new Error('No Gmail mailbox connected')
   const accessToken = await getValidGmailAccessToken()
   const watch = await startGmailWatch(accessToken)
@@ -139,7 +301,7 @@ export async function registerGmailWatch() {
 }
 
 export async function resyncMailboxNow() {
-  const mailbox = await getGmailMailbox()
+  const mailbox = await fetchGmailMailboxRow()
   if (!mailbox) throw new Error('No Gmail mailbox connected')
   const accessToken = await getValidGmailAccessToken()
   // syncMailboxEmails uses supabase internally — external lib compat
@@ -1331,6 +1493,7 @@ export async function getEmailAccounts(): Promise<EmailAccount[]> {
         mb.gmail_watch_expiration && new Date(String(mb.gmail_watch_expiration)).getTime() > Date.now(),
       ),
       dailySendLimit: Number(mb.daily_send_limit ?? 50),
+      hourlySendLimit: Number((mb as { hourly_send_limit?: number }).hourly_send_limit ?? 20),
       sentToday: sentTodayByMailbox[id] ?? 0,
       warmupEnabled: Boolean(mb.warmup_enabled),
       warmupStartedAt: mb.warmup_started_at ? String(mb.warmup_started_at) : null,
@@ -1357,14 +1520,15 @@ export async function updateAccountSettings(
 ): Promise<{ error?: string }> {
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor())
-  } catch {
-    return { error: 'Unauthorized' }
+    ;({ orgId } = await requireMailWrite())
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Unauthorized' }
   }
 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (settings.status !== undefined) patch.status = settings.status
   if (settings.dailySendLimit !== undefined) patch.daily_send_limit = settings.dailySendLimit
+  // hourly_send_limit lives on mail_mailboxes (engage column requires DBA); synced below
   if (settings.warmupEnabled !== undefined) {
     patch.warmup_enabled = settings.warmupEnabled
     if (settings.warmupEnabled && !patch.warmup_started_at) {
@@ -1384,6 +1548,32 @@ export async function updateAccountSettings(
     await pool.query(
       `UPDATE public.engage_mailboxes SET ${sets} WHERE id = $${keys.length + 1} AND organization_id = $${keys.length + 2}`,
       [...vals, id, orgId])
+
+    if (settings.hourlySendLimit !== undefined || settings.dailySendLimit !== undefined) {
+      const emailRes = await pool.query<{ email: string }>(
+        `SELECT email FROM public.engage_mailboxes WHERE id = $1 AND organization_id = $2`,
+        [id, orgId]
+      )
+      const email = emailRes.rows[0]?.email
+      if (email) {
+        await pool
+          .query(
+            `UPDATE public.mail_mailboxes
+             SET hourly_send_limit = COALESCE($3, hourly_send_limit),
+                 daily_limit = COALESCE($4, daily_limit),
+                 updated_at = NOW()
+             WHERE organization_id = $1 AND LOWER(email) = LOWER($2) AND deleted_at IS NULL`,
+            [
+              orgId,
+              email,
+              settings.hourlySendLimit ?? null,
+              settings.dailySendLimit ?? null,
+            ]
+          )
+          .catch(() => {})
+      }
+    }
+
     revalidatePath('/engage/accounts')
     return {}
   } catch (err: any) {
@@ -1398,9 +1588,9 @@ export async function bulkUpdateAccounts(
   if (!ids.length) return {}
   let orgId: string
   try {
-    ;({ orgId } = await getCurrentActor())
-  } catch {
-    return { error: 'Unauthorized' }
+    ;({ orgId } = await requireMailWrite())
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Unauthorized' }
   }
 
   let patch: Record<string, unknown> = { updated_at: new Date().toISOString() }

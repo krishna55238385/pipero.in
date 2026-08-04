@@ -10,9 +10,7 @@ import {
     Link,
     Bot,
     Shield,
-    Search,
     ChevronRight,
-    Search as SearchIcon
 } from 'lucide-react'
 import MyProfile from './MyProfile'
 import NotificationPreferences from './NotificationPreferences'
@@ -24,14 +22,14 @@ import ApiKeysSettings from './ApiKeysSettings'
 
 const NAV_ITEMS = [
     {
-        section: 'PERSONAL', items: [
+        section: 'Personal', items: [
             { id: 'profile', name: 'My Profile', icon: User },
             { id: 'appearance', name: 'Appearance', icon: Palette },
             { id: 'notifications', name: 'Notifications', icon: Bell },
         ]
     },
     {
-        section: 'WORKSPACE', items: [
+        section: 'Workspace', items: [
             { id: 'workspace', name: 'Workspace', icon: Building },
             { id: 'users', name: 'Users & Roles', icon: UsersIcon },
             { id: 'leads', name: 'Lead Management', icon: Link },
@@ -39,7 +37,7 @@ const NAV_ITEMS = [
         ]
     },
     {
-        section: 'SYSTEM', items: [
+        section: 'System', items: [
             { id: 'security', name: 'Security', icon: Shield },
         ]
     }
@@ -68,13 +66,13 @@ export default function SettingsContainer({
             case 'leads': return <LeadManagement />
             case 'ai': return <ApiKeysSettings />
             default: return (
-                <div className="h-96 flex flex-col items-center justify-center border-2 border-dashed border-slate-200 dark:border-border rounded-3xl bg-slate-50/50 dark:bg-card/50">
-                    <div className="p-4 bg-white dark:bg-card rounded-2xl shadow-sm mb-4">
-                        <Shield className="w-8 h-8 text-slate-300 dark:text-slate-700" />
+                <div className="h-80 flex flex-col items-center justify-center rounded-xl bg-muted/30 animate-fade-in">
+                    <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center mb-3">
+                        <Shield className="w-5 h-5 text-muted-foreground" />
                     </div>
-                    <h3 className="text-xl font-semibold text-slate-900 dark:text-foreground">Module Coming Soon</h3>
-                    <p className="text-sm text-slate-500 dark:text-muted-foreground max-w-xs text-center mt-2">
-                        We are building this domain to enterprise specifications. Check back shortly.
+                    <h3 className="text-sm font-semibold text-foreground">Coming Soon</h3>
+                    <p className="text-xs text-muted-foreground max-w-[200px] text-center mt-1">
+                        This module is under development.
                     </p>
                 </div>
             )
@@ -82,33 +80,38 @@ export default function SettingsContainer({
     }
 
     return (
-        <div className="min-h-screen bg-[#f8fafc] dark:bg-background transition-colors duration-300">
-            <div className="flex p-8 gap-12 max-w-[1600px] mx-auto w-full">
+        <div className="min-h-[calc(100vh-3.5rem)] bg-background transition-colors duration-300">
+            <div className="flex flex-col sm:flex-row p-4 sm:p-6 lg:p-8 gap-6 lg:gap-10 max-w-[1400px] mx-auto w-full">
                 {/* Sidebar Navigation */}
-                <div className="w-64 space-y-8 flex-shrink-0">
+                <div className="w-full sm:w-52 lg:w-56 space-y-6 flex-shrink-0">
                     <div className="space-y-1">
-                        <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-foreground">Settings</h1>
-                        <p className="text-sm font-medium text-slate-500 dark:text-muted-foreground">Manage your personal and workspace settings.</p>
+                        <h1 className="text-xl font-bold tracking-tight text-foreground">Settings</h1>
+                        <p className="text-sm text-muted-foreground">Manage your preferences.</p>
                     </div>
 
-                    <nav className="space-y-8 mt-12">
+                    <nav className="space-y-5">
                         {NAV_ITEMS.map((section) => (
-                            <div key={section.section} className="space-y-1.5">
-                                <div className="h-px bg-slate-100 dark:bg-secondary my-4" />
+                            <div key={section.section} className="space-y-0.5">
+                                <div className="px-2.5 mb-1.5">
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                                        {section.section}
+                                    </span>
+                                </div>
                                 {section.items.map((item) => {
                                     const active = activeTab === item.id
                                     return (
                                         <button
                                             key={item.id}
                                             onClick={() => setActiveTab(item.id)}
-                                            className={`w-full flex items-center gap-3.5 p-2.5 px-4 rounded-xl transition-all group font-medium text-sm ${active
-                                                ? 'bg-white dark:bg-card shadow-[0_2px_10px_-4px_rgba(0,0,0,0.1)] text-[#4f46e5] ring-1 ring-slate-200 dark:ring-slate-800'
-                                                : 'text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-900/50'
-                                                }`}
+                                            className={`w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg transition-all duration-200 font-medium text-[13px] cursor-pointer ${
+                                                active
+                                                    ? 'bg-primary/8 text-primary'
+                                                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                                            }`}
                                         >
-                                            <item.icon className={`w-4.5 h-4.5 ${active ? 'text-[#4f46e5]' : 'text-slate-400 dark:text-slate-600 group-hover:text-slate-600 dark:group-hover:text-slate-400'}`} />
+                                            <item.icon className={`w-4 h-4 ${active ? 'text-primary' : ''}`} />
                                             {item.name}
-                                            {active && <ChevronRight className="w-3.5 h-3.5 ml-auto opacity-50" />}
+                                            {active && <ChevronRight className="w-3.5 h-3.5 ml-auto opacity-30" />}
                                         </button>
                                     )
                                 })}
@@ -118,11 +121,10 @@ export default function SettingsContainer({
                 </div>
 
                 {/* Main Content Area */}
-                <div className="flex-1 max-w-4xl">
+                <div className="flex-1 max-w-4xl min-w-0">
                     {renderContent()}
                 </div>
             </div>
         </div>
     )
 }
-

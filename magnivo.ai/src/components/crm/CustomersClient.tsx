@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
+import { Users } from 'lucide-react'
 import { createCustomer, deleteCustomer, updateCustomer } from '@/app/actions/crm'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -116,8 +117,11 @@ export default function CustomersClient({ customers, companies, contacts, leads 
         </CardHeader>
         <CardContent>
           {customers.length === 0 ? (
-            <div className="py-12 text-center">
-              <p className="text-sm font-medium text-muted-foreground">No customers yet</p>
+            <div className="py-16 text-center">
+              <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-3">
+                <Users className="h-5 w-5 text-primary" />
+              </div>
+              <p className="text-sm font-semibold text-foreground">No customers yet</p>
               <p className="text-xs text-muted-foreground mt-1">Convert a lead or create a customer above to get started.</p>
             </div>
           ) : (

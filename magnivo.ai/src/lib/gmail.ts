@@ -55,13 +55,13 @@ async function gmailFetch<T>(path: string, accessToken: string, init?: RequestIn
 }
 
 export function getGmailScopes() {
+  // PRD §6.1 / §7: minimum-necessary scopes only (send + readonly)
   return [
     'openid',
     'email',
     'profile',
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.send',
-    'https://www.googleapis.com/auth/gmail.modify',
   ]
 }
 
@@ -289,6 +289,12 @@ function buildMimeMessage(payload: ComposePayload, attachments: Array<{ meta: En
   if (payload.inReplyTo) {
     headers.push(`In-Reply-To: ${payload.inReplyTo}`)
     headers.push(`References: ${payload.references || payload.inReplyTo}`)
+  }
+  if (payload.headers) {
+    for (const [key, value] of Object.entries(payload.headers)) {
+      if (!value) continue
+      headers.push(`${key}: ${value}`)
+    }
   }
 
   if (!attachments.length) {

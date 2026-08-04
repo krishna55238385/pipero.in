@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase/service'
+import { createClient } from '@/lib/supabase/server'
 
 // 1x1 transparent GIF served to record an email open.
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
 
   try {
     if (email || campaignId) {
-      const supabase = createServiceClient()
+      const supabase = await createClient()
       const { data: org } = await supabase.from('organizations').select('id').limit(1).single()
       const base = {
         organization_id: org?.id ?? null,

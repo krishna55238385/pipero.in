@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, useMemo } from 'react'
+import { useState, useTransition, useMemo, useEffect } from 'react'
 import {
   updateAccountSettings,
   bulkUpdateAccounts,
@@ -9,6 +9,7 @@ import {
   createAccountTag,
 } from '@/app/actions/engage'
 import type { EmailAccount, AccountTag, AccountSettingsInput, AccountStatus } from '@/types/engage'
+import type { MailUserPermissions } from '@/types/mail'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -51,8 +52,10 @@ import {
   Flame,
   Activity,
   RefreshCw,
+  CheckCircle2,
+  X,
 } from 'lucide-react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -112,7 +115,13 @@ const STATUS_CLASS: Record<AccountStatus, string> = {
   error: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400',
   disconnected: 'bg-slate-100 text-slate-500 dark:bg-slate-900 dark:text-slate-500',
 }
-const PROVIDER_ICON: Record<string, string> = { gmail: 'G', smtp: 'S', microsoft: 'M' }
+const PROVIDER_ICON: Record<string, string> = {
+  gmail: 'G',
+  smtp: 'S',
+  microsoft: 'M',
+  outlook: 'M',
+  zoho: 'Z',
+}
 
 // ─── Tag pill ─────────────────────────────────────────────────────────────────
 
@@ -161,6 +170,7 @@ function SettingsDrawer({
 
   const merged = {
     dailySendLimit: form.dailySendLimit ?? account.dailySendLimit,
+    hourlySendLimit: form.hourlySendLimit ?? account.hourlySendLimit ?? 20,
     warmupEnabled: form.warmupEnabled ?? account.warmupEnabled,
     warmupDailyLimit: form.warmupDailyLimit ?? account.warmupDailyLimit,
     warmupReplyRate: form.warmupReplyRate ?? account.warmupReplyRate,
@@ -305,6 +315,27 @@ function SettingsDrawer({
             </div>
           </div>
 
+          {/* Hourly send limit */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Hourly send limit</Label>
+            <p className="text-xs text-muted-foreground">
+              Cap sends per rolling hour. Enforced at dispatch time (defaults to ~daily/8).
+            </p>
+            <div className="flex items-center gap-3">
+              <Slider
+                min={1}
+                max={200}
+                step={1}
+                value={[merged.hourlySendLimit ?? account.hourlySendLimit ?? 20]}
+                onValueChange={([v]) => setForm((f) => ({ ...f, hourlySendLimit: v }))}
+                className="flex-1"
+              />
+              <span className="text-sm font-semibold w-10 text-right tabular-nums">
+                {merged.hourlySendLimit ?? account.hourlySendLimit ?? 20}
+              </span>
+            </div>
+          </div>
+
           {/* Warmup toggle */}
           <div className="flex items-center justify-between rounded-xl border p-4">
             <div>
@@ -445,11 +476,16 @@ function SettingsDrawer({
 export default function AccountsListClient({
   initialAccounts,
   availableTags,
+  permissions = { canRead: true, canWrite: true, canManage: true, canAdmin: false },
 }: {
   initialAccounts: EmailAccount[]
   availableTags: AccountTag[]
+  permissions?: MailUserPermissions
 }) {
+  const canWrite = permissions.canWrite
+  const canManage = permissions.canManage
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [pending, startTransition] = useTransition()
   const [accounts] = useState(initialAccounts)
   const [search, setSearch] = useState('')
@@ -459,6 +495,42 @@ export default function AccountsListClient({
   const [editAccount, setEditAccount] = useState<EmailAccount | null>(null)
   const [newTagName, setNewTagName] = useState('')
   const [addingTag, setAddingTag] = useState(false)
+  const [banner, setBanner] = useState<{ tone: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    const connected = searchParams.get('connected')
+    const email = searchParams.get('email')
+    const error = searchParams.get('error')
+    const verified = searchParams.get('verified')
+    if (error) {
+      setBanner({
+        tone: 'error',
+        text:
+          error === 'oauth_denied'
+            ? 'Google consent was denied. No mailbox was created — try again when ready.'
+            : `Connection failed: ${decodeURIComponent(error)}`,
+      })
+      return
+    }
+    if (connected === 'gmail' || connected === 'outlook' || connected === 'microsoft') {
+      const label =
+        connected === 'gmail' ? 'Gmail' : connected === 'outlook' || connected === 'microsoft' ? 'Outlook' : connected
+      setBanner({
+        tone: 'success',
+        text: email
+          ? `${email} connected via ${label}${verified === '1' ? ' and verified for send + inbox read' : ''}. Status: Connected.`
+          : `${label} account connected. Status: Connected.`,
+      })
+    }
+    if (connected === 'zoho' || connected === 'smtp') {
+      setBanner({
+        tone: 'success',
+        text: email
+          ? `${email} connected (${connected}). Status: Connected.`
+          : `Account connected (${connected}). Status: Connected.`,
+      })
+    }
+  }, [searchParams])
 
   const filtered = useMemo(() => {
     return accounts.filter((a) => {
@@ -532,15 +604,42 @@ export default function AccountsListClient({
           </Button>
           <Button
             size="sm"
+            disabled={!canWrite}
+            title={!canWrite ? 'You need write permission to add accounts' : undefined}
             onClick={() => {
-              window.location.href = '/api/engage/gmail/connect?returnTo=/engage/accounts'
+              if (!canWrite) return
+              router.push('/engage/accounts/add')
             }}
           >
             <Plus className="w-3.5 h-3.5 mr-1.5" />
-            Connect account
+            Add account
           </Button>
         </div>
       </div>
+
+      {banner && (
+        <div
+          className={`mx-6 mt-4 flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${
+            banner.tone === 'success'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
+              : 'border-destructive/30 bg-destructive/5 text-destructive'
+          }`}
+          role="status"
+        >
+          {banner.tone === 'success' ? (
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+          ) : null}
+          <p className="flex-1">{banner.text}</p>
+          <button
+            type="button"
+            className="rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10"
+            aria-label="Dismiss"
+            onClick={() => setBanner(null)}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Filter bar */}
       <div className="flex items-center gap-3 px-6 py-3 border-b bg-muted/30">
@@ -603,7 +702,7 @@ export default function AccountsListClient({
       </div>
 
       {/* Bulk action toolbar */}
-      {selectedIds.size > 0 && (
+      {selectedIds.size > 0 && canWrite && (
         <div className="flex items-center gap-2 px-6 py-2 bg-indigo-50 dark:bg-indigo-950/40 border-b border-indigo-100 dark:border-indigo-900">
           <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">
             {selectedIds.size} selected
@@ -614,7 +713,8 @@ export default function AccountsListClient({
               variant="outline"
               className="h-7 text-xs"
               onClick={() => runBulk('enable_warmup')}
-              disabled={pending}
+              disabled={pending || !canManage}
+              title={!canManage ? 'Manage permission required for warmup controls' : undefined}
             >
               <Flame className="w-3 h-3 mr-1 text-orange-500" />
               Enable warmup
@@ -624,7 +724,7 @@ export default function AccountsListClient({
               variant="outline"
               className="h-7 text-xs"
               onClick={() => runBulk('pause_warmup')}
-              disabled={pending}
+              disabled={pending || !canManage}
             >
               <ZapOff className="w-3 h-3 mr-1" />
               Pause warmup
@@ -669,15 +769,18 @@ export default function AccountsListClient({
             <p className="text-sm font-medium text-muted-foreground">
               {accounts.length === 0 ? 'No accounts connected yet' : 'No accounts match your filters'}
             </p>
-            {accounts.length === 0 && (
+            {accounts.length === 0 && canWrite && (
               <Button
                 size="sm"
                 onClick={() => {
-                  window.location.href = '/api/engage/gmail/connect?returnTo=/engage/accounts'
+                  router.push('/engage/accounts/add')
                 }}
               >
                 Connect your first account
               </Button>
+            )}
+            {accounts.length === 0 && !canWrite && (
+              <p className="text-xs text-muted-foreground">Ask an admin to connect mailboxes.</p>
             )}
           </div>
         ) : (
@@ -820,6 +923,7 @@ export default function AccountsListClient({
 
                   {/* Row actions */}
                   <td className="px-4 py-3">
+                    {canWrite ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon" className="h-7 w-7">
@@ -831,6 +935,7 @@ export default function AccountsListClient({
                           <Activity className="w-3.5 h-3.5 mr-2" />
                           Account settings
                         </DropdownMenuItem>
+                        {canManage && (
                         <DropdownMenuItem
                           onClick={() =>
                             startTransition(async () => {
@@ -851,6 +956,7 @@ export default function AccountsListClient({
                             </>
                           )}
                         </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           onClick={() =>
@@ -874,6 +980,9 @@ export default function AccountsListClient({
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">View only</span>
+                    )}
                   </td>
                 </tr>
               ))}

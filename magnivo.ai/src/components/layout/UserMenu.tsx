@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { LogOut } from 'lucide-react'
+import { LogOut, Settings } from 'lucide-react'
 
 export function UserMenu({ fullName, email }: { fullName?: string | null; email?: string | null }) {
     const [open, setOpen] = useState(false)
@@ -29,21 +29,28 @@ export function UserMenu({ fullName, email }: { fullName?: string | null; email?
         <div className="relative" ref={ref}>
             <button
                 onClick={() => setOpen((v) => !v)}
-                className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 text-sm font-semibold text-white"
+                className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 text-sm font-semibold text-white cursor-pointer transition-all duration-200 hover:shadow-md hover:shadow-blue-500/20 active:scale-95"
             >
                 {initial}
             </button>
             {open && (
-                <div className="absolute right-0 mt-2 w-48 rounded-xl border border-gray-200 dark:border-border bg-white dark:bg-card shadow-lg py-1 z-50">
+                <div className="absolute right-0 mt-2 w-52 rounded-xl border border-border/40 bg-card shadow-lg shadow-black/5 py-1 z-50 animate-scale-in">
                     {(fullName || email) && (
-                        <div className="px-3 py-2 border-b border-gray-100 dark:border-border">
-                            {fullName && <p className="text-sm font-medium text-gray-900 dark:text-foreground truncate">{fullName}</p>}
-                            {email && <p className="text-xs text-gray-500 dark:text-muted-foreground truncate">{email}</p>}
+                        <div className="px-3 py-2.5 border-b border-border/20">
+                            {fullName && <p className="text-sm font-medium text-foreground truncate">{fullName}</p>}
+                            {email && <p className="text-xs text-muted-foreground truncate mt-0.5">{email}</p>}
                         </div>
                     )}
                     <button
+                        onClick={() => { setOpen(false); router.push('/settings') }}
+                        className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+                    >
+                        <Settings className="h-4 w-4" />
+                        Settings
+                    </button>
+                    <button
                         onClick={handleLogout}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-foreground hover:bg-gray-50 dark:hover:bg-muted"
+                        className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
                     >
                         <LogOut className="h-4 w-4" />
                         Sign out

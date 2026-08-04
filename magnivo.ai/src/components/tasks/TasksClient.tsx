@@ -165,32 +165,32 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
     })
 
     return (
-        <div className="space-y-6 max-w-5xl mx-auto">
-            <div className="flex justify-between items-end">
+        <div className="space-y-5 max-w-5xl mx-auto">
+            <div className="flex justify-between items-start">
                 <div>
-                    <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-foreground">Tasks Command Center</h1>
-                    <div className="flex items-center gap-6 mt-3 text-sm font-medium text-slate-500 dark:text-muted-foreground">
-                        <div className="flex items-center gap-2">
-                            <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-500" />
-                            <span className="text-slate-900 dark:text-foreground">{activeTasks.length}</span> tasks active
+                    <h1 className="text-xl font-semibold text-foreground">Tasks</h1>
+                    <div className="flex items-center gap-4 mt-1 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-1.5">
+                            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                            <span><strong className="text-foreground">{activeTasks.length}</strong> active</span>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <Clock className="h-4 w-4 text-blue-600 dark:text-blue-500" />
-                            <span className="text-slate-900 dark:text-foreground">~{activeTasks.length * 0.5}h</span> estimated
+                        <div className="flex items-center gap-1.5">
+                            <Clock className="h-4 w-4 text-blue-500" />
+                            <span>~{activeTasks.length * 0.5}h estimated</span>
                         </div>
                     </div>
                 </div>
                 {canCreate && (
                     <Dialog open={isOpen} onOpenChange={setIsOpen}>
                         <DialogTrigger asChild>
-                            <Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20 rounded-xl">
+                            <Button className="rounded-lg bg-primary text-primary-foreground shadow-xs">
                                 <Plus className="mr-2 h-4 w-4" /> Add Task
                             </Button>
                         </DialogTrigger>
-                        <DialogContent className="sm:max-w-[425px] bg-white dark:bg-card border-gray-200 dark:border-border text-slate-900 dark:text-foreground shadow-xl rounded-2xl">
+                        <DialogContent className="sm:max-w-[425px]">
                         <DialogHeader>
                             <DialogTitle>Create New Task</DialogTitle>
-                            <DialogDescription className="text-slate-500 dark:text-muted-foreground">
+                            <DialogDescription className="text-muted-foreground">
                                 Schedule a follow-up or internal to-do.
                             </DialogDescription>
                         </DialogHeader>
@@ -198,19 +198,19 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
                             <div className="grid gap-4 py-4">
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="title" className="text-right font-medium">Title</Label>
-                                    <Input id="title" name="title" placeholder="Call client back" className="col-span-3 bg-gray-50 dark:bg-secondary/50 border-gray-200 dark:border-border focus:ring-blue-500 rounded-xl" required />
+                                    <Input id="title" name="title" placeholder="Call client back" className="col-span-3" required />
                                 </div>
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="due_date" className="text-right font-medium">Due Date</Label>
-                                    <Input id="due_date" name="due_date" type="datetime-local" className="col-span-3 bg-gray-50 dark:bg-secondary/50 border-gray-200 dark:border-border focus:ring-blue-500 rounded-xl [color-scheme:light] dark:[color-scheme:dark]" />
+                                    <Input id="due_date" name="due_date" type="datetime-local" className="col-span-3 [color-scheme:light] dark:[color-scheme:dark]" />
                                 </div>
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="priority" className="text-right font-medium">Priority</Label>
                                     <Select name="priority" defaultValue="normal">
-                                        <SelectTrigger className="col-span-3 bg-gray-50 dark:bg-secondary/50 border-gray-200 dark:border-border rounded-xl focus:ring-blue-500">
+                                        <SelectTrigger className="col-span-3">
                                             <SelectValue placeholder="Select Priority" />
                                         </SelectTrigger>
-                                        <SelectContent className="bg-white dark:bg-secondary border-gray-200 dark:border-border text-slate-900 dark:text-foreground rounded-xl">
+                                        <SelectContent>
                                             <SelectItem value="low">Low</SelectItem>
                                             <SelectItem value="normal">Normal</SelectItem>
                                             <SelectItem value="high">High</SelectItem>
@@ -220,10 +220,10 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="lead_id" className="text-right font-medium">Lead</Label>
                                     <Select name="lead_id">
-                                        <SelectTrigger className="col-span-3 bg-gray-50 dark:bg-secondary/50 border-gray-200 dark:border-border rounded-xl focus:ring-blue-500">
+                                        <SelectTrigger className="col-span-3">
                                             <SelectValue placeholder="Select a Lead (Optional)" />
                                         </SelectTrigger>
-                                        <SelectContent className="bg-white dark:bg-secondary border-gray-200 dark:border-border text-slate-900 dark:text-foreground rounded-xl">
+                                        <SelectContent>
                                             {leads.map(lead => (
                                                 <SelectItem key={lead.id} value={lead.id}>{lead.name}</SelectItem>
                                             ))}
@@ -234,10 +234,10 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="assigned_to" className="text-right font-medium">Assign To</Label>
                                     <Select name="assigned_to" defaultValue="none">
-                                        <SelectTrigger className="col-span-3 bg-gray-50 dark:bg-secondary/50 border-gray-200 dark:border-border rounded-xl focus:ring-blue-500">
+                                        <SelectTrigger className="col-span-3">
                                             <SelectValue placeholder="Select a Rep (Optional)" />
                                         </SelectTrigger>
-                                        <SelectContent className="bg-white dark:bg-secondary border-gray-200 dark:border-border text-slate-900 dark:text-foreground rounded-xl">
+                                        <SelectContent>
                                             {members.map(member => (
                                                 <SelectItem key={member.id} value={member.id}>{member.full_name}</SelectItem>
                                             ))}
@@ -247,7 +247,7 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
                                 </div>
                             </div>
                             <DialogFooter>
-                                <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md">Save Task</Button>
+                                <Button type="submit" className="rounded-lg bg-primary text-primary-foreground shadow-xs">Save Task</Button>
                             </DialogFooter>
                         </form>
                     </DialogContent>
@@ -256,27 +256,27 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
             </div>
 
             {/* Navigation Tabs */}
-            <div className="flex gap-2 border-b border-gray-200 dark:border-border pb-px mt-8">
+            <div className="flex gap-0.5 border-b border-border/50 pb-0 mt-6 bg-muted/50 p-0.5 rounded-lg">
                 <button
-                    className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${activeTab === 'focus' ? 'border-blue-600 dark:border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-700'}`}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'focus' ? 'bg-background shadow-xs text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                     onClick={() => setActiveTab('focus')}
                 >
                     Focus Now
                 </button>
                 <button
-                    className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${activeTab === 'today' ? 'border-amber-600 dark:border-amber-500 text-amber-600 dark:text-amber-500' : 'border-transparent text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-700'}`}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'today' ? 'bg-background shadow-xs text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                     onClick={() => setActiveTab('today')}
                 >
                     Today
                 </button>
                 <button
-                    className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${activeTab === 'upcoming' ? 'border-cyan-600 dark:border-cyan-500 text-cyan-600 dark:text-cyan-500' : 'border-transparent text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-700'}`}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'upcoming' ? 'bg-background shadow-xs text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                     onClick={() => setActiveTab('upcoming')}
                 >
                     Upcoming
                 </button>
                 <button
-                    className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${activeTab === 'overdue' ? 'border-red-600 dark:border-red-500 text-red-600 dark:text-red-500' : 'border-transparent text-slate-500 dark:text-muted-foreground hover:text-slate-900 dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-700'}`}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'overdue' ? 'bg-background shadow-xs text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                     onClick={() => setActiveTab('overdue')}
                 >
                     Overdue
@@ -285,7 +285,7 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
 
             {isAdmin && (
                 <div className="flex items-center gap-3 pt-2">
-                    <span className="text-sm font-medium text-slate-500 dark:text-muted-foreground">Admin Filter:</span>
+                    <span className="text-sm font-medium text-muted-foreground">Admin Filter:</span>
                     <Select defaultValue={currentRepId || 'all'} onValueChange={(val) => {
                         const newParams = new URLSearchParams(window.location.search)
                         if (val === 'all') {
@@ -295,10 +295,10 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
                         }
                         router.push(`/tasks?${newParams.toString()}`)
                     }}>
-                        <SelectTrigger className="w-[200px] h-9 bg-white dark:bg-card border-gray-200 dark:border-border rounded-lg">
+                        <SelectTrigger className="w-[200px] h-9">
                             <SelectValue placeholder="All Reps" />
                         </SelectTrigger>
-                        <SelectContent className="bg-white dark:bg-secondary border-gray-200 dark:border-border">
+                        <SelectContent>
                             <SelectItem value="all">All Reps</SelectItem>
                             {members.map(member => (
                                 <SelectItem key={member.id} value={member.id}>{member.full_name}</SelectItem>
@@ -308,68 +308,71 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
                 </div>
             )}
 
-            <div className="grid gap-3 pt-4">
+            <div className="grid gap-2 pt-2">
                 {displayTasks.length === 0 ? (
-                    <div className="text-center py-16 text-slate-500 dark:text-muted-foreground border border-dashed border-gray-300 dark:border-border rounded-2xl bg-gray-50/50 dark:bg-secondary/20">
-                        <CheckCircle2 className="w-8 h-8 mx-auto mb-3 text-emerald-500/50" />
-                        No tasks in this view. You're all caught up!
+                    <div className="text-center py-16 text-muted-foreground border border-dashed border-border/50 rounded-xl bg-muted/30">
+                        <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-3">
+                            <CheckCircle2 className="w-5 h-5 text-primary/40" />
+                        </div>
+                        <p className="text-sm font-semibold text-foreground">No tasks in this view.</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">You&apos;re all caught up!</p>
                     </div>
                 ) : (
                     displayTasks.map(task => (
-                        <Card key={task.id} className="shadow-sm transition-all bg-white dark:bg-card/40 border-gray-200 dark:border-border hover:border-gray-300 dark:hover:border-white/10 rounded-2xl">
-                            <CardContent className="p-4 flex items-start gap-4">
+                        <Card key={task.id} className="border-border/50 rounded-xl hover:border-border transition-colors">
+                            <CardContent className="p-3 flex items-start gap-3">
                                 <Checkbox
                                     id={`task-${task.id}`}
                                     checked={false}
                                     onCheckedChange={() => handleToggle(task.id, task.status)}
-                                    className="mt-1 w-5 h-5 rounded-md border-gray-300 dark:border-slate-600 data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600 shadow-sm"
+                                    className="mt-1"
                                 />
                                 <div className="flex-1 space-y-1 min-w-0">
                                     <div className="flex items-center justify-between gap-2">
                                         <label
                                             htmlFor={`task-${task.id}`}
-                                            className="text-base font-semibold leading-none cursor-pointer flex items-center gap-2 min-w-0 text-slate-900 dark:text-foreground"
+                                            className="text-sm font-medium leading-none cursor-pointer flex items-center gap-2 min-w-0 text-foreground"
                                         >
                                             <span className="truncate">{task.title}</span>
-                                            {task.priority === 'high' && <Badge variant="destructive" className="shrink-0 bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400 border border-red-200 dark:border-red-500/20 text-[10px] h-5 px-2 uppercase font-bold tracking-wider rounded-md shadow-sm border-0"><AlertCircle className="w-3 h-3 mr-1" /> High</Badge>}
+                                            {task.priority === 'high' && <Badge variant="destructive" className="shrink-0 text-[10px] h-5 px-1.5 uppercase font-semibold rounded-md border-0"><AlertCircle className="w-3 h-3 mr-0.5" /> High</Badge>}
                                         </label>
-                                        <div className="flex items-center gap-2 shrink-0">
-                                            <div className="text-xs font-semibold text-slate-500 dark:text-muted-foreground flex items-center gap-1.5 bg-gray-100 dark:bg-secondary/80 px-2.5 py-1 rounded-lg">
-                                                <Clock className="w-3.5 h-3.5" /> 30m
+                                        <div className="flex items-center gap-1 shrink-0">
+                                            <div className="text-xs text-muted-foreground flex items-center gap-1 bg-muted px-2 py-0.5 rounded-md">
+                                                <Clock className="w-3 h-3" /> 30m
                                             </div>
                                             {canEdit && (
                                                 <>
                                                     <Button
                                                         variant="ghost"
                                                         size="icon"
-                                                        className="h-8 w-8 text-slate-500 dark:text-muted-foreground hover:text-blue-600 dark:hover:text-blue-400"
+                                                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
                                                         onClick={() => setEditingTask(task)}
                                                         aria-label="Edit task"
                                                     >
-                                                        <Pencil className="w-4 h-4" />
+                                                        <Pencil className="w-3.5 h-3.5" />
                                                     </Button>
                                                     <Button
                                                         variant="ghost"
                                                         size="icon"
-                                                        className="h-8 w-8 text-slate-500 dark:text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
+                                                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
                                                         onClick={() => handleDelete(task.id)}
                                                         aria-label="Delete task"
                                                     >
-                                                        <Trash2 className="w-4 h-4" />
+                                                        <Trash2 className="w-3.5 h-3.5" />
                                                     </Button>
                                                 </>
                                             )}
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-4 text-sm text-slate-500 dark:text-muted-foreground pt-1">
+                                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
                                         {task.due_date && (
-                                            <span className={`flex items-center gap-1.5 ${new Date(task.due_date) < new Date() ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}>
-                                                <Calendar className="w-3.5 h-3.5" />
+                                            <span className={`flex items-center gap-1 ${new Date(task.due_date) < new Date() ? 'text-destructive font-medium' : ''}`}>
+                                                <Calendar className="w-3 h-3" />
                                                 {format(new Date(task.due_date), "MMM d, h:mm a")}
                                             </span>
                                         )}
-                                        {task.leads && <span><span className="text-slate-400 dark:text-muted-foreground mr-1">Lead:</span><span className="text-blue-600 dark:text-blue-400 hover:underline font-medium">{task.leads.name}</span></span>}
-                                        {task.deals && <span><span className="text-slate-400 dark:text-muted-foreground mr-1">Deal:</span><span className="text-blue-600 dark:text-blue-400 hover:underline font-medium">{task.deals.title}</span></span>}
+                                        {task.leads && <span><span className="mr-1">Lead:</span><span className="text-foreground hover:underline font-medium">{task.leads.name}</span></span>}
+                                        {task.deals && <span><span className="mr-1">Deal:</span><span className="text-foreground hover:underline font-medium">{task.deals.title}</span></span>}
                                     </div>
                                 </div>
                             </CardContent>
@@ -379,10 +382,10 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
             </div>
 
             <Dialog open={!!editingTask} onOpenChange={(open) => { if (!open) setEditingTask(null) }}>
-                <DialogContent className="sm:max-w-[425px] bg-white dark:bg-card border-gray-200 dark:border-border text-slate-900 dark:text-foreground shadow-xl rounded-2xl">
+                <DialogContent className="sm:max-w-[425px]">
                     <DialogHeader>
                         <DialogTitle>Edit Task</DialogTitle>
-                        <DialogDescription className="text-slate-500 dark:text-muted-foreground">
+                        <DialogDescription className="text-muted-foreground">
                             Update the title, due date, or priority.
                         </DialogDescription>
                     </DialogHeader>
@@ -391,19 +394,19 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
                             <div className="grid gap-4 py-4">
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="edit-title" className="text-right font-medium">Title</Label>
-                                    <Input id="edit-title" name="title" defaultValue={editingTask.title || ''} className="col-span-3 bg-gray-50 dark:bg-secondary/50 border-gray-200 dark:border-border focus:ring-blue-500 rounded-xl" required />
+                                    <Input id="edit-title" name="title" defaultValue={editingTask.title || ''} className="col-span-3" required />
                                 </div>
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="edit-due_date" className="text-right font-medium">Due Date</Label>
-                                    <Input id="edit-due_date" name="due_date" type="datetime-local" defaultValue={toLocalInput(editingTask.due_date)} className="col-span-3 bg-gray-50 dark:bg-secondary/50 border-gray-200 dark:border-border focus:ring-blue-500 rounded-xl [color-scheme:light] dark:[color-scheme:dark]" />
+                                    <Input id="edit-due_date" name="due_date" type="datetime-local" defaultValue={toLocalInput(editingTask.due_date)} className="col-span-3 [color-scheme:light] dark:[color-scheme:dark]" />
                                 </div>
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label htmlFor="edit-priority" className="text-right font-medium">Priority</Label>
                                     <Select name="priority" defaultValue={editingTask.priority || 'normal'}>
-                                        <SelectTrigger className="col-span-3 bg-gray-50 dark:bg-secondary/50 border-gray-200 dark:border-border rounded-xl focus:ring-blue-500">
+                                        <SelectTrigger className="col-span-3">
                                             <SelectValue placeholder="Select Priority" />
                                         </SelectTrigger>
-                                        <SelectContent className="bg-white dark:bg-secondary border-gray-200 dark:border-border text-slate-900 dark:text-foreground rounded-xl">
+                                        <SelectContent>
                                             <SelectItem value="low">Low</SelectItem>
                                             <SelectItem value="normal">Normal</SelectItem>
                                             <SelectItem value="high">High</SelectItem>
@@ -412,8 +415,8 @@ export default function TasksClient({ initialTasks, leads, deals, members = [], 
                                 </div>
                             </div>
                             <DialogFooter>
-                                <Button type="button" variant="outline" onClick={() => setEditingTask(null)} className="rounded-xl">Cancel</Button>
-                                <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md">Save Changes</Button>
+                                <Button type="button" variant="outline" onClick={() => setEditingTask(null)} className="rounded-lg">Cancel</Button>
+                                <Button type="submit" className="rounded-lg bg-primary text-primary-foreground shadow-xs">Save Changes</Button>
                             </DialogFooter>
                         </form>
                     )}

@@ -1,0 +1,264 @@
+---
+alwaysApply: true
+---
+PRD: Magnivo Mailer — Cold Outreach & Warmup Engine
+
+
+1. Summary
+Magnivo Mailer is a native email outreach and inbox-warmup module inside the Magnivo AI-native GTM OS. It lets clients connect their own mailboxes (Gmail, Outlook/M365, Zoho, or any SMTP/IMAP provider), automatically warm those mailboxes up to a healthy sending reputation, and run multi-step outreach sequences at scale — functionally equivalent to Instantly.ai, but fed and operated by Magnivo's existing lead-gen and research agents instead of requiring manual campaign setup.
+2. Problem statement
+Magnivo already generates leads and researches prospects via its agent pipeline, but has no native execution layer for cold email at scale with proper deliverability infrastructure. Clients currently need a separate tool (Instantly, Smartlead, Lemlist, etc.) to actually send sequences, which breaks the "single GTM OS" value proposition and loses the personalization data our agents already generate.
+3. Goals
+Let a client connect any mailbox (OAuth or SMTP/IMAP) and start warming it up within minutes
+Automatically graduate mailboxes from "cold" to "warm" before allowing live campaign sending
+Run multi-step, multi-mailbox outreach sequences with pooled sending to keep per-mailbox volume low
+Maintain sender reputation and deliverability metrics visible to the client
+Feed AI-personalized content per lead using Magnivo's existing research agents, not static templates
+4. Non-goals (v1)
+Building a full email client / inbox replacement UI (unified inbox is read/reply only, not a full compose-everything mail client)
+Supporting mailbox providers beyond Gmail, Outlook/M365, Zoho, and generic SMTP/IMAP
+LinkedIn or multi-channel sequencing (email-only for v1; multi-channel is a future phase)
+5. Users / personas
+Persona
+Need
+Magnivo internal team (Krishna, Akhila, Eibel, Rithika)
+Run outreach for Magnivo's own pipeline and client campaigns
+Agency-style client (manages multiple sub-brand mailboxes)
+Needs workspace → mailbox pool structure
+Single-founder/SMB client (e.g. BigGift, High Fly Tours)
+Needs simple 1-2 mailbox connection, guided setup
+
+6. Feature requirements
+6.1 Mailbox connection
+Gmail — OAuth2 via Gmail API (gmail.send, gmail.readonly scopes only)
+Outlook / Microsoft 365 — OAuth2 via Microsoft Graph API
+Zoho Mail — OAuth2 via Zoho Mail API (preferred) with SMTP/IMAP as fallback
+Any other provider — generic SMTP (send) + IMAP (read/reply/bounce detection)
+Test-connection flow required before saving any mailbox: send a test email + verify inbox read access
+Store all credentials encrypted at rest (KMS-backed); never log plaintext credentials
+Detect and surface reconnect prompts when OAuth refresh tokens are revoked or expire
+In-app guided setup for app-password generation (Gmail/Outlook) with screenshots
+6.2 DNS / deliverability setup wizard
+Auto-generate SPF, DKIM, and DMARC TXT records for the client's sending domain
+"Verify" button that checks DNS propagation and record correctness
+Flag misconfigured or missing records with plain-language fix instructions
+Custom tracking domain (CNAME) per client/workspace — no shared tracking domain across tenants
+6.3 Warmup engine
+New mailboxes enter a mandatory warmup queue before being eligible for live campaign sending
+Ramp schedule: start at low daily volume, increase gradually over 2–4 weeks toward target sending cap
+Warmup traffic routed through dedicated warmup-only domains, isolated from client campaign-sending domains
+Behavioral simulation: randomized send delays, open simulation, occasional replies, spam-folder recovery (move-to-inbox when landed in spam)
+Content variation across warmup emails (no identical templates) to avoid pattern detection
+Per-mailbox health score (cold / warming / warm) visible on a dashboard
+Auto-graduation: mailbox becomes eligible for live sends once health score and ramp duration thresholds are met (manual override available)
+6.4 Campaign / sequence builder
+Multi-step sequences: email → wait (configurable) → conditional branch (opened / clicked / replied / no reply) → next step
+A/B variant support per step (subject + body)
+AI-generated personalized variants per lead, pulling from existing Magnivo research-agent output (not just merge tags)
+Campaign attaches to a mailbox pool, not a single mailbox — sends rotate across the pool to keep per-mailbox volume low
+Per-mailbox and per-pool daily send caps, business-hours + timezone-aware scheduling
+6.5 List management & hygiene
+CSV import with dedup against existing leads
+Email verification (syntax + MX + catch-all detection) before a lead enters a sequence
+Suppression list (org-wide do-not-contact), auto-added on hard bounce or unsubscribe
+One-click unsubscribe via List-Unsubscribe header (RFC 8058), required per Google/Yahoo bulk sender rules — not just an in-body link
+6.6 Unified inbox
+Replies from all connected mailboxes surfaced in one view
+AI-based reply classification: interested / not interested / OOO / unsubscribe request / needs-human-review
+Suggested reply drafts generated by Magnivo agents
+Auto-pause sequence enrollment on any reply or bounce for that lead
+6.7 Analytics & monitoring
+Per-mailbox and per-campaign: sent, delivered, opened, clicked, replied, bounced, unsubscribed
+Bounce classification: hard (auto-suppress permanently) vs soft (retry with backoff; auto-pause mailbox if soft-bounce rate crosses threshold)
+Spam complaint rate tracking via Google Postmaster Tools / Microsoft SNDS integration; auto-pause mailbox if complaint rate exceeds 0.3%
+Domain/mailbox reputation score, blacklist monitoring
+6.8 Multi-tenancy & workspace structure
+Hierarchy: Workspace → Sub-accounts (optional, for agency-style clients) → Mailboxes
+Per-tenant sending isolation: one client's list/domain issues must not affect another tenant's shared infra (warmup pool, tracking domains)
+Usage counters per mailbox (sends, opens, etc.) tracked from day one, even before billing is wired up
+7. Technical requirements
+Sending layer: queue-based dispatcher (job queue, e.g. BullMQ/Sidekiq-style or Temporal for durable multi-day ramp workflows), per-mailbox rate limiting, retry/backoff on transient SMTP errors
+Tracking layer: self-hosted open-pixel and click-redirect service on per-client tracking domains
+Reply/bounce detection: Gmail push notifications (Pub/Sub) and Microsoft Graph webhooks preferred over polling; IMAP polling as fallback for generic SMTP mailboxes
+Compliance: CAN-SPAM/GDPR-compliant footer, unsubscribe handling, suppression list enforced at the send layer (not just UI-level)
+Security: encrypted credential storage, minimum-necessary OAuth scopes, refresh-token rotation handling
+8. Data model (draft)
+Workspace
+
+ └── SubAccount (optional)
+
+      └── Mailbox (provider, auth_type, health_score, daily_limit, status)
+
+           └── WarmupSchedule (ramp_stage, start_date, target_volume)
+
+Campaign (workspace_id, mailbox_pool_id)
+
+ └── SequenceStep (order, type, content_variants[], wait_duration, condition)
+
+Lead (email, verified_status, suppressed_bool)
+
+Enrollment (lead_id, campaign_id, current_step, status)
+
+Event (enrollment_id, mailbox_id, type[sent|opened|clicked|replied|bounced|unsubscribed], timestamp)
+9. Rollout phasing
+Phase
+Scope
+MVP
+SMTP/IMAP + Gmail OAuth, basic sequence builder, manual/basic warmup on own domain pool, DNS wizard, suppression list
+v2
+Outlook OAuth, Zoho, pooled cross-tenant warmup network, deliverability dashboard, bounce/complaint auto-pause
+v3
+AI-personalized per-lead sequences, unified inbox with agent-triage and suggested replies, send-time optimization by domain health
+
+10. Risks / dependencies
+Google/Microsoft OAuth app verification — sensitive-scope review can take weeks; must be initiated before MVP target date
+Google/Yahoo bulk sender compliance (Feb 2024 rules, still enforced) — one-click unsubscribe header and sub-0.3% complaint rate are mandatory once volume crosses 5,000/day to Gmail/Yahoo addresses
+Shared infra reputation risk — warmup pool and tracking domains must be isolated per tenant/purpose from day one; retrofitting is expensive
+Abuse prevention — need per-mailbox/per-account caps to stop one bad actor from damaging shared reputation
+11. Open questions
+Pricing/metering model: per mailbox connected, per email sent, or per warmup slot?
+Do we build our own warmup pool from scratch, or bootstrap early warmup using Magnivo's own 4+ sending domains before opening a cross-tenant pool?
+How much of the reply-classification/draft-suggestion logic reuses existing Magnivo agent infrastructure vs needs a new agent?
+12. Success metrics
+% of connected mailboxes reaching "warm" status without landing in spam during ramp
+Bounce rate and spam complaint rate across client campaigns (target: bounce <2%, complaints <0.3%)
+Time from mailbox connection to first live campaign send
+Reply rate lift on AI-personalized sequences vs static template baseline
+13. UI/UX — screens & flows
+Core screens the client-facing app needs. Each maps to a section in 6.
+
+A. Mailbox connection wizard (→ 6.1)
+
+"Add mailbox" → provider selection (Gmail / Outlook / Zoho / Other-SMTP)
+OAuth providers: redirect to consent screen → callback → success/failure state
+SMTP/IMAP providers: form (host, port, username, password/app-password, SSL toggle) → "Test connection" button → pass/fail feedback inline
+On success: mailbox appears in list with status = "Pending DNS setup" or "Pending warmup"
+
+B. DNS setup wizard (→ 6.2)
+
+Detects client's sending domain from mailbox email
+Displays required SPF/DKIM/DMARC records in a copy-paste table, with provider-specific instructions (GoDaddy/Namecheap/Cloudflare/Google Domains dropdown → tailored steps)
+"Verify" button → live DNS lookup → green check per record or red-flag with plain-language fix
+Cannot proceed to warmup until all three records pass (soft-block, with an "I'll do this later" override that keeps mailbox in "at risk" state)
+
+C. Warmup dashboard (→ 6.3)
+
+List of mailboxes with health score badge (Cold / Warming / Warm) and days-in-warmup progress bar
+Per-mailbox detail view: daily volume sent, inbox-vs-spam placement rate over time (chart), current ramp stage
+Manual "Force graduate" action (admin-only, with confirmation modal warning about risk)
+
+D. Campaign builder (→ 6.4)
+
+Campaign creation: name → select mailbox pool → select lead list
+Sequence editor: visual step-by-step canvas (email node → wait node → condition branch node), drag to reorder
+Step editor panel: subject/body editor with AI-variant generator button, merge-tag picker, A/B toggle
+Review/launch screen: shows computed daily send volume across pool, estimated completion date, compliance checklist (unsubscribe header present, suppression list applied) before "Launch" is enabled
+
+E. Lead list management (→ 6.5)
+
+CSV upload → column-mapping screen → dedup/verification results summary (X valid, Y risky, Z invalid) before import confirms
+Suppression list view, searchable, with manual add/remove
+
+F. Unified inbox (→ 6.6)
+
+Threaded view across all mailboxes, filterable by mailbox/campaign/classification tag
+Reply detail pane: AI classification badge + suggested draft (editable before send)
+Bulk actions: mark reviewed, add to suppression, re-enroll in different sequence
+
+G. Analytics dashboard (→ 6.7)
+
+Campaign-level funnel (sent → delivered → opened → clicked → replied)
+Mailbox-level health view (bounce rate, complaint rate, reputation score trend)
+Exportable CSV of raw event data
+
+H. Workspace/settings (→ 6.8)
+
+Workspace switcher (for agency users managing sub-accounts)
+Mailbox pool management (group mailboxes into pools used by campaigns)
+Team/permission management (who can launch campaigns vs read-only)
+14. Acceptance criteria per feature
+6.1 Mailbox connection
+
+OAuth flow completes and mailbox status shows "Connected" within 10s of consent grant
+SMTP/IMAP test-connection fails gracefully with a specific error (auth failure vs network timeout vs wrong port) shown to the user, not a generic error
+Revoked OAuth token is detected within 24h and mailbox status flips to "Reconnect required," surfaced in-app and via email notification
+Credentials are never retrievable in plaintext via any API response or log
+
+6.2 DNS wizard
+
+All three record types (SPF/DKIM/DMARC) are independently verified with pass/fail state
+Verify button reflects actual DNS state within propagation limits (retry guidance shown if just-published record isn't yet resolving)
+Mailbox cannot enter warmup with zero verified records (at least SPF+DKIM required; DMARC can be "at risk" override)
+
+6.3 Warmup engine
+
+New mailbox starts at ≤5 emails/day and does not exceed defined ramp curve on any given day
+Mailbox health score updates at least daily based on real inbox-placement data from the warmup pool
+Auto-graduation only triggers when health score ≥ defined threshold AND minimum ramp duration met (both conditions required, not either/or)
+Warmup sends never originate from a client's live campaign-sending domain
+
+6.4 Campaign/sequence builder
+
+A campaign cannot be launched if any attached mailbox is not "Warm" status (hard block, not warning)
+Sequence respects per-mailbox and per-pool daily caps at send time, not just at scheduling time (i.e. caps are enforced even if manually edited mid-campaign)
+AI-generated variants are distinguishably different per mailbox in the pool (no two mailboxes send byte-identical content in the same time window)
+Conditional branches (opened/clicked/replied/no-reply) correctly evaluate before triggering the next step
+
+6.5 List management
+
+Duplicate leads (by email, case-insensitive) are never enrolled twice in the same campaign
+Invalid/undeliverable emails (per verification check) are excluded from enrollment by default, with a visible count of excluded leads
+Suppressed leads cannot be enrolled in any campaign, even via CSV re-import
+List-Unsubscribe header is present on every send, and clicking it suppresses the lead within 1 minute
+
+6.6 Unified inbox
+
+Reply appears in unified inbox within 60 seconds of arriving (via push/webhook) or within the IMAP poll interval for SMTP mailboxes
+Any reply auto-pauses that lead's sequence enrollment immediately, before the next scheduled step can fire
+Classification accuracy is spot-checkable — misclassified replies can be manually recategorized and this doesn't break the paused state
+
+6.7 Analytics
+
+Bounce rate crossing threshold auto-pauses the mailbox within 1 hour of detection, not just flags it
+Spam complaint rate is pulled from Postmaster Tools/SNDS on a defined schedule (e.g. daily) and reflected in the dashboard within 24h
+All event counts (sent/opened/clicked/replied/bounced) reconcile — sent count per campaign equals sum of terminal states plus in-flight
+
+6.8 Multi-tenancy
+
+A workspace cannot see or query another workspace's mailboxes, leads, or campaigns under any account/permission combination
+Shared infra (warmup pool, tracking domains) enforces per-tenant rate limits independent of other tenants' usage
+15. Error & edge-case handling
+Mailbox connection
+
+OAuth consent denied by user → return to connection screen with clear retry option, no partial mailbox record created
+Token revoked mid-campaign (client removes access from their Google/Microsoft account settings) → detect on next send attempt, pause affected campaigns for that mailbox only, notify client to reconnect
+Same mailbox connected twice (by same or different workspace) → block duplicate connection within a workspace; flag but allow across workspaces (client may legitimately use one inbox for two purposes — log for abuse review)
+SMTP server unreachable/times out repeatedly → after N consecutive failures, auto-pause mailbox and notify, don't keep retrying indefinitely
+
+Sending
+
+Mailbox hits provider's own daily limit (e.g. Gmail's ~500/day) mid-campaign → pause remaining sends for that mailbox until next day, redistribute to other pool mailboxes if pool has headroom
+Send fails due to transient SMTP error (4xx) → retry with exponential backoff, cap retries, then mark as failed and alert
+Send fails due to permanent error (5xx, invalid recipient) → treat as hard bounce, suppress immediately, don't retry
+
+Warmup
+
+Warmup pool partner mailbox itself is unhealthy/blacklisted → exclude it from the pool automatically rather than let it drag down partners' reputations
+Client disconnects a mailbox mid-warmup → warmup schedule is cancelled, not paused/resumable indefinitely (re-connecting restarts warmup from scratch, since a gap invalidates ramp assumptions)
+
+Replies/bounces
+
+Auto-reply/OOO detected but misclassified as a real reply → sequence still pauses (safe default); client can manually resume
+Bounce message format doesn't match known patterns (non-standard SMTP server) → falls back to a manual-review queue rather than silently ignoring it
+Reply arrives after lead was already re-enrolled in a different campaign → most recent enrollment's sequence pauses; older/inactive enrollments unaffected
+
+Limits/billing
+
+Client hits plan limit (mailboxes, sends, or leads, depending on chosen model) mid-campaign → in-flight sends complete, new enrollments blocked, clear in-app upgrade prompt (never a silent hard stop mid-send)
+Workspace deleted/downgraded while campaigns are active → campaigns pause, data retained for a defined grace period before purge, not deleted instantly
+
+Compliance
+
+Client attempts to launch a campaign without a verified unsubscribe mechanism → hard block at launch, not just a warning
+Suppressed lead somehow re-enters via CSV or manual add → suppression check runs at enrollment time, not just at import time, so it's caught regardless of entry path
+

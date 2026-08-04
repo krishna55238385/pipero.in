@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Users } from 'lucide-react'
 
 type Contact = {
   id: string
@@ -90,83 +91,88 @@ export default function ContactsClient({ contacts, companies }: { contacts: Cont
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-xl font-semibold text-foreground">Contacts</h1>
+        <p className="text-sm text-muted-foreground mt-1">Manage your contact database.</p>
+      </div>
+
       <Card>
         <CardHeader>
-          <CardTitle>Create Contact</CardTitle>
+          <CardTitle className="text-base">Create Contact</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-6 gap-3">
           <div className="md:col-span-2">
-            <Label>Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Contact name" />
+            <Label className="text-xs font-medium text-muted-foreground">Name</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Contact name" className="mt-1" />
           </div>
           <div>
-            <Label>Email</Label>
-            <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
+            <Label className="text-xs font-medium text-muted-foreground">Email</Label>
+            <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="mt-1" />
           </div>
           <div>
-            <Label>Phone</Label>
-            <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone" />
+            <Label className="text-xs font-medium text-muted-foreground">Phone</Label>
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone" className="mt-1" />
           </div>
           <div>
-            <Label>Title</Label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Job title" />
+            <Label className="text-xs font-medium text-muted-foreground">Title</Label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Job title" className="mt-1" />
           </div>
           <div>
-            <Label>Company ID (optional)</Label>
-            <Input value={companyId} onChange={(e) => setCompanyId(e.target.value)} placeholder="Paste company UUID" />
+            <Label className="text-xs font-medium text-muted-foreground">Company ID</Label>
+            <Input value={companyId} onChange={(e) => setCompanyId(e.target.value)} placeholder="Optional UUID" className="mt-1" />
           </div>
-          <div className="md:col-span-6">
-            <p className="text-xs text-muted-foreground">
-              Tip: copy a Company ID from the Companies page to link this contact.
-            </p>
-          </div>
-          <div className="md:col-span-6">
-            <div className="flex gap-2">
-              <Button onClick={onCreate} disabled={isPending}>Add Contact</Button>
-              <Button variant="outline" onClick={onBackfill} disabled={isPending}>Backfill From Leads</Button>
-            </div>
+          <div className="md:col-span-6 flex gap-2">
+            <Button onClick={onCreate} disabled={isPending}>Add Contact</Button>
+            <Button variant="outline" onClick={onBackfill} disabled={isPending}>Backfill From Leads</Button>
           </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Contacts ({contacts.length})</CardTitle>
+          <CardTitle className="text-base">All Contacts ({contacts.length})</CardTitle>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>Title</TableHead>
-                <TableHead>Company</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {contacts.map((c) => (
-                <TableRow key={c.id}>
-                  <TableCell>{c.name}</TableCell>
-                  <TableCell>{c.email || '-'}</TableCell>
-                  <TableCell>{c.phone || '-'}</TableCell>
-                  <TableCell>{c.title || '-'}</TableCell>
-                  <TableCell>{c.companies?.name || c.company_id || '-'}</TableCell>
-                  <TableCell className="space-x-2">
-                    <Button size="sm" variant="outline" onClick={() => {
-                      const next = prompt('New name', c.name)
-                      if (next && next.trim()) onUpdate(c, { name: next.trim() })
-                    }}>Edit Name</Button>
-                    <Button size="sm" variant="destructive" onClick={() => onDelete(c.id)}>Delete</Button>
-                  </TableCell>
+          {contacts.length === 0 ? (
+            <div className="py-16 text-center">
+              <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-3">
+                <Users className="h-5 w-5 text-primary" />
+              </div>
+              <p className="text-sm font-semibold text-foreground">No contacts yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Create your first contact above.</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Company</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {companies.length > 0 && (
-            <p className="text-xs text-muted-foreground mt-3">Available companies: {companies.slice(0, 6).map((x) => x.name).join(', ')}{companies.length > 6 ? '...' : ''}</p>
+              </TableHeader>
+              <TableBody>
+                {contacts.map((c) => (
+                  <TableRow key={c.id}>
+                    <TableCell className="font-medium">{c.name}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.email || '-'}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.phone || '-'}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.title || '-'}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.companies?.name || c.company_id || '-'}</TableCell>
+                    <TableCell className="text-right space-x-1">
+                      <Button size="sm" variant="ghost" onClick={() => {
+                        const next = prompt('New name', c.name)
+                        if (next && next.trim()) onUpdate(c, { name: next.trim() })
+                      }}>Edit</Button>
+                      <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => onDelete(c.id)}>Delete</Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           )}
         </CardContent>
       </Card>

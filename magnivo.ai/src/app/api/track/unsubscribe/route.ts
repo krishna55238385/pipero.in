@@ -1,34 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase/service'
+import { consumeUnsubscribeToken, suppressEmail } from '@/services/mail/suppression-service'
 
-// One-click unsubscribe target. Records the opt-out (suppression list is
-// enforced by every send path) and shows a minimal confirmation page.
-export async function GET(req: NextRequest) {
+async function handleUnsubscribe(req: NextRequest): Promise<NextResponse> {
   const params = req.nextUrl.searchParams
-  const email = (params.get('e') || '').toLowerCase().trim()
+  const token = params.get('token') || ''
+  const emailParam = (params.get('e') || '').toLowerCase().trim()
   const campaignId = params.get('c')
   const leadId = params.get('l')
+  const orgIdParam = params.get('o')
 
   let ok = false
   try {
-    if (email) {
-      const supabase = createServiceClient()
-      const { data: org } = await supabase.from('organizations').select('id').limit(1).single()
-      const { error } = await supabase.from('outreach_unsubscribes').upsert(
-        {
-          email,
-          organization_id: org?.id ?? null,
-          lead_id: leadId ? Number(leadId) : null,
-          campaign_id: campaignId,
-          unsubscribed_at: new Date().toISOString(),
-        },
-        { onConflict: 'email' },
+    if (token) {
+      const result = await consumeUnsubscribeToken(token)
+      ok = result.success
+    } else if (emailParam && orgIdParam) {
+      // Legacy links that include explicit org id
+      await suppressEmail(orgIdParam, emailParam, 'unsubscribe', 'one_click', leadId, campaignId)
+      ok = true
+    } else if (emailParam) {
+      // Legacy insecure links — still suppress globally by email in outreach_unsubscribes
+      // but require org when possible; without org we only write email-level unsub
+      const { default: pool } = await import('@/lib/db')
+      await pool.query(
+        `INSERT INTO public.outreach_unsubscribes (email, campaign_id, lead_id, unsubscribed_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (email) DO UPDATE SET unsubscribed_at = NOW()`,
+        [emailParam, campaignId, leadId ? Number(leadId) : null]
       )
-      ok = !error
-      if (error) console.error('[track/unsubscribe] failed:', error.message)
+      ok = true
     }
   } catch (e) {
     console.error('[track/unsubscribe] failed:', e instanceof Error ? e.message : e)
+  }
+
+  if (req.method === 'POST') {
+    // RFC 8058 one-click POST expects 200 empty or minimal body
+    return new NextResponse(ok ? 'OK' : 'ERROR', {
+      status: ok ? 200 : 400,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    })
   }
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Unsubscribed</title></head>
@@ -39,4 +50,12 @@ export async function GET(req: NextRequest) {
   </div>
 </body></html>`
   return new NextResponse(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+}
+
+export async function GET(req: NextRequest) {
+  return handleUnsubscribe(req)
+}
+
+export async function POST(req: NextRequest) {
+  return handleUnsubscribe(req)
 }
