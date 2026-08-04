@@ -73,7 +73,7 @@ function makeMailbox(overrides: Record<string, unknown> = {}) {
     mailboxStatus: 'connected', verificationStatus: 'verified', warmupStatus: 'completed',
     hourlySendLimit: null,
     oauthConfig: { provider: 'gmail', encryptedRefreshToken: 'enc-refresh', encryptedAccessToken: 'enc-access' },
-    smtpConfig: null, metadata: {}, deletedAt: null,
+    smtpConfig: null, metadata: { respectBusinessHours: false }, deletedAt: null,
     createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
   }
