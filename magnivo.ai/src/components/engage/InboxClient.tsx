@@ -78,6 +78,8 @@ export default function InboxClient({ mailbox }: { mailbox: Mailbox }) {
   const loadInbox = useCallback(async (opts?: { refresh?: boolean }) => {
     const { box, search, unreadOnly, starredOnly, canUseInbox } = filtersRef.current
     if (!canUseInbox) return
+    const startedAt = Date.now()
+    const currentBox = box
     setError('')
     setLoadingList(true)
     try {
@@ -90,12 +92,16 @@ export default function InboxClient({ mailbox }: { mailbox: Mailbox }) {
       const res = await fetch(url.toString())
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Failed to load inbox')
+      if (filtersRef.current.box !== currentBox) return
       setEmails(data.emails || [])
       setSyncError(typeof data?.syncError === 'string' ? data.syncError : '')
     } catch (e: unknown) {
+      if (filtersRef.current.box !== currentBox) return
       setError(e instanceof Error ? e.message : 'Failed to load inbox')
     } finally {
-      setLoadingList(false)
+      if (filtersRef.current.box === currentBox) {
+        setLoadingList(false)
+      }
     }
   }, [])
 

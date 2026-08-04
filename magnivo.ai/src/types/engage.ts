@@ -41,6 +41,10 @@ export type ComposePayload = {
   to: string
   subject: string
   bodyHtml: string
+  // Optional plain-text part for multipart messages
+  bodyText?: string
+  // Optional custom headers (e.g. List-Unsubscribe)
+  headers?: Record<string, string>
   // Optional threading fields — set when replying so Gmail keeps it in-thread.
   threadId?: string
   inReplyTo?: string // the Message-ID being replied to
@@ -293,6 +297,7 @@ export type EmailAccount = {
   lastSyncedAt: string | null
   watchActive: boolean
   dailySendLimit: number
+  hourlySendLimit: number
   sentToday: number
   warmupEnabled: boolean
   warmupStartedAt: string | null
@@ -314,6 +319,7 @@ export type EmailAccount = {
 export type AccountSettingsInput = {
   status?: AccountStatus
   dailySendLimit?: number
+  hourlySendLimit?: number
   warmupEnabled?: boolean
   warmupDailyLimit?: number
   warmupReplyRate?: number

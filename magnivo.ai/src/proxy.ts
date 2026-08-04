@@ -11,6 +11,9 @@ const JWT_SECRET = process.env.JWT_SECRET as string
 //   opened by recipients who have no CRM session — they must never hit the wall
 // - /api/engage/worker: the campaign worker, pinged by the gtm_service scheduler
 //   with its own x-worker-token (no session)
+// - /api/health, /api/metrics: monitoring endpoints (no auth)
+// - /api/mail/worker-health: operational health dashboards
+// - /api/webhooks/*: inbound webhooks from Microsoft Graph, etc.
 const PUBLIC_PATHS = [
   /^\/login$/,
   /^\/register$/,
@@ -18,6 +21,10 @@ const PUBLIC_PATHS = [
   /^\/api\/engage\/gmail\/webhook$/,
   /^\/api\/track\/.*/,
   /^\/api\/engage\/worker$/,
+  /^\/api\/health$/,
+  /^\/api\/metrics$/,
+  /^\/api\/mail\/worker-health$/,
+  /^\/api\/webhooks\/.*/,
 ]
 
 function isPublicRoute(pathname: string) {

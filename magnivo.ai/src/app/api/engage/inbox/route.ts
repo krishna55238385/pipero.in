@@ -9,9 +9,24 @@ const SYNC_STALENESS_MS = 60_000
 
 export async function GET(req: NextRequest) {
   try {
-    const mailbox = (await getGmailMailbox()) as MailboxRow | null
-    if (!mailbox) {
+    const publicMb = await getGmailMailbox()
+    if (!publicMb) {
       return NextResponse.json({ emails: [] })
+    }
+    // Token fields intentionally omitted from public DTO; access token fetched separately.
+    const mailbox: MailboxRow = {
+      id: String(publicMb.id),
+      user_id: String(publicMb.user_id ?? ''),
+      organization_id: String(publicMb.organization_id ?? ''),
+      email: String(publicMb.email ?? ''),
+      access_token: null,
+      refresh_token: null,
+      expires_at: publicMb.expires_at ? String(publicMb.expires_at) : null,
+      gmail_history_id: publicMb.gmail_history_id ? String(publicMb.gmail_history_id) : null,
+      gmail_watch_expiration: publicMb.gmail_watch_expiration
+        ? String(publicMb.gmail_watch_expiration)
+        : null,
+      last_synced_at: publicMb.last_synced_at ? String(publicMb.last_synced_at) : null,
     }
     const q = req.nextUrl.searchParams.get('q') || ''
     const unread = req.nextUrl.searchParams.get('unread') === 'true'
@@ -100,6 +115,30 @@ export async function GET(req: NextRequest) {
           emails.push(mapRow(x))
         }
         emails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      }
+    }
+
+    try {
+      const { bridgeEngageEmailsForMailbox } = await import('@/services/mail/inbox-bridge-service')
+      await bridgeEngageEmailsForMailbox(
+        mailbox.organization_id,
+        mailbox.email,
+        (emailsRes.rows ?? [])
+          .filter((x: EmailRow) => x.direction === 'received')
+          .map((x: EmailRow) => ({
+            gmailThreadId: String(x.gmail_thread_id),
+            gmailMessageId: String(x.gmail_message_id),
+            fromEmail: String(x.from_email ?? ''),
+            toEmail: String(x.to_email ?? ''),
+            subject: String(x.subject ?? ''),
+            snippet: String(x.snippet ?? ''),
+            direction: 'received' as const,
+          }))
+      )
+    } catch (bridgeErr) {
+      const msg = bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr)
+      if (!/mail_inbox_threads|does not exist|undefined_table/i.test(msg)) {
+        console.error('[engage/inbox] mail bridge failed:', msg)
       }
     }
 

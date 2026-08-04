@@ -1,6 +1,5 @@
-import { redirect } from 'next/navigation'
+import EngageOverviewClient from '@/components/engage/EngageOverviewClient'
 
 export default function EngageHomePage() {
-  redirect('/engage/inbox')
+  return <EngageOverviewClient />
 }
-

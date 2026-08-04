@@ -16,6 +16,15 @@ type NavSection = {
     items: NavItem[]
 }
 
+/** Longest href wins so `/engage` Overview does not match every `/engage/*` child. */
+function matchNavChildHref(pathname: string, children: NavChild[]): string | null {
+    const matches = children.filter(
+        (c) => pathname === c.href || pathname.startsWith(c.href + '/') || pathname.startsWith(c.href + '?')
+    )
+    if (matches.length === 0) return null
+    return matches.reduce((best, c) => (c.href.length > best.href.length ? c : best)).href
+}
+
 const navSections: NavSection[] = [
     {
         label: 'Workspace',
@@ -30,16 +39,31 @@ const navSections: NavSection[] = [
             {
                 key: 'engage',
                 name: 'Engage',
-                href: '/engage/inbox',
+                href: '/engage',
                 icon: Send,
                 children: [
+                    { name: 'Overview', href: '/engage' },
                     { name: 'Inbox', href: '/engage/inbox' },
                     { name: 'Accounts', href: '/engage/accounts' },
+                    { name: 'Pools', href: '/engage/pools' },
+                    { name: 'Domains', href: '/engage/domains' },
+                    { name: 'Tracking Domains', href: '/engage/tracking-domains' },
+                    { name: 'Deliverability', href: '/engage/deliverability' },
+                    { name: 'Warmup', href: '/engage/warmup' },
                     { name: 'Sequences', href: '/engage/sequences' },
                     { name: 'Campaigns', href: '/engage/campaigns' },
                     { name: 'Templates', href: '/engage/templates' },
                     { name: 'Conversations', href: '/engage/conversations' },
+                    { name: 'Leads', href: '/engage/leads' },
+                    { name: 'Verification', href: '/engage/verification' },
+                    { name: 'Suppression', href: '/engage/suppression' },
                     { name: 'Analytics', href: '/engage/analytics' },
+                    { name: 'Reports', href: '/engage/reports' },
+                    { name: 'Operations', href: '/engage/operations' },
+                    { name: 'Audit Logs', href: '/engage/audit' },
+                    { name: 'Team', href: '/engage/team' },
+                    { name: 'Notifications', href: '/engage/notifications' },
+                    { name: 'Compliance', href: '/engage/compliance' },
                     { name: 'Settings', href: '/engage/settings' },
                 ],
             },
@@ -159,7 +183,7 @@ function CollapsibleNavItem({
                         className="overflow-hidden pl-4 mt-0.5 space-y-px border-l border-border/30 ml-[26px]"
                     >
                         {item.children.map((child) => {
-                            const isChildActive = pathname.startsWith(child.href)
+                            const isChildActive = matchNavChildHref(pathname, item.children) === child.href
                             return (
                                 <li key={child.href}>
                                     <Link

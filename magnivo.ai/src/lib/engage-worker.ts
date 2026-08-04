@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createServiceClient } from '@/lib/supabase/service'
+import { createClient } from '@/lib/supabase/server'
 import { getMessageSummaryById, sendEmail } from '@/lib/gmail'
 import {
   getMailboxAccessToken,
@@ -165,6 +165,18 @@ function trackingBaseUrl() {
   ).replace(/\/$/, '')
 }
 
+/** Resolve per-tenant tracking origin when orgId is known (PRD §6.7.29). */
+export async function resolveEngageTrackingBaseUrl(orgId?: string | null): Promise<string> {
+  if (!orgId) return trackingBaseUrl()
+  try {
+    const { resolveOrgTrackingOrigin } = await import('@/services/mail/tracking-service')
+    const resolved = await resolveOrgTrackingOrigin(orgId)
+    return resolved.origin
+  } catch {
+    return trackingBaseUrl()
+  }
+}
+
 export function renderTemplate(text: string, vars: Record<string, string>) {
   return text.replace(/\{\{\s*([a-zA-Z_]+)\s*\}\}/g, (full, key: string) => {
     const v = vars[key.toLowerCase()]
@@ -180,9 +192,16 @@ function trackingParams(campaignId: string, leadId: number | null, email: string
 
 export function instrumentHtml(
   html: string,
-  opts: { campaignId: string; leadId: number | null; email: string; openTracking: boolean; linkTracking: boolean },
+  opts: {
+    campaignId: string
+    leadId: number | null
+    email: string
+    openTracking: boolean
+    linkTracking: boolean
+    trackingBase?: string
+  },
 ) {
-  const base = trackingBaseUrl()
+  const base = (opts.trackingBase || trackingBaseUrl()).replace(/\/$/, '')
   const params = trackingParams(opts.campaignId, opts.leadId, opts.email)
   let out = html
 
@@ -200,6 +219,21 @@ export function instrumentHtml(
     out += `<img src="${base}/api/track/open?${params}" width="1" height="1" style="display:none" alt=""/>`
   }
   return out
+}
+
+export async function instrumentHtmlForOrg(
+  html: string,
+  opts: {
+    organizationId: string
+    campaignId: string
+    leadId: number | null
+    email: string
+    openTracking: boolean
+    linkTracking: boolean
+  },
+) {
+  const trackingBase = await resolveEngageTrackingBaseUrl(opts.organizationId)
+  return instrumentHtml(html, { ...opts, trackingBase })
 }
 
 async function mailboxForOrg(supabase: Db, orgId: string): Promise<MailboxRow | null> {
@@ -634,9 +668,10 @@ async function processDueRecipients(supabase: Db, report: WorkerReport) {
         attachmentsMeta = (template.attachments ?? []) as EngageAttachment[]
       }
 
-      const bodyHtml = instrumentHtml(
+      const bodyHtml = await instrumentHtmlForOrg(
         /<[a-z][\s\S]*>/i.test(rawBody) ? rawBody : rawBody.split('\n').join('<br>'),
         {
+          organizationId: c.organization_id,
           campaignId: c.id,
           leadId: r.lead_id,
           email: r.email,
@@ -756,7 +791,7 @@ export async function runEngageWorker(): Promise<WorkerReport> {
     syncedMailboxes: 0,
     errors: [],
   }
-  const supabase = createServiceClient()
+  const supabase = await createClient()
 
   // Keep mailboxes synced server-side so replies are detected (and stop-on-
   // reply honored) even when nobody has the unibox open in a browser.

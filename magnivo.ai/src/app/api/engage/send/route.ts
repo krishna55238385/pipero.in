@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getValidGmailAccessToken } from '@/app/actions/engage'
 import { getMessageSummaryById, sendEmail } from '@/lib/gmail'
 import { summaryToRow, type MailboxRow } from '@/lib/engage-sync'
-import { createServiceClient } from '@/lib/supabase/service'
+import { createClient } from '@/lib/supabase/server'
 import { loadAttachments } from '@/lib/engage-attachments'
 import type { ComposePayload } from '@/types/engage'
 
@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     }
 
     const recipient = String(body.to).toLowerCase().trim()
-    const supabase = createServiceClient()
+    const supabase = await createClient()
 
     // Resolve org + (optional) AI lead, and enforce the unsubscribe suppression
     // list before any send — opt-outs must be honored regardless of UI.
@@ -53,7 +53,33 @@ export async function POST(req: NextRequest) {
 
     const accessToken = await getValidGmailAccessToken()
     const attachments = await loadAttachments(supabase, body.attachments ?? [])
-    const sent = await sendEmail(accessToken, body, attachments)
+
+    // RFC 8058 one-click unsubscribe on every send
+    let headers = { ...(body.headers || {}) }
+    if (orgId && recipient) {
+      try {
+        const { isSuppressed, createUnsubscribeToken, buildListUnsubscribeHeaders } = await import(
+          '@/services/mail/suppression-service'
+        )
+        if (await isSuppressed(orgId, recipient)) {
+          return NextResponse.json(
+            { ok: false, error: 'Recipient is on the suppression list — send blocked.' },
+            { status: 409 },
+          )
+        }
+        const token = await createUnsubscribeToken(orgId, recipient)
+        const base = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://app.magnivo.ai'
+        const unsubUrl = `${base}/api/track/unsubscribe?token=${encodeURIComponent(token)}`
+        headers = { ...headers, ...buildListUnsubscribeHeaders(unsubUrl) }
+        if (!/unsubscribe/i.test(body.bodyHtml)) {
+          body.bodyHtml = `${body.bodyHtml}<br/><p style="font-size:12px;color:#64748b"><a href="${unsubUrl}">Unsubscribe</a></p>`
+        }
+      } catch (e) {
+        console.error('[engage/send] unsubscribe header failed:', e instanceof Error ? e.message : e)
+      }
+    }
+
+    const sent = await sendEmail(accessToken, { ...body, headers }, attachments)
     if (!sent?.id) {
       return NextResponse.json({ ok: false, error: 'Gmail did not return a message id' }, { status: 502 })
     }
@@ -110,19 +136,23 @@ export async function POST(req: NextRequest) {
 
     // Log the send so analytics (sent count / reply correlation) see it.
     if (orgId) {
-      const { error: logError } = await supabase.from('outreach_log').insert({
-        organization_id: orgId,
-        lead_id: leadRawId,
-        contact_email: recipient,
-        campaign_id: 'manual',
-        channel: 'email',
-        variant_subject: body.subject,
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-        message_id: sent.id,
-        thread_id: threadId,
-      })
-      if (logError) console.error('[engage/send] outreach_log insert failed:', logError.message)
+      try {
+        const { error: logError } = await supabase.from('outreach_log').insert({
+          organization_id: orgId,
+          lead_id: leadRawId,
+          contact_email: recipient,
+          campaign_id: 'manual',
+          channel: 'email',
+          variant_subject: body.subject,
+          status: 'sent',
+          sent_at: new Date().toISOString(),
+          message_id: sent.id,
+          thread_id: threadId,
+        })
+        if (logError) console.error('[engage/send] outreach_log insert failed:', logError.message)
+      } catch (logErr) {
+        console.error('[engage/send] outreach_log insert failed:', logErr instanceof Error ? logErr.message : logErr)
+      }
     }
 
     return NextResponse.json({ ok: true, id: sent.id, threadId })
