@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { MailboxAuditLogEntry } from '@/types/mail'
 
 vi.mock('@/lib/db', () => ({ default: { query: vi.fn(), connect: vi.fn() } }))
+vi.mock('@/services/mail/warmup-service', () => ({
+  cancelWarmupForMailbox: vi.fn().mockResolvedValue(undefined),
+}))
 vi.mock('@/repositories/mail/mailbox-repository', () => ({
   findMailboxById: vi.fn(),
   findMailboxWithConfigs: vi.fn(),

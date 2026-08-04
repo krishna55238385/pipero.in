@@ -8,6 +8,18 @@ import type {
 
 const mockActor = { userId: 'user-1', email: 'user@example.com' }
 
+vi.mock('@/services/mail/dns-gate-service', () => ({
+  evaluateDnsGateForMailbox: vi.fn().mockResolvedValue({
+    spfOk: true,
+    dkimOk: true,
+    dmarcOk: true,
+    canWarmup: true,
+    recommendedStatus: 'pending_warmup',
+    message: '',
+  }),
+  applyDnsGateStatus: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/repositories/mail/warmup-repository', () => ({
   findConfigById: vi.fn(),
   findConfigsByOrg: vi.fn().mockResolvedValue([]),

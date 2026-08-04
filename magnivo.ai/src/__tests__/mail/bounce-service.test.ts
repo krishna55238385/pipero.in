@@ -67,6 +67,7 @@ describe('bounce-service', () => {
           created_at: new Date().toISOString(),
         }]
       })
+      mockQuery.mockResolvedValueOnce({ rows: [] })
 
       const result = await recordBounce({
         organizationId: 'org-1',

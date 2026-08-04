@@ -100,6 +100,7 @@ vi.mock('@/services/mail/warmup-health-service', () => ({
 
 vi.mock('@/services/mail/warmup-stage-service', () => ({
   advanceStageIfNeeded: vi.fn().mockResolvedValue({ advanced: false }),
+  enforceWarmupDailyCap: vi.fn((day, target) => target),
 }))
 
 vi.mock('@/services/mail/warmup-notification-service', () => ({
