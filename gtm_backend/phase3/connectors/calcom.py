@@ -70,11 +70,11 @@ def get_available_slots(
 
     try:
         resp = httpx.get(
-            f"{_BASE_URL}/slots",
+            f"{_BASE_URL}/slots/available",
             params={
                 "eventTypeId": _settings.calcom_event_type_id,
-                "start": start,
-                "end": end,
+                "startTime": start,
+                "endTime": end,
                 "timeZone": timezone_name,
             },
             headers=_headers(),

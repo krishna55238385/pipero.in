@@ -41,6 +41,26 @@ def test_get_available_slots_returns_empty_on_http_error():
         assert calcom.get_available_slots() == []
 
 
+def test_get_available_slots_calls_the_correct_v2_endpoint_and_params():
+    """Regression test — found live 2026-08-07: the connector was calling
+    /v2/slots with start/end params, but Cal.com's actual v2 endpoint is
+    /v2/slots/available with startTime/endTime — the wrong path/params meant
+    every real call silently returned [] (swallowed by the broad except),
+    which looked exactly like 'no availability' to a caller, blocking a
+    real budget-approved prospect from getting a meeting proposed at all."""
+    fake_resp = types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"data": {}})
+    with patch.object(calcom, "_settings", _settings()), \
+         patch("httpx.get", return_value=fake_resp) as get_mock:
+        calcom.get_available_slots()
+
+    args, kwargs = get_mock.call_args
+    assert args[0] == f"{calcom._BASE_URL}/slots/available"
+    assert "startTime" in kwargs["params"]
+    assert "endTime" in kwargs["params"]
+    assert "start" not in kwargs["params"]
+    assert "end" not in kwargs["params"]
+
+
 def test_get_available_slots_picks_at_least_min_slots_spread_out():
     fake_data = {
         "data": {
