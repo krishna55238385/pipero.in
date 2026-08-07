@@ -168,13 +168,23 @@ def _avg_cycle_days(won_deals: list[dict]) -> float | None:
 def _segment_breakdown(won: list[dict], lost: list[dict]) -> dict:
     """Win rate per company industry, via each deal's contact → company
     join. Deals with no linked company/industry are grouped under
-    'unknown' rather than silently dropped."""
+    'unknown' rather than silently dropped.
+
+    Contact/company lookups are batched up front — this used to call
+    get_contact_by_id then get_company_by_id once per deal (2*N queries for
+    N won+lost deals), the same N+1 pattern already fixed elsewhere."""
+    all_deals = won + lost
+    contact_ids = [d.get("contact_id") for d in all_deals if d.get("contact_id")]
+    contacts_map = supabase.get_contacts_by_ids(contact_ids)
+    company_ids = [c.get("company_id") for c in contacts_map.values() if c.get("company_id")]
+    companies_map = supabase.get_companies_by_ids(company_ids)
+
     segments: dict[str, dict] = {}
 
     def _industry_for(deal: dict) -> str:
-        contact = supabase.get_contact_by_id(deal.get("contact_id"))
-        company = supabase.get_company_by_id((contact or {}).get("company_id"))
-        return (company or {}).get("industry") or "unknown"
+        contact = contacts_map.get(deal.get("contact_id")) or {}
+        company = companies_map.get(contact.get("company_id")) or {}
+        return company.get("industry") or "unknown"
 
     for deal in won:
         seg = segments.setdefault(_industry_for(deal), {"won": 0, "lost": 0})

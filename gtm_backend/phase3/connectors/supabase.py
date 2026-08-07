@@ -421,6 +421,23 @@ def upsert_personalisation(p: PersonalisationResult) -> None:
         raise
 
 
+def bulk_upsert_personalisations(results: list[PersonalisationResult]) -> None:
+    """Batched form of upsert_personalisation — one multi-row statement for
+    many leads instead of one upsert per lead in Agent 11's main loop (same
+    N+1-on-writes fix already applied to Agent 37/Agent 06)."""
+    if not results:
+        return
+    payloads = [_personalisation_payload(p) for p in results]
+    try:
+        _upsert("/outreach_personalisations", payloads, on_conflict="lead_id")
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_personalisations"):
+            for payload in payloads:
+                _local_fallback_upsert("outreach_personalisations", payload, ["lead_id"])
+            return
+        raise
+
+
 def get_personalisations_for_lead(lead_id: int) -> dict | None:
     """Fetch the personalisation row for one lead, if any."""
     try:
@@ -1570,6 +1587,22 @@ def get_contact_by_id(contact_id: str | None) -> dict | None:
     return rows[0] if rows else None
 
 
+def get_contacts_by_ids(contact_ids: list[str]) -> dict[str, dict]:
+    """Batched form of get_contact_by_id — one query for many contacts
+    instead of one query per contact. Added for Agent 41/42/45, which each
+    called get_contact_by_id() once per deal in a loop (same N+1 pattern
+    already fixed for get_signals_for_leads/get_account_briefs)."""
+    ids = [cid for cid in contact_ids if cid]
+    if not ids:
+        return {}
+    in_clause = ",".join(str(cid) for cid in ids)
+    try:
+        rows = _get("/contacts", params=_scope_to_org({"id": f"in.({in_clause})"}))
+    except SupabaseError:
+        return {}
+    return {row["id"]: row for row in rows}
+
+
 def get_company_by_id(company_id: str | None) -> dict | None:
     """Full CRM company row by id (name/website/industry) — used by Agent 42
     to know a champion's original company name. Same defensive-read pattern
@@ -1581,6 +1614,20 @@ def get_company_by_id(company_id: str | None) -> dict | None:
     except SupabaseError:
         return None
     return rows[0] if rows else None
+
+
+def get_companies_by_ids(company_ids: list[str]) -> dict[str, dict]:
+    """Batched form of get_company_by_id — same N+1 fix as
+    get_contacts_by_ids, for the same call sites."""
+    ids = [cid for cid in company_ids if cid]
+    if not ids:
+        return {}
+    in_clause = ",".join(str(cid) for cid in ids)
+    try:
+        rows = _get("/companies", params=_scope_to_org({"id": f"in.({in_clause})"}))
+    except SupabaseError:
+        return {}
+    return {row["id"]: row for row in rows}
 
 
 def get_reengagement_touch_history(deal_id: str) -> list[dict]:
@@ -1648,6 +1695,29 @@ def get_champion_move_history(contact_id: str) -> list[dict]:
         if _missing_table(exc, "champion_moves"):
             return []
         raise
+
+
+def get_champion_move_history_batch(contact_ids: list[str]) -> dict[str, list[dict]]:
+    """Batched form of get_champion_move_history — one query for many
+    contacts instead of one query per contact (Agent 42's main per-deal N+1
+    call site, same fix as get_contacts_by_ids/get_companies_by_ids)."""
+    ids = [cid for cid in contact_ids if cid]
+    if not ids:
+        return {}
+    in_clause = ",".join(str(cid) for cid in ids)
+    try:
+        rows = _get(
+            "/champion_moves",
+            params={"contact_id": f"in.({in_clause})", "order": "created_at.desc"},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "champion_moves"):
+            return {cid: [] for cid in ids}
+        raise
+    grouped: dict[str, list[dict]] = {cid: [] for cid in ids}
+    for row in rows:
+        grouped.setdefault(row["contact_id"], []).append(row)
+    return grouped
 
 
 def create_champion_move(**fields) -> dict | None:

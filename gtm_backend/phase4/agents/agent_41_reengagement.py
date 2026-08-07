@@ -59,6 +59,11 @@ def run_reengagement(limit: int | None = None) -> dict:
     unsubscribed = supabase.get_unsubscribed_emails()
     print(f"  → {len(deals)} lost deal(s) examined")
 
+    # Batch the per-deal contact lookup (was one get_contact_by_id call per
+    # deal in the loop — same N+1 pattern already fixed elsewhere).
+    contact_ids = [d.get("contact_id") for d in deals if d.get("contact_id")]
+    contacts_map = supabase.get_contacts_by_ids(contact_ids)
+
     drafted = 0
     opted_out = 0
     not_yet_eligible = 0
@@ -66,7 +71,7 @@ def run_reengagement(limit: int | None = None) -> dict:
     failed = 0
 
     for deal in deals:
-        result = _process_deal(deal, unsubscribed)
+        result = _process_deal(deal, unsubscribed, contacts_map)
         status = result["status"]
         if status == "drafted":
             drafted += 1
@@ -94,7 +99,7 @@ def run_reengagement(limit: int | None = None) -> dict:
     }
 
 
-def _process_deal(deal: dict, unsubscribed: set[str]) -> dict:
+def _process_deal(deal: dict, unsubscribed: set[str], contacts_map: dict[str, dict] | None = None) -> dict:
     deal_id = deal.get("id")
     title = deal.get("title") or "?"
     contact_id = deal.get("contact_id")
@@ -102,7 +107,10 @@ def _process_deal(deal: dict, unsubscribed: set[str]) -> dict:
     if deal_id is None:
         return {"status": "held", "reason": "deal has no id"}
 
-    contact = supabase.get_contact_by_id(contact_id) or {}
+    if contacts_map is not None:
+        contact = contacts_map.get(contact_id) or {}
+    else:
+        contact = supabase.get_contact_by_id(contact_id) or {}
     email = (contact.get("email") or "").strip().lower()
     # contacts has no denormalized company name (only company_id, a separate
     # FK lookup this agent doesn't need for anything else) — deal title is

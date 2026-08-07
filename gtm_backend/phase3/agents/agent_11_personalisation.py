@@ -39,11 +39,12 @@ def run_personalisation(icp_id: int | None = None, limit: int | None = None) -> 
     written = 0
     held = 0
     low_quality = 0
+    results = []
     for lead in leads:
         result = _build_one(lead)
         if result is None:
             continue
-        supabase.upsert_personalisation(result)
+        results.append(result)
         written += 1
         if result.status == "held":
             held += 1
@@ -54,6 +55,10 @@ def run_personalisation(icp_id: int | None = None, limit: int | None = None) -> 
             f"  [Agent 11] {company:<28} → {len(result.angles)} angles, "
             f"quality={result.quality_score}/100, status={result.status}"
         )
+
+    # One bulk upsert for all results instead of one per lead in the loop —
+    # same N+1-on-writes fix already applied to Agent 06/Agent 37.
+    supabase.bulk_upsert_personalisations(results)
 
     summary = {
         "icp_id": icp_id,

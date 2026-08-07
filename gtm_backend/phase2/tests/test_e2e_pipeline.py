@@ -273,8 +273,8 @@ def test_phase2_pipeline_end_to_end(
 
     # --- Supabase writes (the things we want to assert) -------------------
     upsert_brief = mocker.patch(
-        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.upsert_account_brief",
-        return_value=1,
+        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.bulk_upsert_account_briefs",
+        return_value=None,
     )
     insert_stakeholders = mocker.patch(
         "gtm_backend.phase2.agents.agent_07_stakeholders.supabase.insert_stakeholders",

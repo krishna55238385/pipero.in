@@ -26,7 +26,7 @@ def test_agent_11_writes_personalisation(sample_lead, mock_llm_personalisation):
         "gtm_backend.phase3.agents.agent_11_personalisation.llm.chat_json",
         return_value=mock_llm_personalisation,
     ) as llm_mock, patch(
-        "gtm_backend.phase3.agents.agent_11_personalisation.supabase.upsert_personalisation",
+        "gtm_backend.phase3.agents.agent_11_personalisation.supabase.bulk_upsert_personalisations",
         return_value=None,
     ) as upsert_mock:
         summary = run_personalisation(icp_id=1)
@@ -36,7 +36,7 @@ def test_agent_11_writes_personalisation(sample_lead, mock_llm_personalisation):
     assert summary["held"] == 0
     llm_mock.assert_called_once()
     upsert_mock.assert_called_once()
-    result = upsert_mock.call_args[0][0]
+    result = upsert_mock.call_args[0][0][0]
     assert result.lead_id == sample_lead["id"]
     assert result.status == "ready"
     assert len(result.angles) == 2
@@ -57,7 +57,7 @@ def test_agent_11_holds_when_no_intel(sample_lead):
         "gtm_backend.phase3.agents.agent_11_personalisation.llm.chat_json",
         return_value=empty_llm,
     ), patch(
-        "gtm_backend.phase3.agents.agent_11_personalisation.supabase.upsert_personalisation",
+        "gtm_backend.phase3.agents.agent_11_personalisation.supabase.bulk_upsert_personalisations",
         return_value=None,
     ) as upsert_mock:
         summary = run_personalisation(icp_id=1)
@@ -65,10 +65,33 @@ def test_agent_11_holds_when_no_intel(sample_lead):
     assert summary["personalisations_written"] == 1
     assert summary["held"] == 1
     upsert_mock.assert_called_once()
-    result = upsert_mock.call_args[0][0]
+    result = upsert_mock.call_args[0][0][0]
     assert result.status == "held"
     assert result.held_reason  # non-empty string
     assert "insufficient" in result.held_reason.lower()
+
+
+def test_agent_11_results_are_batched_into_a_single_bulk_call(sample_lead, mock_llm_personalisation):
+    """N+1-on-writes fix: 2 leads must produce exactly one
+    bulk_upsert_personalisations call carrying both results, not one call
+    per lead (same class of fix already applied to Agent 06/Agent 37)."""
+    lead_2 = dict(sample_lead, id=sample_lead["id"] + 1)
+    with patch(
+        "gtm_backend.phase3.agents.agent_11_personalisation.supabase.get_leads_for_personalisation",
+        return_value=[sample_lead, lead_2],
+    ), patch(
+        "gtm_backend.phase3.agents.agent_11_personalisation.llm.chat_json",
+        return_value=mock_llm_personalisation,
+    ), patch(
+        "gtm_backend.phase3.agents.agent_11_personalisation.supabase.bulk_upsert_personalisations",
+        return_value=None,
+    ) as upsert_mock:
+        summary = run_personalisation(icp_id=1)
+
+    assert summary["personalisations_written"] == 2
+    upsert_mock.assert_called_once()
+    results = upsert_mock.call_args[0][0]
+    assert len(results) == 2
 
 
 def test_agent_11_never_ready_with_zero_angles(sample_lead):
@@ -92,12 +115,12 @@ def test_agent_11_never_ready_with_zero_angles(sample_lead):
         "gtm_backend.phase3.agents.agent_11_personalisation.llm.chat_json",
         return_value=bad_llm,
     ), patch(
-        "gtm_backend.phase3.agents.agent_11_personalisation.supabase.upsert_personalisation",
+        "gtm_backend.phase3.agents.agent_11_personalisation.supabase.bulk_upsert_personalisations",
         return_value=None,
     ) as upsert_mock:
         run_personalisation(icp_id=1)
 
-    result = upsert_mock.call_args[0][0]
+    result = upsert_mock.call_args[0][0][0]
     assert result.angles == []
     assert result.status == "low_quality"   # NOT "ready"
     assert result.held_reason

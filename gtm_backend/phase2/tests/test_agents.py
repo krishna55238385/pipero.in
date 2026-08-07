@@ -59,8 +59,8 @@ def test_agent_06_builds_brief_with_quality_score(
         return_value=llm_payload,
     )
     upsert_mock = mocker.patch(
-        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.upsert_account_brief",
-        return_value=1,
+        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.bulk_upsert_account_briefs",
+        return_value=None,
     )
 
     summary = build_account_intelligence(icp_id=1, limit=5)
@@ -69,7 +69,7 @@ def test_agent_06_builds_brief_with_quality_score(
     assert summary["scrape_failed"] == 0
     llm_mock.assert_called_once()
     upsert_mock.assert_called_once()
-    brief = upsert_mock.call_args[0][0]
+    brief = upsert_mock.call_args[0][0][0]
     assert brief.lead_id == fake_lead["id"]
     assert brief.status == "fresh"
     assert brief.brief_quality_score > 0
@@ -123,8 +123,8 @@ def test_agent_06_falls_back_to_website_when_search_empty(mocker, fake_lead):
         return_value=llm_payload,
     )
     upsert_mock = mocker.patch(
-        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.upsert_account_brief",
-        return_value=1,
+        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.bulk_upsert_account_briefs",
+        return_value=None,
     )
 
     summary = build_account_intelligence(icp_id=1, limit=5)
@@ -132,7 +132,7 @@ def test_agent_06_falls_back_to_website_when_search_empty(mocker, fake_lead):
     site_mock.assert_called_once()
     llm_mock.assert_called_once()
     upsert_mock.assert_called_once()
-    brief = upsert_mock.call_args[0][0]
+    brief = upsert_mock.call_args[0][0][0]
     assert brief.status in {"fresh", "low_quality"}
     assert summary["scrape_failed"] == 0
     # the website page URLs became the brief's scanned sources
@@ -178,8 +178,8 @@ def test_agent_06_llm_knowledge_fallback_when_no_web_at_all(mocker, fake_lead):
         return_value=llm_payload,
     )
     upsert_mock = mocker.patch(
-        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.upsert_account_brief",
-        return_value=1,
+        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.bulk_upsert_account_briefs",
+        return_value=None,
     )
 
     build_account_intelligence(icp_id=1, limit=5)
@@ -187,7 +187,7 @@ def test_agent_06_llm_knowledge_fallback_when_no_web_at_all(mocker, fake_lead):
     llm_mock.assert_called_once()
     # the knowledge fallback must use the inference-only system prompt
     assert llm_mock.call_args[0][0] == ACCOUNT_INTELLIGENCE_FALLBACK_SYSTEM
-    brief = upsert_mock.call_args[0][0]
+    brief = upsert_mock.call_args[0][0][0]
     assert brief.status == "llm_fallback"
     assert brief.confirmed_facts == []  # nothing was verified against a source
 
@@ -211,15 +211,55 @@ def test_agent_06_scrape_failed_when_all_sources_fail(mocker, fake_lead):
         side_effect=RuntimeError("LLM down"),
     )
     upsert_mock = mocker.patch(
-        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.upsert_account_brief",
-        return_value=1,
+        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.bulk_upsert_account_briefs",
+        return_value=None,
     )
 
     summary = build_account_intelligence(icp_id=1, limit=5)
 
-    brief = upsert_mock.call_args[0][0]
+    brief = upsert_mock.call_args[0][0][0]
     assert brief.status == "scrape_failed"
     assert summary["scrape_failed"] == 1
+
+
+def test_agent_06_briefs_are_batched_into_a_single_bulk_call(mocker, fake_lead, fake_serp_organic_results, fake_serp_news_results):
+    """The N+1-on-writes fix: 2 leads must produce exactly one
+    bulk_upsert_account_briefs call carrying both briefs, not one call per
+    lead (same class of fix already applied to Agent 37)."""
+    lead_2 = dict(fake_lead, id=fake_lead["id"] + 1, company_name="Beta People")
+    llm_payload = {
+        "what_they_do": "x", "business_model": "B2B", "company_size_estimate": "SMB",
+        "growth_trajectory": "", "competitive_position": "",
+        "recent_moves": [], "likely_pain_points": [], "instability_flags": [],
+        "confirmed_facts": [], "inferences": [], "key_signals_for_outreach": [],
+    }
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.get_leads_for_account_intel",
+        return_value=[fake_lead, lead_2],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_06_account_intel.serpapi.search",
+        return_value=fake_serp_organic_results,
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_06_account_intel.serpapi.search_news",
+        return_value=fake_serp_news_results,
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_06_account_intel.llm.chat_json",
+        return_value=llm_payload,
+    )
+    upsert_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_06_account_intel.supabase.bulk_upsert_account_briefs",
+        return_value=None,
+    )
+
+    summary = build_account_intelligence(icp_id=1, limit=5)
+
+    assert summary["briefs_built"] == 2
+    upsert_mock.assert_called_once()
+    briefs = upsert_mock.call_args[0][0]
+    assert len(briefs) == 2
 
 
 # Agent 07 ---------------------------------------------------------------

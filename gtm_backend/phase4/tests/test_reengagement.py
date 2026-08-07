@@ -35,10 +35,15 @@ def _run(deals=None, unsubscribed=None, history=None, contact=None, llm_result=N
         kwargs["side_effect"] = llm_side_effect
     else:
         kwargs["return_value"] = llm_result or _LLM_DRAFT
-    with patch(f"{_MOD}.supabase.get_closed_lost_deals", return_value=deals if deals is not None else [_DEAL]), \
+    resolved_deals = deals if deals is not None else [_DEAL]
+    resolved_contact = contact if contact is not None else _CONTACT
+    contacts_map = {
+        d["contact_id"]: resolved_contact for d in resolved_deals if d.get("contact_id")
+    }
+    with patch(f"{_MOD}.supabase.get_closed_lost_deals", return_value=resolved_deals), \
          patch(f"{_MOD}.supabase.get_unsubscribed_emails", return_value=unsubscribed or set()), \
          patch(f"{_MOD}.supabase.get_reengagement_touch_history", return_value=history or []), \
-         patch(f"{_MOD}.supabase.get_contact_by_id", return_value=contact if contact is not None else _CONTACT), \
+         patch(f"{_MOD}.supabase.get_contacts_by_ids", return_value=contacts_map), \
          patch(f"{_MOD}.supabase.create_reengagement_touch", return_value={"id": 1}) as creator, \
          patch(f"{_MOD}.llm.chat_json", **kwargs) as chat:
         result = run_reengagement()
@@ -114,10 +119,24 @@ def test_deal_with_no_close_or_activity_date_is_held():
     with patch(f"{_MOD}.supabase.get_closed_lost_deals", return_value=[deal_no_date]), \
          patch(f"{_MOD}.supabase.get_unsubscribed_emails", return_value=set()), \
          patch(f"{_MOD}.supabase.get_reengagement_touch_history", return_value=[]), \
-         patch(f"{_MOD}.supabase.get_contact_by_id", return_value=_CONTACT), \
+         patch(f"{_MOD}.supabase.get_contacts_by_ids", return_value={"contact-1": _CONTACT}), \
          patch(f"{_MOD}.supabase.create_reengagement_touch", return_value={"id": 1}) as creator, \
          patch(f"{_MOD}.llm.chat_json") as chat:
         result = run_reengagement()
     assert result["held"] == 1
     chat.assert_not_called()
     creator.assert_not_called()
+
+
+def test_contact_lookup_is_batched_into_one_call_regardless_of_deal_count():
+    deal_2 = dict(_DEAL, id="deal-2", contact_id="contact-2")
+    contact_2 = {"id": "contact-2", "email": "vp2@acmehr.com", "name": "Rahul"}
+    with patch(f"{_MOD}.supabase.get_closed_lost_deals", return_value=[_DEAL, deal_2]), \
+         patch(f"{_MOD}.supabase.get_unsubscribed_emails", return_value=set()), \
+         patch(f"{_MOD}.supabase.get_reengagement_touch_history", return_value=[]), \
+         patch(f"{_MOD}.supabase.get_contacts_by_ids", return_value={"contact-1": _CONTACT, "contact-2": contact_2}) as contacts_batch, \
+         patch(f"{_MOD}.supabase.create_reengagement_touch", return_value={"id": 1}), \
+         patch(f"{_MOD}.llm.chat_json", return_value=_LLM_DRAFT):
+        result = run_reengagement()
+    contacts_batch.assert_called_once()
+    assert result["drafted"] == 2

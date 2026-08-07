@@ -36,10 +36,18 @@ def _run(deals=None, history=None, contact=None, company=None, search_results=No
         kwargs["side_effect"] = llm_side_effect
     else:
         kwargs["return_value"] = llm_result if llm_result is not None else _LLM_MOVED
-    with patch(f"{_MOD}.supabase.get_won_deals_with_contacts", return_value=deals if deals is not None else [_DEAL]), \
-         patch(f"{_MOD}.supabase.get_champion_move_history", return_value=history or []), \
-         patch(f"{_MOD}.supabase.get_contact_by_id", return_value=contact if contact is not None else _CONTACT), \
-         patch(f"{_MOD}.supabase.get_company_by_id", return_value=company if company is not None else _COMPANY), \
+    resolved_deals = deals if deals is not None else [_DEAL]
+    resolved_contact = contact if contact is not None else _CONTACT
+    resolved_company = company if company is not None else _COMPANY
+    contact_id = resolved_deals[0]["contact_id"] if resolved_deals else None
+    history_map = {contact_id: (history or [])} if contact_id else {}
+    contacts_map = {contact_id: resolved_contact} if contact_id and resolved_contact else {}
+    company_id = (resolved_contact or {}).get("company_id")
+    companies_map = {company_id: resolved_company} if company_id and resolved_company else {}
+    with patch(f"{_MOD}.supabase.get_won_deals_with_contacts", return_value=resolved_deals), \
+         patch(f"{_MOD}.supabase.get_champion_move_history_batch", return_value=history_map), \
+         patch(f"{_MOD}.supabase.get_contacts_by_ids", return_value=contacts_map), \
+         patch(f"{_MOD}.supabase.get_companies_by_ids", return_value=companies_map), \
          patch(f"{_MOD}.supabase.get_org_product_description", return_value="AI GTM automation"), \
          patch(f"{_MOD}.serpapi.search", return_value=search_results if search_results is not None else _SNIPPETS), \
          patch(f"{_MOD}.supabase.create_champion_move", return_value={"id": 1}) as creator, \
@@ -108,11 +116,34 @@ def test_llm_failure_does_not_create_a_row():
     creator.assert_not_called()
 
 
+def test_lookups_are_batched_into_one_call_each_regardless_of_deal_count():
+    """The N+1 fix: history/contacts/companies must each be fetched once
+    for all deals, not once per deal."""
+    deal_2 = dict(_DEAL, id="deal-2", contact_id="contact-2", company_id="company-2")
+    contact_2 = {"id": "contact-2", "name": "Rahul Nair", "email": "rahul@acmehr.com", "company_id": "company-2"}
+    company_2 = {"id": "company-2", "name": "Widget Co"}
+
+    with patch(f"{_MOD}.supabase.get_won_deals_with_contacts", return_value=[_DEAL, deal_2]), \
+         patch(f"{_MOD}.supabase.get_champion_move_history_batch", return_value={"contact-1": [], "contact-2": []}) as history_batch, \
+         patch(f"{_MOD}.supabase.get_contacts_by_ids", return_value={"contact-1": _CONTACT, "contact-2": contact_2}) as contacts_batch, \
+         patch(f"{_MOD}.supabase.get_companies_by_ids", return_value={"company-1": _COMPANY, "company-2": company_2}) as companies_batch, \
+         patch(f"{_MOD}.supabase.get_org_product_description", return_value="AI GTM automation"), \
+         patch(f"{_MOD}.serpapi.search", return_value=_SNIPPETS), \
+         patch(f"{_MOD}.supabase.create_champion_move", return_value={"id": 1}), \
+         patch(f"{_MOD}.llm.chat_json", return_value=_LLM_MOVED):
+        result = run_champion_tracker()
+
+    history_batch.assert_called_once()
+    contacts_batch.assert_called_once()
+    companies_batch.assert_called_once()
+    assert result["drafted"] == 2
+
+
 def test_search_failure_does_not_create_a_row():
     with patch(f"{_MOD}.supabase.get_won_deals_with_contacts", return_value=[_DEAL]), \
-         patch(f"{_MOD}.supabase.get_champion_move_history", return_value=[]), \
-         patch(f"{_MOD}.supabase.get_contact_by_id", return_value=_CONTACT), \
-         patch(f"{_MOD}.supabase.get_company_by_id", return_value=_COMPANY), \
+         patch(f"{_MOD}.supabase.get_champion_move_history_batch", return_value={"contact-1": []}), \
+         patch(f"{_MOD}.supabase.get_contacts_by_ids", return_value={"contact-1": _CONTACT}), \
+         patch(f"{_MOD}.supabase.get_companies_by_ids", return_value={"company-1": _COMPANY}), \
          patch(f"{_MOD}.supabase.create_champion_move", return_value={"id": 1}) as creator, \
          patch(f"{_MOD}.serpapi.search", side_effect=RuntimeError("serpapi down")), \
          patch(f"{_MOD}.llm.chat_json") as chat:

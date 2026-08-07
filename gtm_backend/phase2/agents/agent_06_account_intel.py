@@ -46,7 +46,9 @@ def build_account_intelligence(icp_id: int | None = None, limit: int | None = No
         if brief is None:
             continue
         briefs.append(brief)
-        supabase.upsert_account_brief(brief)
+    # One bulk upsert for all briefs instead of one per lead in the loop —
+    # same N+1-on-writes fix already applied to Agent 37.
+    supabase.bulk_upsert_account_briefs(briefs)
 
     summary = {
         "icp_id": icp_id,

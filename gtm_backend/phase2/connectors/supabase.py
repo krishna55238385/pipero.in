@@ -238,7 +238,7 @@ def _patch(path: str, params: dict, json_body: dict) -> list[dict]:
 
 
 @retry_on_transient()
-def _upsert(path: str, json_body: dict, conflict_columns: list[str]) -> list[dict]:
+def _upsert(path: str, json_body: dict | list[dict], conflict_columns: list[str]) -> list[dict]:
     """INSERT ... ON CONFLICT (conflict_columns) DO UPDATE ... RETURNING *.
 
     Atomic replacement for the old "SELECT by key, then PATCH or POST" pattern
@@ -249,18 +249,28 @@ def _upsert(path: str, json_body: dict, conflict_columns: list[str]) -> list[dic
     this pipeline's single-writer-per-run usage) TOCTOU race where two
     concurrent calls for the same key could both see "not found" and both
     INSERT, producing a duplicate row.
-    """
+
+    Accepts either a single dict (original single-row behavior) or a list of
+    dicts (multi-row upsert in one statement — added for batched writes like
+    bulk_upsert_account_briefs; every dict in the list must have the same set
+    of keys, matching the phase3 _upsert's list-handling behavior)."""
     table = _table_from_path(path)
-    json_body = _inject_org(json_body)
-    columns = list(json_body.keys())
+    rows_in = json_body if isinstance(json_body, list) else [json_body]
+    rows_in = [_inject_org(row) for row in rows_in]
+    if not rows_in:
+        return []
+    columns = list(rows_in[0].keys())
     col_list = ", ".join(columns)
     values: list = []
-    placeholders = [_value_placeholder(col, json_body.get(col), values) for col in columns]
+    value_groups = []
+    for row in rows_in:
+        placeholders = [_value_placeholder(col, row.get(col), values) for col in columns]
+        value_groups.append("(" + ", ".join(placeholders) + ")")
     conflict_list = ", ".join(conflict_columns)
     update_cols = [c for c in columns if c not in conflict_columns]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
     sql = (
-        f"INSERT INTO {table} ({col_list}) VALUES ({', '.join(placeholders)}) "
+        f"INSERT INTO {table} ({col_list}) VALUES {', '.join(value_groups)} "
         f"ON CONFLICT ({conflict_list}) DO UPDATE SET {set_clause} "
         f"RETURNING *"
     )
@@ -345,6 +355,23 @@ def upsert_account_brief(brief: AccountBrief) -> int:
             return _local_fallback_append("account_intelligence", payload)
         raise
     return rows[0]["id"] if rows else 0
+
+
+def bulk_upsert_account_briefs(briefs: list[AccountBrief]) -> None:
+    """Batched form of upsert_account_brief — one multi-row statement for
+    many briefs instead of one upsert per lead in Agent 06's main loop (same
+    N+1-on-writes pattern already fixed for Agent 37's bulk_update_leads_raw)."""
+    if not briefs:
+        return
+    payloads = [_account_brief_payload(b) for b in briefs]
+    try:
+        _upsert("/account_intelligence", payloads, conflict_columns=["lead_id"])
+    except SupabaseError as exc:
+        if _missing_table(exc, "account_intelligence"):
+            for payload in payloads:
+                _local_fallback_append("account_intelligence", payload)
+            return
+        raise
 
 
 def get_account_brief(lead_id: int) -> dict | None:

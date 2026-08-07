@@ -75,6 +75,15 @@ def run_champion_tracker(limit: int | None = None) -> dict:
     deals = supabase.get_won_deals_with_contacts(limit=limit)
     print(f"  → {len(deals)} won deal(s) with a contact on file")
 
+    # Batch the three per-deal lookups that used to run once per deal (N+1):
+    # move-history (to skip already-checked contacts), contact rows, and
+    # company rows — one query each instead of up to 3*N queries.
+    contact_ids = [d.get("contact_id") for d in deals if d.get("contact_id")]
+    history_map = supabase.get_champion_move_history_batch(contact_ids)
+    contacts_map = supabase.get_contacts_by_ids(contact_ids)
+    company_ids = [c.get("company_id") for c in contacts_map.values() if c.get("company_id")]
+    companies_map = supabase.get_companies_by_ids(company_ids)
+
     drafted = 0
     competitor_skip = 0
     held = 0
@@ -82,7 +91,7 @@ def run_champion_tracker(limit: int | None = None) -> dict:
     failed = 0
 
     for deal in deals:
-        result = _process_champion(deal)
+        result = _process_champion(deal, history_map, contacts_map, companies_map)
         status = result["status"]
         if status == "drafted":
             drafted += 1
@@ -110,23 +119,41 @@ def run_champion_tracker(limit: int | None = None) -> dict:
     }
 
 
-def _process_champion(deal: dict) -> dict:
+def _process_champion(
+    deal: dict,
+    history_map: dict[str, list[dict]] | None = None,
+    contacts_map: dict[str, dict] | None = None,
+    companies_map: dict[str, dict] | None = None,
+) -> dict:
     contact_id = deal.get("contact_id")
     if not contact_id:
         return {"status": "failed", "reason": "deal has no contact_id"}
 
-    history = supabase.get_champion_move_history(contact_id)
+    # Prefer the prefetched batch maps (the normal run_champion_tracker
+    # path); fall back to the old per-id calls so this function still works
+    # if ever invoked directly without prefetching.
+    if history_map is not None:
+        history = history_map.get(contact_id, [])
+    else:
+        history = supabase.get_champion_move_history(contact_id)
     if history:
         # Already checked once, ever — see module docstring for why this
         # doesn't re-check on a cadence yet.
         return {"status": "already_checked"}
 
-    contact = supabase.get_contact_by_id(contact_id) or {}
+    if contacts_map is not None:
+        contact = contacts_map.get(contact_id) or {}
+    else:
+        contact = supabase.get_contact_by_id(contact_id) or {}
     contact_name = (contact.get("name") or "").strip()
     if not contact_name:
         return {"status": "failed", "reason": "contact has no name on file"}
 
-    company = supabase.get_company_by_id(contact.get("company_id"))
+    company_id = contact.get("company_id")
+    if companies_map is not None:
+        company = companies_map.get(company_id) if company_id else None
+    else:
+        company = supabase.get_company_by_id(company_id)
     original_company = (company or {}).get("name") or deal.get("title") or "their previous company"
 
     try:

@@ -22,9 +22,13 @@ def _run(deals, contact=None, company=None, llm_result=None, llm_side_effect=Non
         kwargs["side_effect"] = llm_side_effect
     else:
         kwargs["return_value"] = llm_result if llm_result is not None else _LLM_RESULT
+    contact_ids = {d["contact_id"] for d in deals if d.get("contact_id")}
+    contacts_map = {cid: contact for cid in contact_ids} if contact is not None else {}
+    company_id = (contact or {}).get("company_id")
+    companies_map = {company_id: company} if company_id and company is not None else {}
     with patch(f"{_MOD}.supabase.get_all_deals", return_value=deals), \
-         patch(f"{_MOD}.supabase.get_contact_by_id", return_value=contact), \
-         patch(f"{_MOD}.supabase.get_company_by_id", return_value=company), \
+         patch(f"{_MOD}.supabase.get_contacts_by_ids", return_value=contacts_map), \
+         patch(f"{_MOD}.supabase.get_companies_by_ids", return_value=companies_map), \
          patch(f"{_MOD}.supabase.create_revenue_intelligence_snapshot", return_value={"id": 1}) as creator, \
          patch(f"{_MOD}.llm.chat_json", **kwargs) as chat:
         result = generate_revenue_intelligence()
@@ -91,3 +95,17 @@ def test_segment_breakdown_falls_back_to_unknown_without_company_link():
     deals = [_deal("won") for _ in range(12)] + [_deal("lost") for _ in range(8)]
     result, creator, chat = _run(deals, contact=None, company=None)
     assert "unknown" in result["segment_breakdown"]
+
+
+def test_segment_breakdown_lookups_are_batched_into_one_call_each():
+    deals = [_deal("won", contact_id="c1") for _ in range(12)] + [_deal("lost", contact_id="c2") for _ in range(8)]
+    with patch(f"{_MOD}.supabase.get_all_deals", return_value=deals), \
+         patch(f"{_MOD}.supabase.get_contacts_by_ids", return_value={"c1": {"company_id": "co1"}, "c2": {"company_id": "co2"}}) as contacts_batch, \
+         patch(f"{_MOD}.supabase.get_companies_by_ids", return_value={"co1": {"industry": "HR Tech"}, "co2": {"industry": "Fintech"}}) as companies_batch, \
+         patch(f"{_MOD}.supabase.create_revenue_intelligence_snapshot", return_value={"id": 1}), \
+         patch(f"{_MOD}.llm.chat_json", return_value=_LLM_RESULT):
+        result = generate_revenue_intelligence()
+    contacts_batch.assert_called_once()
+    companies_batch.assert_called_once()
+    assert result["segment_breakdown"]["HR Tech"]["won"] == 12
+    assert result["segment_breakdown"]["Fintech"]["lost"] == 8

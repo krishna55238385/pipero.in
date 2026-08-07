@@ -124,7 +124,7 @@ def test_phase3_pipeline_end_to_end(
             "gtm_backend.phase3.agents.agent_14_orchestrator.instantly.activate_campaign",
             side_effect=_explode_create_campaign))
         upsert_pers = stack.enter_context(_p(
-            "gtm_backend.phase3.agents.agent_11_personalisation.supabase.upsert_personalisation",
+            "gtm_backend.phase3.agents.agent_11_personalisation.supabase.bulk_upsert_personalisations",
             return_value=None))
         upsert_seq = stack.enter_context(_p(
             "gtm_backend.phase3.agents.agent_12_copywriter.supabase.upsert_sequence", return_value=None))
