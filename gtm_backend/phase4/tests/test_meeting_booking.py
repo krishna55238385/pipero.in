@@ -6,6 +6,7 @@ from gtm_backend.phase4.agents.agent_22_meeting_booking import (
     propose_meetings,
     sync_meeting_confirmations,
 )
+from gtm_backend.phase4.core.prompts import MEETING_INTENT_SYSTEM
 
 _MOD = "gtm_backend.phase4.agents.agent_22_meeting_booking"
 
@@ -103,6 +104,46 @@ def test_at_least_3_slots_requested_from_calcom():
         propose_meetings()
 
     assert slots_mock.call_args.kwargs["min_slots"] == 3
+
+
+# -- MEETING_INTENT_SYSTEM prompt regression -------------------------------
+# Found live 2026-08-07: a VP-level reply stating budget approval + a Q3
+# deadline (but never explicitly asking to "talk" or "call") was wrongly
+# classified wants_meeting=false under the old explicit-ask-only rule,
+# leaving a real, budget-approved prospect unprocessed for 13 days. These
+# lock in that the prompt now explicitly instructs the LLM to also treat a
+# clear budget+authority+timing buying signal as meeting-worthy on its own.
+
+def test_prompt_covers_high_intent_buying_signal_not_just_explicit_ask():
+    assert "budget" in MEETING_INTENT_SYSTEM.lower()
+    assert "authority" in MEETING_INTENT_SYSTEM.lower()
+    assert "timing" in MEETING_INTENT_SYSTEM.lower() or "deadline" in MEETING_INTENT_SYSTEM.lower()
+
+
+def test_proposes_meeting_for_high_intent_reply_without_explicit_ask():
+    """Same shape as the real reply that was missed — budget + authority +
+    deadline, no literal 'can we talk' — must be treated as meeting-worthy."""
+    budget_reply = {
+        **_REPLY,
+        "reply_text": (
+            "This looks great — we need something before our Q3 compliance "
+            "deadline, and as VP of Ops I can approve budget up to $15,000."
+        ),
+    }
+    with patch(f"{_MOD}.supabase.get_replies_needing_meeting_check", return_value=[budget_reply]), \
+         patch(f"{_MOD}.supabase.get_meeting_for_reply", return_value=None), \
+         patch(f"{_MOD}.llm.chat_json", return_value={
+             "wants_meeting": True, "reasoning": "budget+authority+timing all present (rule b)",
+         }), \
+         patch(f"{_MOD}.supabase.get_channel_plan_for_lead", return_value={"timezone": "UTC"}), \
+         patch(f"{_MOD}.calcom.get_available_slots", return_value=_SLOTS), \
+         patch(f"{_MOD}.gmail_oauth.send_html_email"), \
+         patch(f"{_MOD}.supabase.create_meeting") as create_mock, \
+         patch(f"{_MOD}.supabase.update_reply"):
+        summary = propose_meetings()
+
+    assert summary["proposed"] == 1
+    create_mock.assert_called_once()
 
 
 # -- sync_meeting_confirmations ------------------------------------------

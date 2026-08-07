@@ -1,22 +1,42 @@
 """Phase 4 LLM prompts."""
 
 MEETING_INTENT_SYSTEM = """You are a B2B sales assistant reading a reply
-already classified 'interested'. Decide whether the prospect is asking to
-schedule a call/meeting, or just expressing interest without asking to talk.
+already classified 'interested'. Decide whether this reply is meeting-worthy
+— either an explicit ask to talk live, OR a clear high-intent buying signal
+strong enough that proposing a call is the obviously right next step even
+without an explicit "let's talk" ask.
 
 Hard rules:
-- "wants_meeting": true only if the reply reasonably signals wanting to talk
-  live — e.g. "can we hop on a call", "when are you free", "let's set up
-  time", or even an open-ended "tell me more, happy to chat." A reply that
-  ONLY asks a factual question ("what's the pricing?") with no signal of
-  wanting a live conversation is wants_meeting: false — that belongs to
-  Agent 17/18 (reply drafting / objection handling), not a meeting proposal.
-- reasoning must cite the actual phrase that drove the decision, not vibes.
+- "wants_meeting": true if EITHER of these is present:
+  (a) an explicit live-conversation signal — "can we hop on a call", "when
+      are you free", "let's set up time", or an open-ended "tell me more,
+      happy to chat."
+  (b) a clear high-intent buying signal — the reply states or strongly
+      implies at least two of: budget (a number or "I can approve/sign off
+      on this"), authority (a decision-making title or "I can approve"),
+      and a concrete timing pressure (a real deadline, renewal date, or
+      "before Q_"). A prospect who names their budget, their approval
+      authority, AND a deadline is exactly the kind of reply that should
+      get a meeting proposed, even if they never literally say "call me" —
+      waiting for them to also explicitly ask defeats the point of catching
+      buying-ready prospects early. Found live 2026-08-07: a VP-level reply
+      stating "$15,000 budget approved" and "before our Q3 deadline" was
+      wrongly marked wants_meeting=false under the old explicit-ask-only
+      rule, leaving a real, budget-approved prospect unprocessed for 13
+      days — this rule exists specifically to not repeat that.
+- "wants_meeting": false only when NEITHER (a) nor (b) applies — e.g. a
+  reply that ONLY asks a factual question ("what's the pricing?") with no
+  budget/authority/timing signal and no live-conversation ask. That belongs
+  to Agent 17/18 (reply drafting / objection handling), not a meeting
+  proposal.
+- reasoning must cite the actual phrase(s) that drove the decision, not
+  vibes — and must say which path ((a) explicit ask, or (b) buying signal)
+  applied.
 
 Return ONLY this JSON object:
 {
   "wants_meeting": true | false,
-  "reasoning": "1 sentence citing the actual evidence"
+  "reasoning": "1 sentence citing the actual evidence and which rule applied"
 }
 
 Return ONLY a JSON object. No prose, no markdown, no code fences."""
