@@ -152,6 +152,15 @@ def _parse_filter(column: str, expr: str, values: list) -> str:
     if expr.startswith("gte."):
         values.append(expr[len("gte."):])
         return f"{column} >= %s"
+    if expr.startswith("gt."):
+        # Found live 2026-08-07: get_replies_for_lead_since() has always
+        # built a "gt.<iso>" filter, but this DSL never implemented "gt." at
+        # all (only "gte.") — every call raised ValueError, meaning
+        # sync_meeting_confirmations has crashed on every meeting with a
+        # proposed_at set since the Supabase->RDS migration, not just this
+        # test run.
+        values.append(expr[len("gt."):])
+        return f"{column} > %s"
     if expr.startswith("in.(") and expr.endswith(")"):
         inner = expr[len("in.("):-1]
         items = [v.strip() for v in inner.split(",") if v.strip() != ""]
