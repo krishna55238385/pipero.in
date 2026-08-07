@@ -321,12 +321,21 @@ def _format_slot(iso_str: str, tz_name: str) -> str:
         return iso_str
 
 
+def _tz_label(tz_name: str) -> str:
+    """Copy for the proposal email's timezone note. Found live 2026-08-07: a
+    lead with no channel-plan timezone on file falls back to UTC (correct
+    behavior — there's no real data to personalize with), but the email
+    still claimed 'shown in your local timezone', which is misleading when
+    it's actually just the UTC fallback, not a known personalized zone."""
+    return "shown in your local timezone" if tz_name != "UTC" else "shown in UTC"
+
+
 def _proposal_email(company: str, slots: list[str], tz_name: str) -> str:
     items = "".join(f"<li>{_format_slot(s, tz_name)}</li>" for s in slots)
     return (
         f"<p>Hi there,</p>"
         f"<p>Happy to find time to talk. A few options that work on our end "
-        f"(times shown in your local timezone):</p>"
+        f"(times {_tz_label(tz_name)}):</p>"
         f"<ul>{items}</ul>"
         f"<p>Reply with whichever works best and I'll lock it in — or let me "
         f"know if none of these fit and I'll find another time.</p>"

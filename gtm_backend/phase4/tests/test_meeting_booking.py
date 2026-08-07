@@ -3,6 +3,7 @@ Gmail, Supabase) mocked."""
 from unittest.mock import patch
 
 from gtm_backend.phase4.agents.agent_22_meeting_booking import (
+    _proposal_email,
     propose_meetings,
     sync_meeting_confirmations,
 )
@@ -153,6 +154,24 @@ def test_proposes_meeting_for_high_intent_reply_without_explicit_ask():
 
     assert summary["proposed"] == 1
     create_mock.assert_called_once()
+
+
+# -- Timezone-label copy fix -------------------------------------------
+# Found live 2026-08-07: a lead with no channel-plan timezone falls back to
+# UTC (correct behavior), but the proposal email still claimed times were
+# "shown in your local timezone" — misleading when it's really just the UTC
+# fallback, not a known personalized zone.
+
+def test_proposal_email_says_utc_when_falling_back_not_your_local_timezone():
+    html = _proposal_email("Acme HR", _SLOTS, "UTC")
+    assert "shown in UTC" in html
+    assert "your local timezone" not in html
+
+
+def test_proposal_email_says_local_timezone_when_a_real_zone_is_known():
+    html = _proposal_email("Acme HR", _SLOTS, "Asia/Kolkata")
+    assert "shown in your local timezone" in html
+    assert "shown in UTC" not in html
 
 
 # -- sync_meeting_confirmations ------------------------------------------
