@@ -1103,6 +1103,22 @@ def get_channel_plan_for_lead(lead_id: int) -> dict | None:
     return rows[0] if rows else None
 
 
+def get_lead_by_id(lead_id: int) -> dict | None:
+    """The leads_raw row for one lead — used by Agent 22 to get the real
+    company_name for proposal/confirmation emails.
+
+    Found live 2026-08-07: Agent 22 was reading reply.get("company_name")
+    off the outreach_replies row, but that table has no company_name column
+    at all (confirmed against schema.sql) — every real send would have
+    hit the same "?" placeholder bug the fake test row exposed, not just
+    the test. This is the correct source: leads_raw.company_name."""
+    try:
+        rows = _get("/leads_raw", params={"id": f"eq.{lead_id}", "limit": 1})
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
 def get_replies_needing_qualification(limit: int | None = None) -> list[dict]:
     """outreach_replies rows classified 'interested' that haven't been run
     through Agent 24 yet (deal_qualified=false). Scoped to 'interested' only

@@ -93,8 +93,12 @@ def _propose_for_reply(reply: dict) -> dict:
     reply_id = reply.get("id")
     lead_id = reply.get("lead_id")
     email = (reply.get("email") or "").strip()
-    company = reply.get("company_name") or "?"
     reply_text = reply.get("reply_text") or ""
+    # outreach_replies has no company_name column, so logging before the
+    # real lookup (below) just uses the id — cheap, and avoids a DB call for
+    # every reply examined when most won't reach the point of actually
+    # needing a company name (no-intent replies are the common case).
+    log_label = f"reply {reply_id}"
 
     if supabase.get_meeting_for_reply(reply_id) is not None:
         # Defensive: already has a meeting row (e.g. a re-run before the
@@ -110,7 +114,7 @@ def _propose_for_reply(reply: dict) -> dict:
             phase="phase4",
         )
     except Exception as exc:
-        print(f"  [Agent 22] reply {reply_id} ({company}) → intent check failed: {exc}")
+        print(f"  [Agent 22] {log_label} → intent check failed: {exc}")
         # Deliberately do NOT mark checked on an LLM failure — a transient
         # failure shouldn't permanently skip a real meeting request. Retried
         # on the next run instead.
@@ -118,20 +122,30 @@ def _propose_for_reply(reply: dict) -> dict:
 
     if not intent.get("wants_meeting"):
         supabase.update_reply(reply_id, meeting_booking_checked=True)
-        print(f"  [Agent 22] reply {reply_id} ({company}) → no meeting intent, skipping")
+        print(f"  [Agent 22] {log_label} → no meeting intent, skipping")
         return {"status": "no_intent", "reply_id": reply_id}
+
+    # outreach_replies has no company_name column — must look it up via the
+    # lead itself. reply.get("company_name") always returns None; using it
+    # directly was a real bug (see get_lead_by_id's docstring), caught live
+    # 2026-08-07 via a literal "?" in a sent email's subject line. Fetched
+    # here (only once intent is confirmed) rather than up front, so a
+    # no-intent reply — the common case — doesn't cost an extra DB call.
+    lead = supabase.get_lead_by_id(lead_id) if lead_id else None
+    company = (lead or {}).get("company_name") or "there"
+    log_label = f"reply {reply_id} ({company})"
 
     tz_name = _timezone_for_lead(lead_id)
     slots = calcom.get_available_slots(min_slots=3, timezone_name=tz_name)
     if not slots:
         # Do NOT mark checked — Cal.com being unreachable/misconfigured is a
         # transient/config issue, not "this prospect doesn't want a meeting."
-        print(f"  [Agent 22] reply {reply_id} ({company}) → no Cal.com slots available, will retry")
+        print(f"  [Agent 22] {log_label} → no Cal.com slots available, will retry")
         return {"status": "no_slots_available", "reply_id": reply_id}
 
     if not email:
         supabase.update_reply(reply_id, meeting_booking_checked=True)
-        print(f"  [Agent 22] reply {reply_id} ({company}) → no email on reply, cannot send proposal")
+        print(f"  [Agent 22] {log_label} → no email on reply, cannot send proposal")
         return {"status": "failed", "reply_id": reply_id, "error": "no_email"}
 
     html = _proposal_email(company, slots, tz_name)
@@ -237,7 +251,8 @@ def _sync_one_meeting(meeting: dict) -> dict:
         return {"status": "no_new_reply", "meeting_id": meeting_id}
 
     attendee_email = (latest.get("email") or "").strip()
-    company = latest.get("company_name") or "?"
+    lead = supabase.get_lead_by_id(lead_id) if lead_id else None
+    company = (lead or {}).get("company_name") or "there"
     tz_name = meeting.get("attendee_timezone") or "UTC"
 
     try:
