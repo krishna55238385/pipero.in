@@ -85,12 +85,24 @@ def get_available_slots(
     except Exception:
         return []
 
-    # v2 /slots groups by date: {"data": {"2026-08-10": [{"start": "..."}]}}
-    slots_by_date = (data or {}).get("data") or {}
+    # Real v2 /slots/available shape, confirmed live 2026-08-07 against the
+    # actual API (not the doc's abbreviated schema, which just says
+    # "data: object" with no further detail):
+    #   {"data": {"slots": {"<date>": [{"time": "..."}]}}}
+    # An earlier version of this code assumed {"data": {"<date>":
+    # [{"start": "..."}]}} — one level too shallow and the wrong key name —
+    # which silently produced [] on every real call (each date's ISO string
+    # got iterated as a bare dict value, or worse, iterating dict keys as if
+    # they were entries). Kept defensive .get() fallbacks below in case Cal.com
+    # changes this shape again; a shape mismatch should degrade to "no slots
+    # found" via the outer try/except's callers, not crash.
+    slots_by_date = ((data or {}).get("data") or {}).get("slots") or {}
     all_starts: list[str] = []
     for _date, entries in sorted(slots_by_date.items()):
         for entry in entries:
-            start_time = entry.get("start")
+            if not isinstance(entry, dict):
+                continue
+            start_time = entry.get("time") or entry.get("start")
             if start_time:
                 all_starts.append(start_time)
 

@@ -48,7 +48,7 @@ def test_get_available_slots_calls_the_correct_v2_endpoint_and_params():
     every real call silently returned [] (swallowed by the broad except),
     which looked exactly like 'no availability' to a caller, blocking a
     real budget-approved prospect from getting a meeting proposed at all."""
-    fake_resp = types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"data": {}})
+    fake_resp = types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"data": {"slots": {}}})
     with patch.object(calcom, "_settings", _settings()), \
          patch("httpx.get", return_value=fake_resp) as get_mock:
         calcom.get_available_slots()
@@ -62,10 +62,14 @@ def test_get_available_slots_calls_the_correct_v2_endpoint_and_params():
 
 
 def test_get_available_slots_picks_at_least_min_slots_spread_out():
+    # Real API shape, confirmed live 2026-08-07: {"data": {"slots":
+    # {"<date>": [{"time": "..."}]}}} — nested under "slots", key is "time".
     fake_data = {
         "data": {
-            "2026-08-10": [{"start": f"2026-08-10T{h:02d}:00:00Z"} for h in range(9, 17)],
-            "2026-08-11": [{"start": f"2026-08-11T{h:02d}:00:00Z"} for h in range(9, 17)],
+            "slots": {
+                "2026-08-10": [{"time": f"2026-08-10T{h:02d}:00:00Z"} for h in range(9, 17)],
+                "2026-08-11": [{"time": f"2026-08-11T{h:02d}:00:00Z"} for h in range(9, 17)],
+            }
         }
     }
     fake_resp = types.SimpleNamespace(
@@ -81,7 +85,26 @@ def test_get_available_slots_picks_at_least_min_slots_spread_out():
 
 
 def test_get_available_slots_returns_all_when_fewer_than_min():
-    fake_data = {"data": {"2026-08-10": [{"start": "2026-08-10T09:00:00Z"}]}}
+    fake_data = {"data": {"slots": {"2026-08-10": [{"time": "2026-08-10T09:00:00Z"}]}}}
+    fake_resp = types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: fake_data)
+    with patch.object(calcom, "_settings", _settings()), \
+         patch("httpx.get", return_value=fake_resp):
+        slots = calcom.get_available_slots(min_slots=3)
+
+    assert slots == ["2026-08-10T09:00:00Z"]
+
+
+def test_get_available_slots_handles_missing_slots_key_gracefully():
+    """A response missing the 'slots' wrapper (e.g. Cal.com changes shape
+    again, or a genuinely empty window) must degrade to [], never crash."""
+    fake_resp = types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"data": {}})
+    with patch.object(calcom, "_settings", _settings()), \
+         patch("httpx.get", return_value=fake_resp):
+        assert calcom.get_available_slots() == []
+
+
+def test_get_available_slots_ignores_non_dict_entries_defensively():
+    fake_data = {"data": {"slots": {"2026-08-10": ["not-a-dict", {"time": "2026-08-10T09:00:00Z"}]}}}
     fake_resp = types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: fake_data)
     with patch.object(calcom, "_settings", _settings()), \
          patch("httpx.get", return_value=fake_resp):
