@@ -26,6 +26,7 @@ from email.utils import formataddr, make_msgid
 
 import httpx
 
+from gtm_backend.phase3.connectors import supabase as _sb
 from gtm_backend.phase3.core.config import get_settings
 
 
@@ -48,32 +49,28 @@ class GmailApiError(RuntimeError):
         super().__init__(f"gmail api send to {to} failed: {detail}")
 
 
-def _sb_headers() -> dict:
-    key = _settings.supabase_key or ""
-    return {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-
 def _get_mailbox() -> dict | None:
-    """The most-recently connected Gmail mailbox (with OAuth tokens), or None."""
+    """The most-recently connected Gmail mailbox (with OAuth tokens), or None.
+
+    Goes through phase3/connectors/supabase.py's direct-RDS _get() helper
+    (same one every other phase3 table read uses) instead of a raw httpx call
+    against Supabase's hosted REST API. This file used to hit
+    {SUPABASE_URL}/rest/v1/engage_mailboxes directly, which broke silently
+    once SUPABASE_URL was repointed at the local PostgREST instance during
+    the Supabase->RDS migration (that instance serves tables at the root
+    path, not under /rest/v1/) — is_configured() always returned False as a
+    result, so Agent 14 never actually sent a real email, only dry-ran.
+    """
     try:
-        r = httpx.get(
-            f"{_settings.supabase_url}/rest/v1/engage_mailboxes",
+        rows = _sb._get(
+            "engage_mailboxes",
             params={
                 "select": "*",
                 "provider": "eq.gmail",
                 "order": "connected_at.desc",
                 "limit": 1,
             },
-            headers=_sb_headers(),
-            timeout=20,
         )
-        if r.status_code != 200:
-            return None
-        rows = r.json()
         return rows[0] if rows else None
     except Exception:
         return None
@@ -134,16 +131,14 @@ def _refresh_access_token(mailbox: dict) -> str:
         tz=timezone.utc,
     ).isoformat()
     try:
-        httpx.patch(
-            f"{_settings.supabase_url}/rest/v1/engage_mailboxes",
+        _sb._patch(
+            "engage_mailboxes",
             params={"id": f"eq.{mailbox.get('id')}"},
-            headers=_sb_headers(),
-            json={
+            json_body={
                 "access_token": access_token,
                 "expires_at": expires_at,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
-            timeout=20,
         )
     except Exception:
         # Persisting the refreshed token is best-effort; the send can still proceed.
