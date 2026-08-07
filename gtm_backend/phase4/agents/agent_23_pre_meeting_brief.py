@@ -74,7 +74,17 @@ def _generate_for_meeting(meeting: dict) -> dict:
         return {"status": "generated", "meeting_id": meeting_id}
 
     intel = supabase.get_account_intel_for_lead(lead_id) if lead_id else None
-    company = (intel or {}).get("company_name") or "this prospect"
+    # Found live 2026-08-07 (same bug class as Agent 22's company-name fix):
+    # account_intelligence often doesn't exist yet for a lead (Agent 06 never
+    # ran), which left the brief showing generic "this prospect" even though
+    # the real name was sitting right there in leads_raw. Fall back to it
+    # before giving up to the generic placeholder.
+    lead = supabase.get_lead_by_id(lead_id) if lead_id else None
+    company = (
+        (intel or {}).get("company_name")
+        or (lead or {}).get("company_name")
+        or "this prospect"
+    )
     account_context = {
         "business_model": (intel or {}).get("business_model"),
         "what_they_do": (intel or {}).get("what_they_do"),

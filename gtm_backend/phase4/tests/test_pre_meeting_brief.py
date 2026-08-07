@@ -8,6 +8,7 @@ from gtm_backend.phase4.agents.agent_23_pre_meeting_brief import (
 _MOD = "gtm_backend.phase4.agents.agent_23_pre_meeting_brief"
 
 _MEETING = {"id": 5, "lead_id": 1, "status": "confirmed"}
+_LEAD = {"id": 1, "company_name": "Acme HR"}
 _INTEL = {
     "company_name": "Acme HR",
     "business_model": "B2B SaaS, per-seat pricing",
@@ -32,6 +33,7 @@ def test_generates_brief_grounded_in_account_intelligence():
     with patch(f"{_MOD}.supabase.get_confirmed_meetings_needing_brief", return_value=[_MEETING]), \
          patch(f"{_MOD}.supabase.get_brief_for_meeting", return_value=None), \
          patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=_INTEL), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.llm.chat_json", return_value=_LLM_RESPONSE), \
          patch(f"{_MOD}.supabase.create_meeting_brief", return_value={"id": 1}) as create_mock:
         summary = generate_pending_meeting_briefs()
@@ -48,6 +50,7 @@ def test_llm_context_includes_all_account_intel_fields():
     with patch(f"{_MOD}.supabase.get_confirmed_meetings_needing_brief", return_value=[_MEETING]), \
          patch(f"{_MOD}.supabase.get_brief_for_meeting", return_value=None), \
          patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=_INTEL), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.llm.chat_json", return_value=_LLM_RESPONSE) as llm_mock, \
          patch(f"{_MOD}.supabase.create_meeting_brief", return_value={"id": 1}):
         generate_pending_meeting_briefs()
@@ -65,6 +68,7 @@ def test_unusual_context_flag_is_persisted_when_present():
     with patch(f"{_MOD}.supabase.get_confirmed_meetings_needing_brief", return_value=[_MEETING]), \
          patch(f"{_MOD}.supabase.get_brief_for_meeting", return_value=None), \
          patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=_INTEL), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.llm.chat_json", return_value=llm_response), \
          patch(f"{_MOD}.supabase.create_meeting_brief", return_value={"id": 1}) as create_mock:
         generate_pending_meeting_briefs()
@@ -79,6 +83,7 @@ def test_missing_account_intel_still_generates_a_brief_honestly():
     with patch(f"{_MOD}.supabase.get_confirmed_meetings_needing_brief", return_value=[_MEETING]), \
          patch(f"{_MOD}.supabase.get_brief_for_meeting", return_value=None), \
          patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=None), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.llm.chat_json", return_value={
              **_LLM_RESPONSE, "recent_development": "No recent public developments found",
          }) as llm_mock, \
@@ -87,7 +92,41 @@ def test_missing_account_intel_still_generates_a_brief_honestly():
 
     assert summary["generated"] == 1
     llm_mock.assert_called_once()
+    # Regression: even with no account_intelligence, the real company name
+    # (from leads_raw via get_lead_by_id) must be used — not the generic
+    # "this prospect" placeholder. Found live 2026-08-07.
+    assert create_mock.call_args[1]["company_name"] == "Acme HR"
+
+
+def test_missing_both_account_intel_and_lead_falls_back_to_generic_placeholder():
+    """Only when there's truly no data anywhere (no account_intelligence AND
+    no leads_raw row — e.g. a bad/orphaned lead_id) does the generic
+    'this prospect' placeholder get used."""
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_needing_brief", return_value=[_MEETING]), \
+         patch(f"{_MOD}.supabase.get_brief_for_meeting", return_value=None), \
+         patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=None), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=None), \
+         patch(f"{_MOD}.llm.chat_json", return_value=_LLM_RESPONSE), \
+         patch(f"{_MOD}.supabase.create_meeting_brief", return_value={"id": 1}) as create_mock:
+        generate_pending_meeting_briefs()
+
     assert create_mock.call_args[1]["company_name"] == "this prospect"
+
+
+def test_account_intel_company_name_takes_priority_over_leads_raw():
+    """When both sources have a name, account_intelligence's is preferred —
+    it's the more curated/researched source."""
+    intel_diff_name = {**_INTEL, "company_name": "Acme HR (from research)"}
+    lead_diff_name = {"id": 1, "company_name": "Acme HR (raw lead name)"}
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_needing_brief", return_value=[_MEETING]), \
+         patch(f"{_MOD}.supabase.get_brief_for_meeting", return_value=None), \
+         patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=intel_diff_name), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=lead_diff_name), \
+         patch(f"{_MOD}.llm.chat_json", return_value=_LLM_RESPONSE), \
+         patch(f"{_MOD}.supabase.create_meeting_brief", return_value={"id": 1}) as create_mock:
+        generate_pending_meeting_briefs()
+
+    assert create_mock.call_args[1]["company_name"] == "Acme HR (from research)"
 
 
 def test_already_has_brief_is_skipped_idempotently():
@@ -106,6 +145,7 @@ def test_llm_failure_is_reported_as_failed():
     with patch(f"{_MOD}.supabase.get_confirmed_meetings_needing_brief", return_value=[_MEETING]), \
          patch(f"{_MOD}.supabase.get_brief_for_meeting", return_value=None), \
          patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=_INTEL), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.llm.chat_json", side_effect=RuntimeError("groq down")), \
          patch(f"{_MOD}.supabase.create_meeting_brief") as create_mock:
         summary = generate_pending_meeting_briefs()
@@ -119,6 +159,7 @@ def test_batch_counts_multiple_meetings():
     with patch(f"{_MOD}.supabase.get_confirmed_meetings_needing_brief", return_value=[_MEETING, meeting2]), \
          patch(f"{_MOD}.supabase.get_brief_for_meeting", return_value=None), \
          patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=_INTEL), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.llm.chat_json", return_value=_LLM_RESPONSE), \
          patch(f"{_MOD}.supabase.create_meeting_brief", return_value={"id": 1}):
         summary = generate_pending_meeting_briefs()
