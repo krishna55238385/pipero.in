@@ -18,6 +18,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_qualify.add_argument("--limit", type=int, default=None)
 
+    p_propose_meetings = sub.add_parser(
+        "propose-meetings",
+        help="Agent 22: check 'interested' replies for meeting intent, email >=3 Cal.com slots for each",
+    )
+    p_propose_meetings.add_argument("--limit", type=int, default=None)
+
+    p_sync_meetings = sub.add_parser(
+        "sync-meeting-confirmations",
+        help="Agent 22: check proposed meetings for a confirming reply and book it with Cal.com",
+    )
+    p_sync_meetings.add_argument("--limit", type=int, default=None)
+
     p_propose = sub.add_parser(
         "generate-proposals",
         help="Agent 25: draft a proposal for every qualified deal that doesn't have one",
@@ -123,6 +135,12 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "qualify-deals":
         from gtm_backend.phase4.agents.agent_24_deal_qualification import qualify_pending_deals
         qualify_pending_deals(args.limit)
+    elif command == "propose-meetings":
+        from gtm_backend.phase4.agents.agent_22_meeting_booking import propose_meetings
+        propose_meetings(args.limit)
+    elif command == "sync-meeting-confirmations":
+        from gtm_backend.phase4.agents.agent_22_meeting_booking import sync_meeting_confirmations
+        sync_meeting_confirmations(args.limit)
     elif command == "generate-proposals":
         from gtm_backend.phase4.agents.agent_25_proposal_generation import generate_pending_proposals
         generate_pending_proposals(args.limit)

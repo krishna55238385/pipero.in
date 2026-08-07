@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     # for an immediate blast or when recipient timezones are unknown/unreliable.
     enforce_send_window: bool = True
 
+    # -- Cal.com (Agent 22 — Meeting Booking) -----------------------------
+    # v1: one shared Cal.com account for the whole platform (not per-org) —
+    # matches where the business actually is today (single client, Jobraux).
+    # Multi-tenant calendar isolation (each client connecting their own
+    # calendar) is a PDF Agent 47/48 concern, deliberately deferred until
+    # there's an actual second client to design it against.
+    calcom_api_key: str | None = None
+    calcom_event_type_id: int | None = None
+
     # NOTE: no global seller_product_description setting. The CRM is
     # multi-tenant (PDF Agent 47/48: each organization is a separate client
     # business, isolated from every other client) — a single shared product

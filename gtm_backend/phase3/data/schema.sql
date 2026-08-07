@@ -344,9 +344,65 @@ ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS objection_checked BOOLEAN 
 -- classified 'interested' has been scored and either turned into (or matched
 -- to) a row in the CRM's own `deals` table, so re-runs don't re-score it.
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS deal_qualified BOOLEAN NOT NULL DEFAULT FALSE;
+-- Agent 22 — Meeting Booking (phase4/CONVERT) addition. Set once a reply
+-- classified 'interested' has been checked for meeting intent (whether or
+-- not it actually resulted in a proposed meeting), so re-runs don't
+-- re-check it. Mirrors deal_qualified's idempotency pattern above.
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS meeting_booking_checked BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_outreach_replies_lead_campaign
     ON outreach_replies(lead_id, campaign_id);
+
+-- ---------------------------------------------------------------------------
+-- Agent 22 — Meeting Booking Agent (PDF Phase 5 — CONVERT)
+--
+-- One row per meeting proposed/booked via Cal.com. calcom_booking_uid is set
+-- once a prospect actually confirms a slot (Agent 22's sync step polls
+-- Cal.com for this); until then a row exists in status='proposed' purely so
+-- the CRM can show "meeting proposed, awaiting confirmation."
+--
+-- PDF business rules encoded here: reschedule_count + max 2 reschedules
+-- before moving to nurture (status='moved_to_nurture'); status='no_show'
+-- distinct from 'cancelled' so no-show recovery rate (PDF success metric)
+-- can be measured separately from ordinary cancellations.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS meetings (
+    id BIGSERIAL PRIMARY KEY,
+    reply_id BIGINT REFERENCES outreach_replies(id) ON DELETE CASCADE,
+    lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE,
+    deal_id UUID,                      -- CRM deals.id (UUID) — nullable, set if/when Agent 24 has already qualified this lead
+    calcom_booking_uid TEXT,
+    status TEXT NOT NULL DEFAULT 'proposed',  -- proposed | confirmed | completed | no_show | cancelled | moved_to_nurture
+    proposed_slots JSONB DEFAULT '[]'::jsonb, -- the >=3 ISO times offered, for audit / no re-proposing the same slots
+    scheduled_at TIMESTAMPTZ,          -- set once confirmed
+    attendee_timezone TEXT,
+    agenda TEXT,
+    reschedule_count INTEGER NOT NULL DEFAULT 0,
+    proposed_at TIMESTAMPTZ DEFAULT NOW(),
+    confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS reply_id BIGINT REFERENCES outreach_replies(id) ON DELETE CASCADE;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS deal_id UUID;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS calcom_booking_uid TEXT;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'proposed';
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS proposed_slots JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS attendee_timezone TEXT;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS agenda TEXT;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS reschedule_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS proposed_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_meetings_reply_id ON meetings(reply_id);
+CREATE INDEX IF NOT EXISTS idx_meetings_lead_id ON meetings(lead_id);
+CREATE INDEX IF NOT EXISTS idx_meetings_status ON meetings(status);
 CREATE INDEX IF NOT EXISTS idx_outreach_replies_lead_id ON outreach_replies(lead_id);
 
 -- ---------------------------------------------------------------------------

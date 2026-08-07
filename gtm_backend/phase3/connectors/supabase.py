@@ -56,7 +56,7 @@ _JSONB_COLUMNS = {
     "angles", "steps", "channel_sequence", "deal_breakdown", "pain_points_referenced",
     "pipeline_by_stage", "top_risks", "going_well", "needs_attention",
     "cost_by_phase", "channel_breakdown", "related_lead_ids", "key_stakeholders",
-    "segment_breakdown", "key_insights", "recommendations",
+    "segment_breakdown", "key_insights", "recommendations", "proposed_slots",
 }
 
 
@@ -1074,6 +1074,18 @@ def update_deal(deal_id: str, **fields) -> None:
         raise
 
 
+def get_channel_plan_for_lead(lead_id: int) -> dict | None:
+    """The channel plan row for one lead — used by Agent 22 to read the
+    prospect's known local timezone (same field Agent 14's send-window
+    enforcement already relies on). Returns None if no plan exists yet
+    (agent falls back to UTC)."""
+    try:
+        rows = _get("/outreach_channel_plans", params={"lead_id": f"eq.{lead_id}", "limit": 1})
+    except SupabaseError:
+        return None
+    return rows[0] if rows else None
+
+
 def get_replies_needing_qualification(limit: int | None = None) -> list[dict]:
     """outreach_replies rows classified 'interested' that haven't been run
     through Agent 24 yet (deal_qualified=false). Scoped to 'interested' only
@@ -1089,6 +1101,113 @@ def get_replies_needing_qualification(limit: int | None = None) -> list[dict]:
         params["limit"] = limit
     try:
         return _get("/outreach_replies", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return []
+        raise
+
+
+# -- Agent 22 — Meeting Booking (phase4) -----------------------------------
+
+def get_replies_needing_meeting_check(limit: int | None = None) -> list[dict]:
+    """outreach_replies rows classified 'interested' that haven't been
+    checked for meeting intent yet (meeting_booking_checked=false). Same
+    'interested only' scoping as get_replies_needing_qualification — a
+    prospect can't be asking to schedule a call in a reply that wasn't even
+    classified as interested in the first place."""
+    params: dict = {
+        "meeting_booking_checked": "eq.false",
+        "classification": "eq.interested",
+        "order": "created_at.asc",
+    }
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/outreach_replies", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return []
+        raise
+
+
+def get_meeting_for_reply(reply_id: int) -> dict | None:
+    """The meeting row already proposed for this reply, if any — enforces
+    the uniq_meetings_reply_id constraint at the application layer too, so a
+    re-run never double-proposes for the same reply."""
+    try:
+        rows = _get("/meetings", params={"reply_id": f"eq.{reply_id}", "limit": 1})
+    except SupabaseError as exc:
+        if _missing_table(exc, "meetings"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def create_meeting(**fields) -> dict | None:
+    """Insert a new meetings row (status='proposed' at creation — set via the
+    table's own DEFAULT, callers don't need to pass it)."""
+    try:
+        rows = _post("/meetings", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "meetings"):
+            print(
+                "[supabase] meetings table missing — meeting not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def update_meeting(meeting_id: int, **fields) -> None:
+    """Patch arbitrary columns on one meetings row (status, scheduled_at,
+    reschedule_count, confirmed_at, ...)."""
+    if not fields:
+        return
+    try:
+        _patch("/meetings", {"id": f"eq.{meeting_id}"}, fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "meetings"):
+            return
+        raise
+
+
+def get_meetings_awaiting_confirmation(limit: int | None = None) -> list[dict]:
+    """Meetings proposed (>=3 slots emailed) but not yet booked with Cal.com
+    (calcom_booking_uid is still null) — Agent 22's confirmation-sync step
+    checks each of these for a subsequent reply from the same lead picking a
+    slot, since there's no public booking-picker page in v1 (see agent_22's
+    module docstring) — confirmation comes from the prospect replying to the
+    proposal email, same as every other reply this pipeline handles."""
+    params: dict = {
+        "status": "eq.proposed",
+        "calcom_booking_uid": "is.null",
+        "order": "proposed_at.asc",
+    }
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/meetings", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "meetings"):
+            return []
+        raise
+
+
+def get_replies_for_lead_since(lead_id: int, since_iso: str) -> list[dict]:
+    """Every reply from this lead with replied_at after `since_iso` — used to
+    find a fresh reply that arrived after a meeting was proposed (a likely
+    slot-confirmation), without re-matching a reply that was already there
+    (and already handled) at proposal time."""
+    try:
+        return _get(
+            "/outreach_replies",
+            params={
+                "lead_id": f"eq.{lead_id}",
+                "replied_at": f"gt.{since_iso}",
+                "order": "replied_at.asc",
+            },
+        )
     except SupabaseError as exc:
         if _missing_table(exc, "outreach_replies"):
             return []
