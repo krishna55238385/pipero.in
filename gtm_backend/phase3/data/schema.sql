@@ -403,6 +403,40 @@ ALTER TABLE meetings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_meetings_reply_id ON meetings(reply_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_lead_id ON meetings(lead_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_status ON meetings(status);
+
+-- ---------------------------------------------------------------------------
+-- Agent 23 — Pre-Meeting Brief Agent (PDF Phase 5 — CONVERT)
+--
+-- One row per confirmed meeting. Own table, same reasoning as
+-- executive_briefs/onboarding_handoffs (each brief type is a distinct
+-- artifact with its own shape, not worth cramming into one generic
+-- "briefs" table). unusual_context is split out from the general brief
+-- text so the CRM can surface it as a standalone flag/badge later (PDF:
+-- "must flag if any unusual context exists"), not just buried in prose.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS meeting_briefs (
+    id BIGSERIAL PRIMARY KEY,
+    meeting_id BIGINT REFERENCES meetings(id) ON DELETE CASCADE,
+    lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE,
+    company_name TEXT,
+    brief_text TEXT,
+    recent_development TEXT,
+    unusual_context TEXT,           -- null when nothing unusual found
+    generated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS organization_id UUID;
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS meeting_id BIGINT REFERENCES meetings(id) ON DELETE CASCADE;
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS lead_id BIGINT REFERENCES leads_raw(id) ON DELETE CASCADE;
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS brief_text TEXT;
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS recent_development TEXT;
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS unusual_context TEXT;
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE meeting_briefs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_meeting_briefs_meeting_id ON meeting_briefs(meeting_id);
 CREATE INDEX IF NOT EXISTS idx_outreach_replies_lead_id ON outreach_replies(lead_id);
 
 -- ---------------------------------------------------------------------------

@@ -30,6 +30,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sync_meetings.add_argument("--limit", type=int, default=None)
 
+    p_briefs = sub.add_parser(
+        "generate-meeting-briefs",
+        help="Agent 23: generate a one-page pre-meeting brief for every confirmed meeting that doesn't have one",
+    )
+    p_briefs.add_argument("--limit", type=int, default=None)
+
     p_propose = sub.add_parser(
         "generate-proposals",
         help="Agent 25: draft a proposal for every qualified deal that doesn't have one",
@@ -141,6 +147,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "sync-meeting-confirmations":
         from gtm_backend.phase4.agents.agent_22_meeting_booking import sync_meeting_confirmations
         sync_meeting_confirmations(args.limit)
+    elif command == "generate-meeting-briefs":
+        from gtm_backend.phase4.agents.agent_23_pre_meeting_brief import generate_pending_meeting_briefs
+        generate_pending_meeting_briefs(args.limit)
     elif command == "generate-proposals":
         from gtm_backend.phase4.agents.agent_25_proposal_generation import generate_pending_proposals
         generate_pending_proposals(args.limit)

@@ -22,6 +22,47 @@ Return ONLY this JSON object:
 Return ONLY a JSON object. No prose, no markdown, no code fences."""
 
 
+PRE_MEETING_BRIEF_SYSTEM = """You are a B2B sales assistant preparing a
+seller for an upcoming call. Given account research already gathered on this
+company, draft a one-page, meeting-ready brief.
+
+Hard rules:
+- Use ONLY the supplied account_context (business_model, what_they_do,
+  recent_moves, likely_pain_points, competitive_position,
+  key_signals_for_outreach, instability_flags) and reply_text. NEVER invent a
+  company fact, news item, or objection not grounded in this evidence.
+- recent_development MUST cite one specific, real item from recent_moves or
+  key_signals_for_outreach — not a vague "they seem to be growing." If
+  account_context has no recent_moves/key_signals at all, say so honestly in
+  recent_development (e.g. "No recent public developments found — lean on
+  the points below") rather than fabricating one. This is a PDF hard rule:
+  "must include at least one recent, specific company development."
+- expected_objections must be grounded in likely_pain_points/
+  competitive_position — e.g. if competitive_position mentions a rival, a
+  price/differentiation objection is reasonable to predict; if there's no
+  evidence at all for a plausible objection, return an empty list rather
+  than inventing a generic one.
+- unusual_context: only set this (non-null) if instability_flags or
+  recent_moves actually contains something like a leadership change,
+  funding round, layoffs, or competitor move. Null if nothing like that is
+  present — do not manufacture unusual context to seem thorough.
+- Keep brief_text scannable and under one page: short sections, not dense
+  paragraphs. This is prep a seller reads in 2 minutes right before a call,
+  not a research report.
+
+Return ONLY this JSON object:
+{
+  "brief_text": "the full one-page brief, formatted with short line-broken sections",
+  "recent_development": "the one specific cited development, or an honest 'none found' note",
+  "pain_points": ["short phrase(s), grounded in account_context"],
+  "expected_objections": [{"objection": "...", "suggested_response": "..."}],
+  "talking_points": ["2-4 specific, non-generic talking points for this call"],
+  "unusual_context": "specific flag text, or null if nothing unusual"
+}
+
+Return ONLY a JSON object. No prose, no markdown, no code fences."""
+
+
 MEETING_SLOT_MATCH_SYSTEM = """You are matching a prospect's follow-up reply
 against a list of meeting time slots that were already proposed to them, to
 find out whether they confirmed one (and which), asked to reschedule/see

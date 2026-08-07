@@ -1231,6 +1231,57 @@ def get_replies_for_lead_since(lead_id: int, since_iso: str) -> list[dict]:
         raise
 
 
+# -- Agent 23 — Pre-Meeting Brief (phase4) ---------------------------------
+
+def get_confirmed_meetings_needing_brief(limit: int | None = None) -> list[dict]:
+    """Confirmed meetings (status='confirmed') that don't have a
+    meeting_briefs row yet. meetings has no boolean "briefed" flag column
+    (unlike outreach_replies' deal_qualified/meeting_booking_checked
+    pattern), so this does the exclusion in Python via a second query rather
+    than a subquery — the _get() mini query-DSL (_parse_filter) only
+    supports simple eq./gte./in.(literal list) filters, not a nested
+    subquery, so a raw 'not.in.(select ...)' string would just raise
+    ValueError. Two flat queries + a set difference is the honest
+    equivalent given that constraint."""
+    try:
+        confirmed = _get(
+            "/meetings",
+            params={"status": "eq.confirmed", "order": "confirmed_at.asc"},
+        )
+        briefed = _get("/meeting_briefs", params={"select": "meeting_id"})
+    except SupabaseError as exc:
+        if _missing_table(exc, "meetings") or _missing_table(exc, "meeting_briefs"):
+            return []
+        raise
+    briefed_ids = {row["meeting_id"] for row in briefed if row.get("meeting_id") is not None}
+    pending = [m for m in confirmed if m.get("id") not in briefed_ids]
+    return pending[:limit] if limit is not None else pending
+
+
+def get_brief_for_meeting(meeting_id: int) -> dict | None:
+    try:
+        rows = _get("/meeting_briefs", params={"meeting_id": f"eq.{meeting_id}", "limit": 1})
+    except SupabaseError as exc:
+        if _missing_table(exc, "meeting_briefs"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def create_meeting_brief(**fields) -> dict | None:
+    try:
+        rows = _post("/meeting_briefs", fields)
+    except SupabaseError as exc:
+        if _missing_table(exc, "meeting_briefs"):
+            print(
+                "[supabase] meeting_briefs table missing — brief not persisted. "
+                "Apply schema: python -m phase3 print-schema"
+            )
+            return None
+        raise
+    return rows[0] if rows else None
+
+
 # -- Per-org seller product description (Agents 11/12/25/27) ---------------
 
 def get_current_org_product_description() -> str | None:
