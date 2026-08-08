@@ -139,6 +139,12 @@ class ReplyRecord(BaseModel):
     # Agent 17 should draft a response for, 'no_response_needed' for a hard
     # decline or unclassifiable message (pause-only, nothing to draft).
     response_status: str = "pending_draft"
+    # Real inbound Gmail identifiers, set only by the inbox poller (None for
+    # the legacy/manual classify-reply path). message_id is the true dedupe
+    # key now that a lead+campaign can have multiple reply rows — see
+    # schema.sql's uniq_outreach_replies_message_id.
+    message_id: str | None = None
+    thread_id: str | None = None
 
 
 # -- Agent 15 — A/B Testing -----------------------------------------------

@@ -350,8 +350,24 @@ ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS deal_qualified BOOLEAN NOT
 -- re-check it. Mirrors deal_qualified's idempotency pattern above.
 ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS meeting_booking_checked BOOLEAN NOT NULL DEFAULT FALSE;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_outreach_replies_lead_campaign
-    ON outreach_replies(lead_id, campaign_id);
+-- Task #32/#34 — real inbox ingestion (Agent 16 inbox poller) needs to
+-- record MULTIPLE replies per (lead, campaign) over time: a prospect who
+-- says "interested" and later replies again to confirm a meeting time is
+-- two separate real messages, not one. The old uniq_outreach_replies_lead_
+-- campaign index made that architecturally impossible — only ONE reply per
+-- lead per campaign could ever exist, full stop. Dropped in favor of a real
+-- per-message dedupe key: message_id, the actual Gmail message id of the
+-- inbound reply. That's what makes re-polling the same inbox message safe
+-- (never double-classified) while still allowing a second, genuinely
+-- different reply to be recorded. message_id is NULL for the legacy/manual
+-- path (hand-inserted test rows, `classify-reply` CLI) — those still fall
+-- back to the old lead+campaign idempotency check in application code
+-- (see agent_16_inbox.classify_reply), just no longer enforced by the DB.
+DROP INDEX IF EXISTS uniq_outreach_replies_lead_campaign;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS message_id TEXT;
+ALTER TABLE outreach_replies ADD COLUMN IF NOT EXISTS thread_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_outreach_replies_message_id
+    ON outreach_replies(message_id) WHERE message_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Agent 22 — Meeting Booking Agent (PDF Phase 5 — CONVERT)

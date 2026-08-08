@@ -31,6 +31,7 @@ from gtm_backend.phase3.core.config import get_settings
 
 
 _GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+_GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _NOT_CONFIGURED_MSG = (
     "Gmail OAuth not ready — set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET in the "
@@ -216,3 +217,128 @@ def send_html_email(
         "thread_id": data.get("threadId"),
         "status": "sent",
     }
+
+
+# ---------------------------------------------------------------------------
+# Inbox reading (Task #35 — real inbox-polling reply ingestion, replacing the
+# manual-only `classify-reply` CLI path). Deliberately stateless: every call
+# re-lists the last `days_back` days of inbox mail rather than tracking a
+# historyId/cursor. That's a few wasted Gmail API calls per poll, traded for
+# never needing a cursor-persistence table or worrying about a missed poll
+# permanently losing a message — real dedup happens one layer up, in
+# agent_16_inbox.classify_reply, keyed on message_id (see schema.sql's
+# uniq_outreach_replies_message_id).
+# ---------------------------------------------------------------------------
+
+def list_inbox_replies(days_back: int = 3, max_results: int = 25) -> list[dict]:
+    """Recent inbox messages, excluding ones sent from the connected mailbox
+    itself. Returns a list of:
+        {message_id, thread_id, from_email, subject, body_text, received_at}
+    Returns [] (never raises) when Gmail isn't configured/connected, or on
+    any API failure — this is a polling loop, not a user-facing action, so a
+    transient failure should just mean "nothing new this cycle," not a crash.
+    """
+    if not _has_creds():
+        return []
+    mailbox = _get_mailbox()
+    if not mailbox or not mailbox.get("refresh_token"):
+        return []
+    try:
+        token = _access_token(mailbox)
+    except GmailApiError as exc:
+        print(f"  [gmail_oauth] inbox poll: token refresh failed: {exc}")
+        return []
+    own_address = str(mailbox.get("email") or "").strip().lower()
+
+    try:
+        resp = httpx.get(
+            _GMAIL_MESSAGES_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            params={"q": f"in:inbox newer_than:{max(1, int(days_back))}d", "maxResults": max_results},
+            timeout=30,
+        )
+    except httpx.HTTPError as exc:
+        print(f"  [gmail_oauth] inbox list failed: {exc}")
+        return []
+    if resp.status_code != 200:
+        print(f"  [gmail_oauth] inbox list failed: {resp.status_code} {resp.text[:200]}")
+        return []
+
+    ids = [m["id"] for m in (resp.json().get("messages") or []) if m.get("id")]
+    out: list[dict] = []
+    for message_id in ids:
+        parsed = _fetch_message(message_id, token)
+        if parsed and parsed["from_email"] and parsed["from_email"] != own_address:
+            out.append(parsed)
+    return out
+
+
+def _fetch_message(message_id: str, token: str) -> dict | None:
+    try:
+        resp = httpx.get(
+            f"{_GMAIL_MESSAGES_URL}/{message_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"format": "full"},
+            timeout=30,
+        )
+    except httpx.HTTPError:
+        return None
+    if resp.status_code != 200:
+        return None
+    data = resp.json()
+    payload = data.get("payload") or {}
+    headers = {
+        str(h.get("name", "")).lower(): h.get("value", "")
+        for h in payload.get("headers", [])
+    }
+    return {
+        "message_id": data.get("id") or message_id,
+        "thread_id": data.get("threadId"),
+        "from_email": _extract_email(headers.get("from", "")),
+        "subject": headers.get("subject", ""),
+        "body_text": _extract_body_text(payload),
+        "received_at": _internal_date_to_iso(data.get("internalDate")),
+    }
+
+
+def _extract_email(header_value: str) -> str:
+    match = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", header_value or "")
+    return match.group(0).lower() if match else ""
+
+
+def _extract_body_text(payload: dict) -> str:
+    """Walk Gmail's MIME part tree; prefer text/plain, fall back to a
+    stripped text/html part, else empty string (never raises — a message
+    Gmail can't be parsed cleanly is skipped by the caller, not fatal)."""
+
+    def decode(data: str) -> str:
+        padded = data + "=" * (-len(data) % 4)
+        return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+
+    def walk(part: dict, want_mime: str) -> str | None:
+        if part.get("mimeType") == want_mime:
+            data = (part.get("body") or {}).get("data")
+            if data:
+                return decode(data)
+        for sub in part.get("parts") or []:
+            found = walk(sub, want_mime)
+            if found:
+                return found
+        return None
+
+    plain = walk(payload, "text/plain")
+    if plain:
+        return plain.strip()
+    html = walk(payload, "text/html")
+    if html:
+        return _html_to_text(html).strip()
+    return ""
+
+
+def _internal_date_to_iso(internal_date: str | None) -> str | None:
+    if not internal_date:
+        return None
+    try:
+        return datetime.fromtimestamp(int(internal_date) / 1000, tz=timezone.utc).isoformat()
+    except (ValueError, TypeError):
+        return None

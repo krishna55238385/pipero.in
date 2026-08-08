@@ -961,6 +961,46 @@ def get_reply_for_lead(lead_id: int, campaign_id: str = "") -> dict | None:
     return rows[0] if rows else None
 
 
+def get_reply_by_message_id(message_id: str) -> dict | None:
+    """Existing outreach_replies row for this inbound Gmail message_id, if
+    any — the real dedupe key for the inbox poller (Task #34/#35). A message
+    re-fetched on the next poll must never be classified twice; this is what
+    replaced the old (lead_id, campaign_id) uniqueness ratchet that made a
+    second real reply from the same lead impossible to record."""
+    if not message_id:
+        return None
+    try:
+        rows = _get(
+            "/outreach_replies",
+            params={"message_id": f"eq.{message_id}", "limit": 1},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_replies"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def get_outreach_log_by_thread_id(thread_id: str) -> dict | None:
+    """Most recent outreach_log row for this Gmail thread_id — used by the
+    inbox poller to recover which campaign_id an inbound reply belongs to,
+    since Gmail itself has no notion of our campaigns. None (-> campaign_id
+    "") when the thread doesn't match anything we sent, e.g. a cold reply to
+    a forwarded message."""
+    if not thread_id:
+        return None
+    try:
+        rows = _get(
+            "/outreach_log",
+            params={"thread_id": f"eq.{thread_id}", "order": "created_at.desc", "limit": 1},
+        )
+    except SupabaseError as exc:
+        if _missing_table(exc, "outreach_log"):
+            return None
+        raise
+    return rows[0] if rows else None
+
+
 def insert_reply(reply: ReplyRecord) -> int | None:
     """Insert one classified reply. Returns the new row's id, or None if the
     table is missing (best-effort — Agent 16 must never crash a caller over

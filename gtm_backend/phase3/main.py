@@ -61,6 +61,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_inbox.add_argument("--text", type=str, required=True, dest="reply_text")
     p_inbox.add_argument("--campaign-id", type=str, default="", dest="campaign_id")
 
+    p_poll = sub.add_parser(
+        "poll-inbox",
+        help="Agent 16: poll the connected Gmail inbox for real replies and classify them (Task #35)",
+    )
+    p_poll.add_argument("--days-back", type=int, default=3, dest="days_back")
+    p_poll.add_argument("--max-results", type=int, default=25, dest="max_results")
+
     p_draft = sub.add_parser("draft-replies", help="Agent 17: draft responses for classified replies awaiting one")
     p_draft.add_argument("--limit", type=int, default=None)
 
@@ -130,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "classify-reply":
         from gtm_backend.phase3.agents.agent_16_inbox import classify_reply
         classify_reply(args.from_email, args.reply_text, args.campaign_id)
+    elif command == "poll-inbox":
+        from gtm_backend.phase3.agents.agent_16_inbox import poll_and_classify_inbox
+        poll_and_classify_inbox(args.days_back, args.max_results)
     elif command == "draft-replies":
         from gtm_backend.phase3.agents.agent_17_reply_handling import draft_pending_responses
         draft_pending_responses(args.limit)
