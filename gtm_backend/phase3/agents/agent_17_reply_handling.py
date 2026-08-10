@@ -45,15 +45,67 @@ def draft_pending_responses(limit: int | None = None) -> dict:
 
     drafted = 0
     failed = 0
+    skipped_meeting_proposed = 0
+    deferred_meeting_check_pending = 0
     for reply in replies:
+        route = _route_interested_reply(reply)
+        if route == "defer":
+            deferred_meeting_check_pending += 1
+            continue
+        if route == "skip_has_meeting":
+            skipped_meeting_proposed += 1
+            continue
         result = draft_response(reply)
         if result["status"] == "drafted":
             drafted += 1
         else:
             failed += 1
 
-    print(f"  ✓ Agent 17 complete: {drafted} drafted · {failed} failed")
-    return {"replies_examined": len(replies), "drafted": drafted, "failed": failed}
+    print(
+        f"  ✓ Agent 17 complete: {drafted} drafted · {failed} failed · "
+        f"{skipped_meeting_proposed} skipped (Agent 22 already proposed a meeting) · "
+        f"{deferred_meeting_check_pending} deferred (awaiting Agent 22's meeting-intent check)"
+    )
+    return {
+        "replies_examined": len(replies),
+        "drafted": drafted,
+        "failed": failed,
+        "skipped_meeting_proposed": skipped_meeting_proposed,
+        "deferred_meeting_check_pending": deferred_meeting_check_pending,
+    }
+
+
+def _route_interested_reply(reply: dict) -> str | None:
+    """Found live 2026-08-08: Agent 17 (draft a generic response) and Agent
+    22 (propose a real meeting) both independently act on the same
+    'interested' reply. Agent 22 auto-sends a real Calendar-slots proposal
+    email (no human gate, by design — PDF's 15-minute rule), while Agent 17
+    separately drafts a generic reply that sits in the CRM's approval queue
+    waiting for a decision that no longer matters, since the prospect
+    already got the real email. This routes each 'interested' reply so only
+    one of the two ever actually produces something the prospect (or a
+    human reviewer) needs to look at:
+
+      - not 'interested' -> None (draft normally, completely unaffected)
+      - 'interested' but Agent 22 hasn't checked meeting intent yet ->
+        'defer' (wait rather than race it — the two agents run on separate
+        cron entries with no guaranteed ordering between them)
+      - 'interested', Agent 22 has checked, and a meeting was proposed ->
+        'skip_has_meeting' (mark no_response_needed — no redundant draft)
+      - 'interested', Agent 22 has checked, no meeting proposed (no real
+        meeting intent found, or a same-tick no-slots/failure edge case) ->
+        None (draft normally — this prospect still deserves a
+        human-reviewable reply)
+    """
+    if reply.get("classification") != "interested":
+        return None
+    if not reply.get("meeting_booking_checked"):
+        return "defer"
+    reply_id = reply.get("id")
+    if supabase.get_meeting_for_reply(reply_id) is not None:
+        supabase.update_reply(reply_id, response_status="no_response_needed")
+        return "skip_has_meeting"
+    return None
 
 
 def draft_response(reply: dict) -> dict:

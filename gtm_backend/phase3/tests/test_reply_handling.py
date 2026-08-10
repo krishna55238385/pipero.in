@@ -2,6 +2,7 @@
 from unittest.mock import patch
 
 from gtm_backend.phase3.agents.agent_17_reply_handling import (
+    _route_interested_reply,
     draft_pending_responses,
     draft_response,
     send_approved_response,
@@ -13,6 +14,10 @@ _REPLY = {
     "id": 5, "lead_id": 1, "company_name": "Acme HR", "email": "priya@acmehr.com",
     "classification": "interested", "reply_text": "Sounds great, when can we chat?",
     "response_status": "pending_draft",
+    # Already checked by Agent 22, no meeting intent found -> drafting should
+    # proceed normally. See the dedicated routing tests below for the
+    # defer/skip cases this field controls.
+    "meeting_booking_checked": True,
 }
 
 
@@ -55,6 +60,7 @@ def test_draft_response_handles_empty_llm_output():
 def test_draft_pending_responses_batch():
     llm_response = {"draft_response": "Thanks for the reply!"}
     with patch(f"{_MOD}.supabase.get_replies_needing_draft", return_value=[_REPLY, {**_REPLY, "id": 6}]), \
+         patch(f"{_MOD}.supabase.get_meeting_for_reply", return_value=None), \
          patch(f"{_MOD}.supabase.get_account_intel_for_lead", return_value=None), \
          patch(f"{_MOD}.llm.chat_json", return_value=llm_response), \
          patch(f"{_MOD}.supabase.update_reply"):
@@ -62,6 +68,74 @@ def test_draft_pending_responses_batch():
 
     assert summary["replies_examined"] == 2
     assert summary["drafted"] == 2
+    assert summary["skipped_meeting_proposed"] == 0
+    assert summary["deferred_meeting_check_pending"] == 0
+
+
+# -- Agent 17 / Agent 22 overlap routing (found live 2026-08-08) -----------
+
+def test_non_interested_reply_is_never_routed_specially():
+    reply = {**_REPLY, "classification": "has_question", "meeting_booking_checked": False}
+    assert _route_interested_reply(reply) is None
+
+
+def test_interested_reply_defers_until_meeting_intent_checked():
+    reply = {**_REPLY, "meeting_booking_checked": False}
+    with patch(f"{_MOD}.supabase.get_meeting_for_reply") as meeting_lookup, \
+         patch(f"{_MOD}.supabase.update_reply") as updater:
+        route = _route_interested_reply(reply)
+
+    assert route == "defer"
+    meeting_lookup.assert_not_called()
+    updater.assert_not_called()
+
+
+def test_interested_reply_with_proposed_meeting_is_skipped_and_marked_no_response_needed():
+    reply = {**_REPLY, "meeting_booking_checked": True}
+    with patch(f"{_MOD}.supabase.get_meeting_for_reply", return_value={"id": 1, "status": "proposed"}), \
+         patch(f"{_MOD}.supabase.update_reply") as updater:
+        route = _route_interested_reply(reply)
+
+    assert route == "skip_has_meeting"
+    updater.assert_called_once_with(5, response_status="no_response_needed")
+
+
+def test_interested_reply_checked_with_no_meeting_drafts_normally():
+    reply = {**_REPLY, "meeting_booking_checked": True}
+    with patch(f"{_MOD}.supabase.get_meeting_for_reply", return_value=None), \
+         patch(f"{_MOD}.supabase.update_reply") as updater:
+        route = _route_interested_reply(reply)
+
+    assert route is None
+    updater.assert_not_called()
+
+
+def test_batch_skips_meeting_proposed_reply_without_drafting():
+    reply_with_meeting = {**_REPLY, "id": 7}
+    llm_mock_response = {"draft_response": "should not be used"}
+    with patch(f"{_MOD}.supabase.get_replies_needing_draft", return_value=[reply_with_meeting]), \
+         patch(f"{_MOD}.supabase.get_meeting_for_reply", return_value={"id": 9}), \
+         patch(f"{_MOD}.llm.chat_json", return_value=llm_mock_response) as llm_mock, \
+         patch(f"{_MOD}.supabase.update_reply") as updater:
+        summary = draft_pending_responses()
+
+    assert summary["drafted"] == 0
+    assert summary["skipped_meeting_proposed"] == 1
+    llm_mock.assert_not_called()
+    updater.assert_called_once_with(7, response_status="no_response_needed")
+
+
+def test_batch_defers_reply_still_awaiting_meeting_intent_check():
+    reply_not_checked = {**_REPLY, "id": 8, "meeting_booking_checked": False}
+    with patch(f"{_MOD}.supabase.get_replies_needing_draft", return_value=[reply_not_checked]), \
+         patch(f"{_MOD}.supabase.get_meeting_for_reply") as meeting_lookup, \
+         patch(f"{_MOD}.llm.chat_json") as llm_mock:
+        summary = draft_pending_responses()
+
+    assert summary["drafted"] == 0
+    assert summary["deferred_meeting_check_pending"] == 1
+    llm_mock.assert_not_called()
+    meeting_lookup.assert_not_called()
 
 
 def test_send_approved_response_refuses_unapproved_draft():
