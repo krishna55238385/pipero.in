@@ -35,7 +35,9 @@ _MAILBOX = {
 def test_get_mailbox_goes_through_supabase_get_not_raw_http():
     """_get_mailbox must call supabase._get(...) — never httpx directly."""
     with patch.object(gmail_oauth._sb, "_get", return_value=[_MAILBOX]) as get_mock, \
-         patch.object(gmail_oauth, "httpx") as httpx_mock:
+         patch.object(gmail_oauth, "httpx") as httpx_mock, \
+         patch.dict(gmail_oauth.os.environ, {}, clear=False):
+        gmail_oauth.os.environ.pop("GTM_ORG_ID", None)
         mailbox = gmail_oauth._get_mailbox()
 
     get_mock.assert_called_once()
@@ -44,6 +46,31 @@ def test_get_mailbox_goes_through_supabase_get_not_raw_http():
     assert kwargs["params"]["provider"] == "eq.gmail"
     assert mailbox == _MAILBOX
     httpx_mock.get.assert_not_called()
+
+
+def test_get_mailbox_filters_by_organization_id_when_set():
+    """Found live 2026-08-08: without this filter, a mailbox connected by
+    ANY org would be used for every org's sending/polling — a real
+    cross-tenant bug once a second org connects its own Gmail. GTM_ORG_ID
+    is read live from the environment, not a cached settings object."""
+    with patch.object(gmail_oauth._sb, "_get", return_value=[_MAILBOX]) as get_mock, \
+         patch.dict(gmail_oauth.os.environ, {"GTM_ORG_ID": "org-123"}):
+        gmail_oauth._get_mailbox()
+
+    args, kwargs = get_mock.call_args
+    assert kwargs["params"]["organization_id"] == "eq.org-123"
+
+
+def test_get_mailbox_falls_back_to_global_most_recent_when_org_id_unset():
+    """No tenancy context (e.g. a bare local run) — same behavior as before
+    this fix, not a broken/empty result."""
+    with patch.object(gmail_oauth._sb, "_get", return_value=[_MAILBOX]) as get_mock, \
+         patch.dict(gmail_oauth.os.environ, {}, clear=False):
+        gmail_oauth.os.environ.pop("GTM_ORG_ID", None)
+        gmail_oauth._get_mailbox()
+
+    args, kwargs = get_mock.call_args
+    assert "organization_id" not in kwargs["params"]
 
 
 def test_get_mailbox_returns_none_when_no_rows():

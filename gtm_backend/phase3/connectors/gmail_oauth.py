@@ -19,6 +19,7 @@ Public surface mirrors gmail_smtp so Agent 14 can use it as a drop-in:
     send_html_email(...) -> dict
 """
 import base64
+import os
 import re
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -51,7 +52,8 @@ class GmailApiError(RuntimeError):
 
 
 def _get_mailbox() -> dict | None:
-    """The most-recently connected Gmail mailbox (with OAuth tokens), or None.
+    """The most-recently connected Gmail mailbox for the CURRENT org (with
+    OAuth tokens), or None.
 
     Goes through phase3/connectors/supabase.py's direct-RDS _get() helper
     (same one every other phase3 table read uses) instead of a raw httpx call
@@ -61,17 +63,33 @@ def _get_mailbox() -> dict | None:
     the Supabase->RDS migration (that instance serves tables at the root
     path, not under /rest/v1/) — is_configured() always returned False as a
     result, so Agent 14 never actually sent a real email, only dry-ran.
+
+    organization_id filter (found live 2026-08-08 auditing multi-org demo
+    readiness): this used to grab whichever mailbox was most recently
+    connected ACROSS EVERY ORG, with no tenant filter at all. Once a second
+    org connects its own Gmail, that would silently steal sending/polling
+    for every other org too — outreach_log rows still get tagged with the
+    correct organization_id (via supabase._inject_org), so the CRM looks
+    right, but the actual email a prospect receives would come from the
+    wrong company's address entirely. Reads GTM_ORG_ID live from the
+    environment (not the module-level _settings singleton captured at
+    import time) so this works correctly both for a fresh subprocess per
+    org (CLI/cron) and for gtm_service's in-process request handling, which
+    mutates os.environ per-request via _org_context. When GTM_ORG_ID is
+    unset (no tenancy context — e.g. a bare local run), falls back to the
+    old global-most-recent behavior rather than returning nothing.
     """
+    org_id = os.getenv("GTM_ORG_ID") or None
+    params: dict = {
+        "select": "*",
+        "provider": "eq.gmail",
+        "order": "connected_at.desc",
+        "limit": 1,
+    }
+    if org_id:
+        params["organization_id"] = f"eq.{org_id}"
     try:
-        rows = _sb._get(
-            "engage_mailboxes",
-            params={
-                "select": "*",
-                "provider": "eq.gmail",
-                "order": "connected_at.desc",
-                "limit": 1,
-            },
-        )
+        rows = _sb._get("engage_mailboxes", params=params)
         return rows[0] if rows else None
     except Exception:
         return None
