@@ -18,6 +18,14 @@ export function getGoogleScopes(): string[] {
     'profile',
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.send',
+    // Agent 22 (Meeting Booking) — replaced the old single-shared-account
+    // Cal.com integration with direct Google Calendar API calls riding this
+    // SAME OAuth grant (gtm_backend/phase3/connectors/google_calendar.py),
+    // so each org's meetings land on their own calendar instead of one
+    // shared account across the whole platform. Mailboxes connected BEFORE
+    // this scope was added need to reconnect once — Google does not
+    // retroactively grant new scopes to an existing refresh_token.
+    'https://www.googleapis.com/auth/calendar.events',
   ]
 }
 

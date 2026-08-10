@@ -10,43 +10,51 @@ PDF business rules and how this agent maps to each:
   an operational/scheduling concern (how often the caller runs this), not
   something enforced inside the function itself.
 - "Must offer at least 3 time slot options in the prospect's timezone" ->
-  calcom.get_available_slots(min_slots=3, timezone_name=<prospect tz>).
+  calendar.get_available_slots(min_slots=3, timezone_name=<prospect tz>).
 - "Confirmation email must include a clear agenda and what the prospect
   should expect" -> _confirmation_email() always includes an agenda section.
-- "Reminder must be sent 24 hours before and 1 hour before" -> NOT built
-  here. Cal.com has a built-in Workflows feature that sends
-  scheduling/reminder emails at configurable offsets before a booking — set
-  this up once in the Cal.com dashboard (Workflows -> + New -> "Before event"
-  triggers at 24h and 1h) rather than this codebase running its own polling
-  scheduler to hit the same two fixed offsets. Revisit only if Cal.com's
-  reminder branding/content becomes a real problem.
+- "Reminder must be sent 24 hours before and 1 hour before" -> the connector
+  sets 24h/1h email reminder overrides directly on the created Calendar
+  event as a best-effort nod to this rule (see google_calendar.py's
+  docstring for why that isn't a guaranteed substitute for a real branded
+  reminder system across every attendee/calendar-provider combination).
 - "If prospect no-shows, rescheduling attempt must happen within 2 hours" /
   "Maximum 2 rescheduling attempts before moving to nurture" -> NOT built in
-  this pass. No-show detection needs either a Cal.com no-show webhook or a
-  polling check against meeting end-time + no post-meeting activity, which is
-  real additional scope; meetings.reschedule_count and the 'no_show' /
-  'moved_to_nurture' status values are already in the schema so this can be
-  added without another migration. Flagged as a follow-up, not silently
-  skipped.
+  this pass. No-show detection needs either a Calendar webhook/push
+  notification or a polling check against meeting end-time + no post-meeting
+  activity, which is real additional scope; meetings.reschedule_count and the
+  'no_show' / 'moved_to_nurture' status values are already in the schema so
+  this can be added without another migration. Flagged as a follow-up, not
+  silently skipped.
 - "All meeting details must be auto-logged in the CRM" -> every proposal and
   confirmation writes to the `meetings` table (this pipeline's system of
   record, same as outreach_log/deals for every other agent).
 
+Booking backend: direct Google Calendar API (phase3/connectors/
+google_calendar.py), riding the same per-org OAuth mailbox connection Agent
+14/16 use for Gmail — NOT Cal.com (calcom.py still exists but is unused by
+this agent as of 2026-08-08). Cal.com v1 was one shared account for the
+whole platform; that became a real cross-tenant bug the moment a second org
+needed its own calendar (every org's meetings would land on the same
+calendar). See google_calendar.py's module docstring for the full reasoning
+and the OAuth-scope/reconnect caveat.
+
 Two-phase design (no public prospect-facing booking-picker page in v1):
 1. propose_meetings(): interested reply -> LLM checks meeting intent -> if
-   yes, fetch >=3 slots from Cal.com, email them, write a `meetings` row
-   (status='proposed', no Cal.com booking created yet — nothing is actually
-   held on the calendar until the prospect picks one).
+   yes, fetch >=3 slots from the connected calendar's real free/busy data,
+   email them, write a `meetings` row (status='proposed', no event created
+   yet — nothing is actually held on the calendar until the prospect picks
+   one).
 2. sync_meeting_confirmations(): for each still-proposed meeting, check for
    a NEW reply from that lead since it was proposed. If found, LLM-match it
-   against the proposed slots; a clear match creates the real Cal.com
-   booking (calcom.create_booking) and sends the confirmation+agenda email.
+   against the proposed slots; a clear match creates the real Calendar event
+   (calendar.create_booking) and sends the confirmation+agenda email.
 """
 import json
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from gtm_backend.phase3.connectors import calcom
+from gtm_backend.phase3.connectors import google_calendar as calendar
 from gtm_backend.phase3.connectors import gmail_oauth
 from gtm_backend.phase3.connectors import openai as llm
 from gtm_backend.phase3.connectors import supabase
@@ -136,11 +144,11 @@ def _propose_for_reply(reply: dict) -> dict:
     log_label = f"reply {reply_id} ({company})"
 
     tz_name = _timezone_for_lead(lead_id)
-    slots = calcom.get_available_slots(min_slots=3, timezone_name=tz_name)
+    slots = calendar.get_available_slots(min_slots=3, timezone_name=tz_name)
     if not slots:
-        # Do NOT mark checked — Cal.com being unreachable/misconfigured is a
-        # transient/config issue, not "this prospect doesn't want a meeting."
-        print(f"  [Agent 22] {log_label} → no Cal.com slots available, will retry")
+        # Do NOT mark checked — the calendar being unreachable/misconfigured
+        # is a transient/config issue, not "this prospect doesn't want a meeting."
+        print(f"  [Agent 22] {log_label} → no calendar slots available, will retry")
         return {"status": "no_slots_available", "reply_id": reply_id}
 
     if not email:
@@ -256,17 +264,22 @@ def _sync_one_meeting(meeting: dict) -> dict:
     tz_name = meeting.get("attendee_timezone") or "UTC"
 
     try:
-        booking = calcom.create_booking(
+        booking = calendar.create_booking(
             start_iso=matched_slot,
             attendee_email=attendee_email,
             attendee_name=company,
             attendee_timezone=tz_name,
         )
-    except calcom.CalcomError as exc:
-        print(f"  [Agent 22] meeting {meeting_id} → Cal.com booking failed: {exc}")
+    except calendar.CalendarError as exc:
+        print(f"  [Agent 22] meeting {meeting_id} → calendar booking failed: {exc}")
         return {"status": "failed", "meeting_id": meeting_id, "error": str(exc)}
 
     agenda = _default_agenda(company)
+    # meetings.calcom_booking_uid keeps its Cal.com-era column name (not
+    # worth a migration for a rename) but now stores the Google Calendar
+    # event id — booking.get("uid") is google_calendar.create_booking()'s
+    # 'uid' key, which is that event id, kept as the same field name so
+    # nothing downstream (CRM reads, tests) needed to change.
     supabase.update_meeting(
         meeting_id,
         status="confirmed",

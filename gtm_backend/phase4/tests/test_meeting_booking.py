@@ -28,7 +28,7 @@ def test_proposes_meeting_when_intent_and_slots_present():
          patch(f"{_MOD}.llm.chat_json", return_value={"wants_meeting": True, "reasoning": "asked for a call"}), \
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.supabase.get_channel_plan_for_lead", return_value={"timezone": "Asia/Kolkata"}), \
-         patch(f"{_MOD}.calcom.get_available_slots", return_value=_SLOTS), \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=_SLOTS), \
          patch(f"{_MOD}.gmail_oauth.send_html_email") as send_mock, \
          patch(f"{_MOD}.supabase.create_meeting") as create_mock, \
          patch(f"{_MOD}.supabase.update_reply") as update_mock:
@@ -70,7 +70,7 @@ def test_no_slots_available_does_not_mark_checked():
          patch(f"{_MOD}.llm.chat_json", return_value={"wants_meeting": True, "reasoning": "x"}), \
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.supabase.get_channel_plan_for_lead", return_value=None), \
-         patch(f"{_MOD}.calcom.get_available_slots", return_value=[]), \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=[]), \
          patch(f"{_MOD}.supabase.update_reply") as update_mock:
         summary = propose_meetings()
 
@@ -100,13 +100,13 @@ def test_already_has_meeting_row_is_skipped_idempotently():
     assert update_mock.call_args[1]["meeting_booking_checked"] is True
 
 
-def test_at_least_3_slots_requested_from_calcom():
+def test_at_least_3_slots_requested_from_calendar():
     with patch(f"{_MOD}.supabase.get_replies_needing_meeting_check", return_value=[_REPLY]), \
          patch(f"{_MOD}.supabase.get_meeting_for_reply", return_value=None), \
          patch(f"{_MOD}.llm.chat_json", return_value={"wants_meeting": True, "reasoning": "x"}), \
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.supabase.get_channel_plan_for_lead", return_value={"timezone": "UTC"}), \
-         patch(f"{_MOD}.calcom.get_available_slots", return_value=_SLOTS) as slots_mock, \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=_SLOTS) as slots_mock, \
          patch(f"{_MOD}.gmail_oauth.send_html_email"), \
          patch(f"{_MOD}.supabase.create_meeting"), \
          patch(f"{_MOD}.supabase.update_reply"):
@@ -146,7 +146,7 @@ def test_proposes_meeting_for_high_intent_reply_without_explicit_ask():
          }), \
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.supabase.get_channel_plan_for_lead", return_value={"timezone": "UTC"}), \
-         patch(f"{_MOD}.calcom.get_available_slots", return_value=_SLOTS), \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=_SLOTS), \
          patch(f"{_MOD}.gmail_oauth.send_html_email"), \
          patch(f"{_MOD}.supabase.create_meeting") as create_mock, \
          patch(f"{_MOD}.supabase.update_reply"):
@@ -193,7 +193,7 @@ def test_confirms_and_books_when_reply_matches_a_slot():
              "outcome": "confirmed", "matched_slot": _SLOTS[0], "reasoning": "picked the first slot",
          }), \
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
-         patch(f"{_MOD}.calcom.create_booking", return_value={"uid": "cal-uid-1"}) as book_mock, \
+         patch(f"{_MOD}.calendar.create_booking", return_value={"uid": "gcal-event-1"}) as book_mock, \
          patch(f"{_MOD}.supabase.update_meeting") as update_mock, \
          patch(f"{_MOD}.gmail_oauth.send_html_email") as send_mock:
         summary = sync_meeting_confirmations()
@@ -202,14 +202,14 @@ def test_confirms_and_books_when_reply_matches_a_slot():
     book_mock.assert_called_once()
     assert book_mock.call_args.kwargs["start_iso"] == _SLOTS[0]
     assert update_mock.call_args[1]["status"] == "confirmed"
-    assert update_mock.call_args[1]["calcom_booking_uid"] == "cal-uid-1"
+    assert update_mock.call_args[1]["calcom_booking_uid"] == "gcal-event-1"
     send_mock.assert_called_once()
 
 
 def test_no_new_reply_is_left_pending():
     with patch(f"{_MOD}.supabase.get_meetings_awaiting_confirmation", return_value=[_MEETING]), \
          patch(f"{_MOD}.supabase.get_replies_for_lead_since", return_value=[]), \
-         patch(f"{_MOD}.calcom.create_booking") as book_mock:
+         patch(f"{_MOD}.calendar.create_booking") as book_mock:
         summary = sync_meeting_confirmations()
 
     assert summary["no_new_reply"] == 1
@@ -222,7 +222,7 @@ def test_decline_cancels_meeting_without_booking():
          patch(f"{_MOD}.llm.chat_json", return_value={
              "outcome": "declined", "matched_slot": None, "reasoning": "said no longer interested",
          }), \
-         patch(f"{_MOD}.calcom.create_booking") as book_mock, \
+         patch(f"{_MOD}.calendar.create_booking") as book_mock, \
          patch(f"{_MOD}.supabase.update_meeting") as update_mock:
         summary = sync_meeting_confirmations()
 
@@ -237,7 +237,7 @@ def test_reschedule_requested_does_not_book_or_cancel():
          patch(f"{_MOD}.llm.chat_json", return_value={
              "outcome": "reschedule_requested", "matched_slot": None, "reasoning": "asked for a different time",
          }), \
-         patch(f"{_MOD}.calcom.create_booking") as book_mock, \
+         patch(f"{_MOD}.calendar.create_booking") as book_mock, \
          patch(f"{_MOD}.supabase.update_meeting") as update_mock:
         summary = sync_meeting_confirmations()
 
@@ -254,22 +254,22 @@ def test_hallucinated_slot_not_in_proposed_list_is_ignored():
          patch(f"{_MOD}.llm.chat_json", return_value={
              "outcome": "confirmed", "matched_slot": "2099-01-01T00:00:00Z", "reasoning": "x",
          }), \
-         patch(f"{_MOD}.calcom.create_booking") as book_mock:
+         patch(f"{_MOD}.calendar.create_booking") as book_mock:
         summary = sync_meeting_confirmations()
 
     assert summary["no_new_reply"] == 1
     book_mock.assert_not_called()
 
 
-def test_calcom_booking_failure_is_reported_not_silently_dropped():
+def test_calendar_booking_failure_is_reported_not_silently_dropped():
     with patch(f"{_MOD}.supabase.get_meetings_awaiting_confirmation", return_value=[_MEETING]), \
          patch(f"{_MOD}.supabase.get_replies_for_lead_since", return_value=[_CONFIRM_REPLY]), \
          patch(f"{_MOD}.llm.chat_json", return_value={
              "outcome": "confirmed", "matched_slot": _SLOTS[0], "reasoning": "x",
          }), \
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD):
-        import gtm_backend.phase3.connectors.calcom as calcom_mod
-        with patch(f"{_MOD}.calcom.create_booking", side_effect=calcom_mod.CalcomError("boom")), \
+        import gtm_backend.phase3.connectors.google_calendar as calendar_mod
+        with patch(f"{_MOD}.calendar.create_booking", side_effect=calendar_mod.CalendarError("boom")), \
              patch(f"{_MOD}.supabase.update_meeting") as update_mock:
             summary = sync_meeting_confirmations()
 
@@ -286,7 +286,7 @@ def test_confirmation_email_failure_does_not_undo_the_booking():
              "outcome": "confirmed", "matched_slot": _SLOTS[0], "reasoning": "x",
          }), \
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
-         patch(f"{_MOD}.calcom.create_booking", return_value={"uid": "cal-uid-2"}), \
+         patch(f"{_MOD}.calendar.create_booking", return_value={"uid": "gcal-event-2"}), \
          patch(f"{_MOD}.supabase.update_meeting") as update_mock, \
          patch(f"{_MOD}.gmail_oauth.send_html_email", side_effect=RuntimeError("smtp down")):
         summary = sync_meeting_confirmations()
