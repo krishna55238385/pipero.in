@@ -472,6 +472,21 @@ CREATE INDEX IF NOT EXISTS idx_outreach_replies_lead_id ON outreach_replies(lead
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS product_description TEXT;
 
 -- ---------------------------------------------------------------------------
+-- Per-organization meeting business hours (Agent 22 — Meeting Booking)
+-- ---------------------------------------------------------------------------
+-- Same reasoning/pattern as product_description above: each org is a
+-- genuinely separate client business with its own real working hours, not a
+-- platform-wide constant. Previously hardcoded to Mon-Fri 9am-5pm UTC for
+-- every org regardless of where they actually are — meant an org outside UTC
+-- could get offered slots outside their own working day. Defaults (9, 17,
+-- 'UTC', 30) preserve the old global behavior for any org that hasn't set
+-- these explicitly, so this is purely additive, not a breaking change.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS meeting_business_start_hour INTEGER DEFAULT 9;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS meeting_business_end_hour INTEGER DEFAULT 17;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS meeting_business_timezone TEXT DEFAULT 'UTC';
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS meeting_duration_minutes INTEGER DEFAULT 30;
+
+-- ---------------------------------------------------------------------------
 -- Agent 25 — Proposal Generation (phase4/CONVERT)
 -- ---------------------------------------------------------------------------
 -- Deliberately its OWN table rather than more columns on the CRM's `deals`

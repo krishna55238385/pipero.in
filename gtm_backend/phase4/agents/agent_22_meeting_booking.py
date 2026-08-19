@@ -10,7 +10,10 @@ PDF business rules and how this agent maps to each:
   an operational/scheduling concern (how often the caller runs this), not
   something enforced inside the function itself.
 - "Must offer at least 3 time slot options in the prospect's timezone" ->
-  calendar.get_available_slots(min_slots=3, timezone_name=<prospect tz>).
+  calendar.get_available_slots(min_slots=3, business_timezone=<org's tz>),
+  displayed to the prospect in their own timezone (see get_available_slots'
+  docstring for why availability itself is constrained by the org's hours,
+  not the prospect's).
 - "Confirmation email must include a clear agenda and what the prospect
   should expect" -> _confirmation_email() always includes an agenda section.
 - "Reminder must be sent 24 hours before and 1 hour before" -> the connector
@@ -144,7 +147,19 @@ def _propose_for_reply(reply: dict) -> dict:
     log_label = f"reply {reply_id} ({company})"
 
     tz_name = _timezone_for_lead(lead_id)
-    slots = calendar.get_available_slots(min_slots=3, timezone_name=tz_name)
+    # Availability is constrained by the ORG's own working hours (per-org
+    # configurable, defaults to 9am-5pm UTC), NOT the prospect's timezone —
+    # see google_calendar.get_available_slots()'s docstring for why. tz_name
+    # (the prospect's) is used only for how the proposal email DISPLAYS the
+    # times below, a separate concern from which times are actually offered.
+    meeting_settings = supabase.get_current_org_meeting_settings()
+    slots = calendar.get_available_slots(
+        min_slots=3,
+        business_timezone=meeting_settings["business_timezone"],
+        business_start_hour=meeting_settings["business_start_hour"],
+        business_end_hour=meeting_settings["business_end_hour"],
+        duration_minutes=meeting_settings["duration_minutes"],
+    )
     if not slots:
         # Do NOT mark checked — the calendar being unreachable/misconfigured
         # is a transient/config issue, not "this prospect doesn't want a meeting."
@@ -269,6 +284,10 @@ def _sync_one_meeting(meeting: dict) -> dict:
             attendee_email=attendee_email,
             attendee_name=company,
             attendee_timezone=tz_name,
+            # Same org-configured length the slot was originally offered at
+            # (see _propose_for_reply) — keeps the booked event's actual
+            # duration consistent with what was proposed.
+            duration_minutes=supabase.get_current_org_meeting_settings()["duration_minutes"],
         )
     except calendar.CalendarError as exc:
         print(f"  [Agent 22] meeting {meeting_id} → calendar booking failed: {exc}")

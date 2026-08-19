@@ -1385,6 +1385,51 @@ def get_org_product_description(organization_id: str | None) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+_DEFAULT_MEETING_SETTINGS = {
+    "business_start_hour": 9,
+    "business_end_hour": 17,
+    "business_timezone": "UTC",
+    "duration_minutes": 30,
+}
+
+
+def get_current_org_meeting_settings() -> dict:
+    """Meeting business-hours settings for whichever org this process run is
+    scoped to (GTM_ORG_ID / _ORG_ID) — same single-process-per-org reasoning
+    as get_current_org_product_description(). Returns the platform defaults
+    (9am-5pm UTC, 30-min meetings — the old hardcoded global behavior) when
+    GTM_ORG_ID is unset, the org row doesn't exist, the columns aren't
+    populated yet, or the table/columns aren't there yet (schema not
+    applied) — never raises, always returns a complete, usable dict."""
+    settings = dict(_DEFAULT_MEETING_SETTINGS)
+    if not _ORG_ID:
+        return settings
+    try:
+        rows = _get(
+            "/organizations",
+            params={
+                "id": f"eq.{_ORG_ID}",
+                "select": "meeting_business_start_hour,meeting_business_end_hour,"
+                          "meeting_business_timezone,meeting_duration_minutes",
+                "limit": 1,
+            },
+        )
+    except SupabaseError:
+        return settings
+    if not rows:
+        return settings
+    row = rows[0]
+    if row.get("meeting_business_start_hour") is not None:
+        settings["business_start_hour"] = row["meeting_business_start_hour"]
+    if row.get("meeting_business_end_hour") is not None:
+        settings["business_end_hour"] = row["meeting_business_end_hour"]
+    if row.get("meeting_business_timezone"):
+        settings["business_timezone"] = row["meeting_business_timezone"]
+    if row.get("meeting_duration_minutes") is not None:
+        settings["duration_minutes"] = row["meeting_duration_minutes"]
+    return settings
+
+
 # -- Agent 25 — Proposal Generation (phase4) ------------------------------
 
 def get_qualified_deals(limit: int | None = None) -> list[dict]:

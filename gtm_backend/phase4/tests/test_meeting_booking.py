@@ -2,6 +2,8 @@
 Gmail, Supabase) mocked."""
 from unittest.mock import patch
 
+import pytest
+
 from gtm_backend.phase4.agents.agent_22_meeting_booking import (
     _proposal_email,
     propose_meetings,
@@ -18,6 +20,21 @@ _REPLY = {
 }
 _LEAD = {"id": 1, "company_name": "Acme HR"}
 _SLOTS = ["2026-08-10T09:00:00Z", "2026-08-10T13:00:00Z", "2026-08-11T09:00:00Z"]
+_MEETING_SETTINGS = {
+    "business_start_hour": 9, "business_end_hour": 17,
+    "business_timezone": "UTC", "duration_minutes": 30,
+}
+
+
+@pytest.fixture(autouse=True)
+def _default_org_meeting_settings():
+    """Per-org business hours (2026-08-19): agent_22 now calls
+    supabase.get_current_org_meeting_settings() on every propose/confirm
+    path. Auto-applied to every test in this file so existing tests don't
+    each need to mock it individually; dedicated tests below verify the
+    real wiring (that the values actually get passed through)."""
+    with patch(f"{_MOD}.supabase.get_current_org_meeting_settings", return_value=dict(_MEETING_SETTINGS)):
+        yield
 
 
 # -- propose_meetings ---------------------------------------------------

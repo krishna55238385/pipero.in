@@ -47,7 +47,7 @@ def test_get_available_slots_excludes_busy_periods():
          patch.object(gcal.gmail_oauth, "_get_mailbox", return_value=_MAILBOX), \
          patch.object(gcal.gmail_oauth, "_access_token", return_value="tok"), \
          patch.object(gcal.httpx, "post", return_value=freebusy_resp):
-        slots = gcal.get_available_slots(days_ahead=7, min_slots=3, timezone_name="UTC")
+        slots = gcal.get_available_slots(days_ahead=7, min_slots=3, business_timezone="UTC")
 
     for slot in slots:
         dt = datetime.fromisoformat(slot.replace("Z", "+00:00"))
@@ -68,6 +68,28 @@ def test_get_available_slots_returns_at_most_min_slots():
 
     assert len(slots) <= 3
     assert len(slots) > 0
+
+
+def test_get_available_slots_respects_custom_business_hours():
+    """Per-org business hours (2026-08-19): a narrower window than the
+    9am-5pm default must actually constrain which hours slots come from."""
+    empty_freebusy = type("R", (), {
+        "status_code": 200,
+        "raise_for_status": lambda self: None,
+        "json": lambda self: {"calendars": {"primary": {"busy": []}}},
+    })()
+    with patch.object(gcal, "is_configured", return_value=True), \
+         patch.object(gcal.gmail_oauth, "_get_mailbox", return_value=_MAILBOX), \
+         patch.object(gcal.gmail_oauth, "_access_token", return_value="tok"), \
+         patch.object(gcal.httpx, "post", return_value=empty_freebusy):
+        slots = gcal.get_available_slots(
+            days_ahead=7, min_slots=50,
+            business_timezone="UTC", business_start_hour=13, business_end_hour=15,
+        )
+
+    for slot in slots:
+        dt = datetime.fromisoformat(slot.replace("Z", "+00:00"))
+        assert 13 <= dt.hour < 15
 
 
 def test_get_available_slots_skips_weekends():

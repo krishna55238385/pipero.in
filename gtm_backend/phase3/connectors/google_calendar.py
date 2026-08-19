@@ -71,23 +71,37 @@ def _auth_headers() -> dict:
 def get_available_slots(
     days_ahead: int = 7,
     min_slots: int = 3,
-    timezone_name: str = "UTC",
+    business_timezone: str = "UTC",
+    business_start_hour: int = _BUSINESS_START_HOUR,
+    business_end_hour: int = _BUSINESS_END_HOUR,
     duration_minutes: int = _DEFAULT_DURATION_MINUTES,
 ) -> list[str]:
     """Available start times (ISO 8601, UTC) over the next `days_ahead` days,
     computed from the connected calendar's real free/busy data, restricted
-    to weekday business hours (9am-5pm) in the given timezone. Returns at
-    most `min_slots`, spread across the window rather than clustered on the
-    earliest day (same spreading behavior as the Cal.com version this
-    replaced). Returns [] (never raises) when not configured or the API call
-    fails, so the caller can fall back to a generic "reply to schedule"
-    message instead of crashing the whole batch on one Calendar outage.
+    to weekday business hours [business_start_hour, business_end_hour) in
+    `business_timezone`.
+
+    business_timezone/business_start_hour/business_end_hour are the ORG's
+    own working hours (per-org configurable via
+    supabase.get_current_org_meeting_settings() — see agent_22), NOT the
+    prospect's timezone. That distinction matters: constraining availability
+    by the prospect's local time instead of the seller's would happily offer
+    a 3am-for-the-seller slot just because it looked like 9am to the
+    prospect. Display formatting for the prospect (what the proposal email
+    actually shows) is a separate concern, handled by the caller.
+
+    Returns at most `min_slots`, spread across the window rather than
+    clustered on the earliest day (same spreading behavior as the Cal.com
+    version this replaced). Returns [] (never raises) when not configured or
+    the API call fails, so the caller can fall back to a generic "reply to
+    schedule" message instead of crashing the whole batch on one Calendar
+    outage.
     """
     if not is_configured():
         return []
 
     try:
-        tz = ZoneInfo(timezone_name)
+        tz = ZoneInfo(business_timezone)
     except (ZoneInfoNotFoundError, ValueError):
         tz = ZoneInfo("UTC")
 
@@ -128,8 +142,8 @@ def get_available_slots(
         day = day_cursor + timedelta(days=day_offset)
         if day.weekday() >= 5:  # skip Saturday/Sunday
             continue
-        slot_start = day.replace(hour=_BUSINESS_START_HOUR)
-        day_end = day.replace(hour=_BUSINESS_END_HOUR)
+        slot_start = day.replace(hour=business_start_hour)
+        day_end = day.replace(hour=business_end_hour)
         while slot_start + duration <= day_end:
             if slot_start > now_local:
                 slot_start_utc = slot_start.astimezone(timezone.utc)
