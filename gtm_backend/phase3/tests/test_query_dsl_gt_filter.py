@@ -34,6 +34,8 @@ def test_gt_filter_does_not_collide_with_gte():
 
 def test_unsupported_operator_still_raises_clean_error():
     """Guard against silently swallowing a genuinely unsupported operator —
-    unsupported filters should still fail loudly, just not for 'gt.' anymore."""
+    unsupported filters should still fail loudly, just not for 'gt.' anymore.
+    'neq.' used here since 'lt.'/'lte.' are now supported too (see
+    test_query_dsl_lt_filter.py) and would no longer make a valid example."""
     with pytest.raises(ValueError, match="Unsupported filter"):
-        _parse_filter("some_col", "lt.2026-01-01", [])
+        _parse_filter("some_col", "neq.2026-01-01", [])

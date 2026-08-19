@@ -161,6 +161,19 @@ def _parse_filter(column: str, expr: str, values: list) -> str:
         # test run.
         values.append(expr[len("gt."):])
         return f"{column} > %s"
+    if expr.startswith("lte."):
+        values.append(expr[len("lte."):])
+        return f"{column} <= %s"
+    if expr.startswith("lt."):
+        # Same class of bug as "gt." above (found live 2026-08-07): this DSL
+        # never implemented "lt." either. get_confirmed_meetings_past_due()
+        # (Task #45's no-show detector) builds a "lt.<iso>" filter and
+        # crashed on every real invocation until this was added — caught
+        # live 2026-08-19 running detect-no-shows manually, not by the test
+        # suite, since its tests mock _get() directly and never exercise
+        # _parse_filter.
+        values.append(expr[len("lt."):])
+        return f"{column} < %s"
     if expr.startswith("in.(") and expr.endswith(")"):
         inner = expr[len("in.("):-1]
         items = [v.strip() for v in inner.split(",") if v.strip() != ""]
