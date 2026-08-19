@@ -142,7 +142,7 @@ def chat_json(
     OpenRouter, the model is whatever the org chose (_OPENROUTER_MODEL),
     ignoring this parameter.
     """
-    model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
     # retry_on_transient (the decorator on this function) deliberately only
     # retries transport-level failures — never a 200 response whose content

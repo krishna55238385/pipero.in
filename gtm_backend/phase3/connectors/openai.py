@@ -126,10 +126,10 @@ def chat_json(
     """Call Groq with JSON mode. Returns parsed dict. Raises on failure.
 
     The model defaults to GROQ_MODEL from the root .env; falls back to
-    llama-3.3-70b-versatile (NOT the deprecated 3.1 model) if unset. Callers
-    may still pass an explicit override.
+    openai/gpt-oss-120b (llama-3.3-70b-versatile was deprecated/removed from
+    Groq's catalog) if unset. Callers may still pass an explicit override.
     """
-    model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     response = _chat_completion_with_fallback(model, system, user, temperature)
     # Record usage for EVERY completed API call — before any content validation
     # that could raise — so even a malformed/empty response logs the spend.
