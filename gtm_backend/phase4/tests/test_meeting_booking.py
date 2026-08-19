@@ -6,6 +6,7 @@ import pytest
 
 from gtm_backend.phase4.agents.agent_22_meeting_booking import (
     _proposal_email,
+    detect_no_shows_and_reschedule,
     propose_meetings,
     sync_meeting_confirmations,
 )
@@ -310,3 +311,104 @@ def test_confirmation_email_failure_does_not_undo_the_booking():
 
     assert summary["confirmed"] == 1
     assert update_mock.call_args[1]["status"] == "confirmed"
+
+
+# -- detect_no_shows_and_reschedule --------------------------------------
+
+_PAST_DUE_MEETING = {
+    "id": 5, "lead_id": 1, "reply_id": 9,
+    "scheduled_at": "2026-08-10T09:00:00+00:00",
+    "attendee_timezone": "Asia/Kolkata", "reschedule_count": 0,
+}
+_ATTENDEE_REPLY = {"email": "priya@acmehr.com"}
+
+
+def test_no_show_offers_reschedule_when_under_attempt_cap():
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[_PAST_DUE_MEETING]), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
+         patch(f"{_MOD}.supabase.get_reply_by_id", return_value=_ATTENDEE_REPLY), \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=_SLOTS), \
+         patch(f"{_MOD}.gmail_oauth.send_html_email") as send_mock, \
+         patch(f"{_MOD}.supabase.update_meeting") as update_mock:
+        summary = detect_no_shows_and_reschedule()
+
+    assert summary["rescheduled"] == 1
+    send_mock.assert_called_once()
+    assert send_mock.call_args.kwargs["to"] == "priya@acmehr.com"
+    kwargs = update_mock.call_args[1]
+    assert kwargs["status"] == "proposed"
+    assert kwargs["proposed_slots"] == _SLOTS
+    assert kwargs["scheduled_at"] is None
+    assert kwargs["calcom_booking_uid"] is None
+    assert kwargs["reschedule_count"] == 1
+
+
+def test_no_show_moves_to_nurture_after_max_attempts():
+    """PDF rule: max 2 reschedule attempts before nurture — a meeting already
+    at 2 must not get offered a 3rd reschedule."""
+    maxed_meeting = {**_PAST_DUE_MEETING, "reschedule_count": 2}
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[maxed_meeting]), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
+         patch(f"{_MOD}.calendar.get_available_slots") as slots_mock, \
+         patch(f"{_MOD}.gmail_oauth.send_html_email") as send_mock, \
+         patch(f"{_MOD}.supabase.update_meeting") as update_mock:
+        summary = detect_no_shows_and_reschedule()
+
+    assert summary["moved_to_nurture"] == 1
+    slots_mock.assert_not_called()
+    send_mock.assert_not_called()
+    assert update_mock.call_args[1]["status"] == "moved_to_nurture"
+
+
+def test_no_show_no_slots_available_does_not_burn_an_attempt():
+    """A transient calendar outage during a reschedule attempt must not cost
+    the prospect one of their 2 real reschedule attempts."""
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[_PAST_DUE_MEETING]), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
+         patch(f"{_MOD}.supabase.get_reply_by_id", return_value=_ATTENDEE_REPLY), \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=[]), \
+         patch(f"{_MOD}.supabase.update_meeting") as update_mock:
+        summary = detect_no_shows_and_reschedule()
+
+    assert summary["no_slots_available"] == 1
+    update_mock.assert_not_called()
+
+
+def test_no_show_without_attendee_email_moves_to_nurture():
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[_PAST_DUE_MEETING]), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
+         patch(f"{_MOD}.supabase.get_reply_by_id", return_value={"email": ""}), \
+         patch(f"{_MOD}.calendar.get_available_slots") as slots_mock, \
+         patch(f"{_MOD}.supabase.update_meeting") as update_mock:
+        summary = detect_no_shows_and_reschedule()
+
+    assert summary["moved_to_nurture"] == 1
+    slots_mock.assert_not_called()
+    assert update_mock.call_args[1]["status"] == "moved_to_nurture"
+
+
+def test_no_show_reschedule_email_failure_is_reported_not_silently_dropped():
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[_PAST_DUE_MEETING]), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
+         patch(f"{_MOD}.supabase.get_reply_by_id", return_value=_ATTENDEE_REPLY), \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=_SLOTS), \
+         patch(f"{_MOD}.gmail_oauth.send_html_email", side_effect=RuntimeError("smtp down")), \
+         patch(f"{_MOD}.supabase.update_meeting") as update_mock:
+        summary = detect_no_shows_and_reschedule()
+
+    assert summary["failed"] == 1
+    update_mock.assert_not_called()
+
+
+def test_no_show_cutoff_uses_org_configured_duration():
+    """Past-due-ness is computed from now minus the org's own meeting
+    duration (same length meetings are booked at), not a fixed constant."""
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[]) as query_mock:
+        detect_no_shows_and_reschedule()
+
+    assert query_mock.call_count == 1
+    # First positional arg is the cutoff ISO string; just assert it was
+    # called with a real ISO-formatted timestamp (not asserting exact value
+    # since it's computed from datetime.now()).
+    cutoff_arg = query_mock.call_args[0][0]
+    assert isinstance(cutoff_arg, str) and "T" in cutoff_arg

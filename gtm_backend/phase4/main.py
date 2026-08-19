@@ -30,6 +30,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sync_meetings.add_argument("--limit", type=int, default=None)
 
+    p_no_shows = sub.add_parser(
+        "detect-no-shows",
+        help="Agent 22: find confirmed meetings past their scheduled end with no confirming activity, reschedule (max 2 attempts) or move to nurture",
+    )
+    p_no_shows.add_argument("--limit", type=int, default=None)
+
     p_briefs = sub.add_parser(
         "generate-meeting-briefs",
         help="Agent 23: generate a one-page pre-meeting brief for every confirmed meeting that doesn't have one",
@@ -147,6 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "sync-meeting-confirmations":
         from gtm_backend.phase4.agents.agent_22_meeting_booking import sync_meeting_confirmations
         sync_meeting_confirmations(args.limit)
+    elif command == "detect-no-shows":
+        from gtm_backend.phase4.agents.agent_22_meeting_booking import detect_no_shows_and_reschedule
+        detect_no_shows_and_reschedule(args.limit)
     elif command == "generate-meeting-briefs":
         from gtm_backend.phase4.agents.agent_23_pre_meeting_brief import generate_pending_meeting_briefs
         generate_pending_meeting_briefs(args.limit)

@@ -1296,6 +1296,30 @@ def get_replies_for_lead_since(lead_id: int, since_iso: str) -> list[dict]:
         raise
 
 
+def get_confirmed_meetings_past_due(cutoff_iso: str, limit: int | None = None) -> list[dict]:
+    """Confirmed meetings whose scheduled_at is before `cutoff_iso` (caller
+    passes now-minus-duration, i.e. the meeting has actually finished) with
+    no confirming activity since — used by the no-show detector. Only looks
+    at status='confirmed' rows: a meeting already 'no_show'/'moved_to_nurture'
+    is picked up by the reschedule retry path instead (see
+    _handle_no_show's reschedule_count check), and 'cancelled'/'proposed'
+    meetings were never actually booked in the first place, so there's
+    nothing to detect a no-show against."""
+    params: dict = {
+        "status": "eq.confirmed",
+        "scheduled_at": f"lt.{cutoff_iso}",
+        "order": "scheduled_at.asc",
+    }
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return _get("/meetings", params=params)
+    except SupabaseError as exc:
+        if _missing_table(exc, "meetings"):
+            return []
+        raise
+
+
 # -- Agent 23 — Pre-Meeting Brief (phase4) ---------------------------------
 
 def get_confirmed_meetings_needing_brief(limit: int | None = None) -> list[dict]:

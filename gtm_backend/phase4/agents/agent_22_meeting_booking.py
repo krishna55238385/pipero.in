@@ -22,13 +22,20 @@ PDF business rules and how this agent maps to each:
   docstring for why that isn't a guaranteed substitute for a real branded
   reminder system across every attendee/calendar-provider combination).
 - "If prospect no-shows, rescheduling attempt must happen within 2 hours" /
-  "Maximum 2 rescheduling attempts before moving to nurture" -> NOT built in
-  this pass. No-show detection needs either a Calendar webhook/push
-  notification or a polling check against meeting end-time + no post-meeting
-  activity, which is real additional scope; meetings.reschedule_count and the
-  'no_show' / 'moved_to_nurture' status values are already in the schema so
-  this can be added without another migration. Flagged as a follow-up, not
-  silently skipped.
+  "Maximum 2 rescheduling attempts before moving to nurture" ->
+  detect_no_shows_and_reschedule(): polling check (no Calendar webhook in
+  v1) against meetings.status='confirmed' with scheduled_at (+ org duration)
+  already in the past and no post-meeting activity. Reuses meetings.status
+  itself as the state machine (no separate no_show/moved_to_nurture boolean
+  columns were ever added to the schema — 'confirmed'/'proposed'/'cancelled'
+  were already status *values*, not columns, so this follows the same
+  pattern rather than adding two more columns for what is really just two
+  more states of the same field). reschedule_count (already in schema)
+  caps attempts at 2; the 3rd time this meeting is found past-due, it's
+  moved to status='moved_to_nurture' instead of re-proposed. The "within 2
+  hours" bound is, like the 15-minute bound above, an operational/scheduling
+  concern (how often the caller runs this), not enforced inside the
+  function itself.
 - "All meeting details must be auto-logged in the CRM" -> every proposal and
   confirmation writes to the `meetings` table (this pipeline's system of
   record, same as outreach_log/deals for every other agent).
@@ -54,7 +61,7 @@ Two-phase design (no public prospect-facing booking-picker page in v1):
    (calendar.create_booking) and sends the confirmation+agenda email.
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from gtm_backend.phase3.connectors import google_calendar as calendar
@@ -62,6 +69,11 @@ from gtm_backend.phase3.connectors import gmail_oauth
 from gtm_backend.phase3.connectors import openai as llm
 from gtm_backend.phase3.connectors import supabase
 from gtm_backend.phase4.core.prompts import MEETING_INTENT_SYSTEM, MEETING_SLOT_MATCH_SYSTEM
+
+# PDF rule: "Maximum 2 rescheduling attempts before moving to nurture" — the
+# 3rd time a meeting is found past-due (reschedule_count already at 2), it's
+# moved to nurture instead of re-proposed a 3rd time.
+_MAX_RESCHEDULE_ATTEMPTS = 2
 
 
 def propose_meetings(limit: int | None = None) -> dict:
@@ -322,6 +334,138 @@ def _sync_one_meeting(meeting: dict) -> dict:
 
     print(f"  [Agent 22] meeting {meeting_id} → confirmed for {matched_slot}")
     return {"status": "confirmed", "meeting_id": meeting_id}
+
+
+def detect_no_shows_and_reschedule(limit: int | None = None) -> dict:
+    """Find confirmed meetings whose scheduled time has passed with no
+    confirming activity since, and either offer a fresh set of slots
+    (reschedule_count < 2) or move the meeting to nurture (already at the
+    2-attempt cap). Polling-based — no Calendar webhook in v1 — so the
+    caller running this frequently is what keeps the "within 2 hours" PDF
+    bound honest, same as every other cadence rule in this agent."""
+    bar = "═" * 72
+    print(f"\n{bar}")
+    print(f"  AGENT 22 — Meeting Booking: no-show detection (limit={limit or 'all'})")
+    print(bar)
+
+    # Use the org's own configured meeting length to decide when a meeting
+    # has actually finished — the same duration Agent 22 books meetings at
+    # (see _propose_for_reply/_sync_one_meeting), so "past due" means "past
+    # its own scheduled end time," not just "past its start time."
+    duration_minutes = supabase.get_current_org_meeting_settings()["duration_minutes"]
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=duration_minutes)
+    meetings = supabase.get_confirmed_meetings_past_due(cutoff.isoformat(), limit=limit)
+    print(f"  → {len(meetings)} confirmed meeting(s) past their scheduled end time")
+
+    rescheduled = moved_to_nurture = no_slots = failed = 0
+    for meeting in meetings:
+        result = _handle_no_show(meeting)
+        status = result["status"]
+        if status == "rescheduled":
+            rescheduled += 1
+        elif status == "moved_to_nurture":
+            moved_to_nurture += 1
+        elif status == "no_slots_available":
+            no_slots += 1
+        else:
+            failed += 1
+
+    print(
+        f"  ✓ Agent 22 (no-show) complete: {rescheduled} rescheduled · "
+        f"{moved_to_nurture} moved to nurture · {no_slots} no slots available · {failed} failed"
+    )
+    return {
+        "meetings_examined": len(meetings),
+        "rescheduled": rescheduled,
+        "moved_to_nurture": moved_to_nurture,
+        "no_slots_available": no_slots,
+        "failed": failed,
+    }
+
+
+def _handle_no_show(meeting: dict) -> dict:
+    meeting_id = meeting.get("id")
+    lead_id = meeting.get("lead_id")
+    reply_id = meeting.get("reply_id")
+    reschedule_count = meeting.get("reschedule_count") or 0
+
+    lead = supabase.get_lead_by_id(lead_id) if lead_id else None
+    company = (lead or {}).get("company_name") or "there"
+    log_label = f"meeting {meeting_id} ({company})"
+
+    if reschedule_count >= _MAX_RESCHEDULE_ATTEMPTS:
+        supabase.update_meeting(meeting_id, status="moved_to_nurture")
+        print(f"  [Agent 22] {log_label} → no-show, {reschedule_count} reschedule attempt(s) already made, moving to nurture")
+        return {"status": "moved_to_nurture", "meeting_id": meeting_id}
+
+    reply = supabase.get_reply_by_id(reply_id) if reply_id else None
+    attendee_email = (reply or {}).get("email") or ""
+    tz_name = meeting.get("attendee_timezone") or "UTC"
+
+    if not attendee_email:
+        # Nothing to email a reschedule offer to — mark it moved_to_nurture
+        # rather than looping on an unreschedulable meeting forever.
+        supabase.update_meeting(meeting_id, status="moved_to_nurture")
+        print(f"  [Agent 22] {log_label} → no-show, no attendee email on file, moving to nurture")
+        return {"status": "moved_to_nurture", "meeting_id": meeting_id}
+
+    # Same org-hours constraint as the original proposal — see
+    # _propose_for_reply for why availability is the ORG's hours, not the
+    # prospect's.
+    meeting_settings = supabase.get_current_org_meeting_settings()
+    slots = calendar.get_available_slots(
+        min_slots=3,
+        business_timezone=meeting_settings["business_timezone"],
+        business_start_hour=meeting_settings["business_start_hour"],
+        business_end_hour=meeting_settings["business_end_hour"],
+        duration_minutes=meeting_settings["duration_minutes"],
+    )
+    if not slots:
+        # Do NOT bump reschedule_count or change status on a transient
+        # calendar failure — this attempt didn't actually happen from the
+        # prospect's point of view, so it shouldn't burn one of their 2
+        # reschedule attempts. Picked up again next run.
+        print(f"  [Agent 22] {log_label} → no-show, no reschedule slots available, will retry")
+        return {"status": "no_slots_available", "meeting_id": meeting_id}
+
+    try:
+        gmail_oauth.send_html_email(
+            to=attendee_email,
+            subject=f"Missed our call — let's find another time, {company}",
+            html_body=_reschedule_email(slots, tz_name),
+        )
+    except Exception as exc:
+        print(f"  [Agent 22] {log_label} → reschedule email failed: {exc}")
+        return {"status": "failed", "meeting_id": meeting_id, "error": str(exc)}
+
+    # Re-open the meeting for confirmation-sync to pick up again, same as a
+    # brand new proposal: status back to 'proposed', new slot set, fresh
+    # proposed_at (so get_replies_for_lead_since only looks at replies after
+    # THIS reschedule offer, not the original one), old booking cleared, and
+    # the attempt counted.
+    supabase.update_meeting(
+        meeting_id,
+        status="proposed",
+        proposed_slots=slots,
+        proposed_at=datetime.now(timezone.utc).isoformat(),
+        scheduled_at=None,
+        calcom_booking_uid=None,
+        reschedule_count=reschedule_count + 1,
+    )
+    print(f"  [Agent 22] {log_label} → no-show, reschedule offer #{reschedule_count + 1} sent, {len(slots)} slot(s)")
+    return {"status": "rescheduled", "meeting_id": meeting_id}
+
+
+def _reschedule_email(slots: list[str], tz_name: str) -> str:
+    items = "".join(f"<li>{_format_slot(s, tz_name)}</li>" for s in slots)
+    return (
+        f"<p>Hi there,</p>"
+        f"<p>Looks like we missed each other for our scheduled call — no "
+        f"worries, happy to find another time. A few options that work on "
+        f"our end (times {_tz_label(tz_name)}):</p>"
+        f"<ul>{items}</ul>"
+        f"<p>Reply with whichever works best and I'll lock it in.</p>"
+    )
 
 
 def _timezone_for_lead(lead_id: int | None) -> str:
