@@ -1,4 +1,5 @@
 import type { ComposePayload, EngageAttachment, EngageEmailSummary, EngageThread, EngageThreadMessage } from '@/types/engage'
+import { getGoogleScopes } from '@/services/mail/oauth/google'
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1'
 const GOOGLE_OAUTH_BASE = 'https://accounts.google.com/o/oauth2/v2/auth'
@@ -55,14 +56,10 @@ async function gmailFetch<T>(path: string, accessToken: string, init?: RequestIn
 }
 
 export function getGmailScopes() {
-  // PRD §6.1 / §7: minimum-necessary scopes only (send + readonly)
-  return [
-    'openid',
-    'email',
-    'profile',
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.send',
-  ]
+  // Single source of truth lives in services/mail/oauth/google.ts — this used to be
+  // a second hardcoded list that drifted out of sync when calendar.events was added
+  // there but not here (the Engage "Connect Gmail" button only ever used this one).
+  return getGoogleScopes()
 }
 
 export function buildGmailOAuthUrl(state: string) {
