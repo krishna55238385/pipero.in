@@ -28,7 +28,12 @@ _MAX_CANDIDATES_PER_LEAD = 12
 _MAX_QUERIES_PER_LEAD = 5  # was 8 — each query is a SerpAPI credit; blueprint only asks for 5-7
 
 
-def detect_signals(icp_id: int | None = None, lookback_days: int = 90, limit: int = 50) -> dict:
+def detect_signals(
+    icp_id: int | None = None,
+    lookback_days: int = 90,
+    limit: int = 50,
+    exclude_cold: bool = True,
+) -> dict:
     """Detect and (re)persist buying signals for leads.
 
     When ``icp_id`` is given, only that ICP's leads are scanned. When it is
@@ -37,15 +42,21 @@ def detect_signals(icp_id: int | None = None, lookback_days: int = 90, limit: in
     caller's org). Re-running is idempotent — a lead's existing buying_signals
     are cleared before its freshly detected signals are reinserted, so signals
     are refreshed in place rather than duplicated.
+
+    exclude_cold (default True): skips leads already scored 'cold' — see
+    supabase.get_leads_for_signals()'s docstring for the full reasoning
+    (SerpAPI-usage cost reduction, safe no-op on unscored/new leads). Pass
+    False for a full rescan.
     """
     scope = f"ICP #{icp_id}" if icp_id else "ALL leads (org-wide)"
+    cold_note = " (excluding cold-tier)" if exclude_cold else ""
     bar = "═" * 72
     print(f"\n{bar}")
-    print(f"  AGENT 04 — Buying Signal Detection ({scope}, lookback={lookback_days}d)")
+    print(f"  AGENT 04 — Buying Signal Detection ({scope}, lookback={lookback_days}d{cold_note})")
     print(bar)
 
     icp = supabase.get_icp(icp_id) if icp_id else None
-    leads = supabase.get_leads_for_signals(limit=limit, icp_id=icp_id)
+    leads = supabase.get_leads_for_signals(limit=limit, icp_id=icp_id, exclude_cold=exclude_cold)
     print(f"  → {len(leads)} leads to scan for signals")
 
     signals_detected = 0

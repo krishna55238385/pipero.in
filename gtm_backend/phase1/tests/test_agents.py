@@ -492,6 +492,25 @@ def test_agent_04_falls_back_to_static_queries_on_llm_failure(sample_icp):
     inserter.assert_called_once()
 
 
+def test_agent_04_defaults_to_excluding_cold_leads_from_serpapi_scan():
+    """SerpAPI usage reduction (2026-08-19): detect_signals must default to
+    exclude_cold=True and pass it straight through to get_leads_for_signals,
+    without needing the caller to opt in."""
+    with patch("gtm_backend.phase1.agents.agent_04_signals.supabase.get_icp", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_04_signals.supabase.get_leads_for_signals", return_value=[]) as leads_mock:
+        detect_signals(icp_id=1)
+
+    leads_mock.assert_called_once_with(limit=50, icp_id=1, exclude_cold=True)
+
+
+def test_agent_04_exclude_cold_false_is_passed_through():
+    with patch("gtm_backend.phase1.agents.agent_04_signals.supabase.get_icp", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_04_signals.supabase.get_leads_for_signals", return_value=[]) as leads_mock:
+        detect_signals(icp_id=1, exclude_cold=False)
+
+    leads_mock.assert_called_once_with(limit=50, icp_id=1, exclude_cold=False)
+
+
 # Agent 05 ---------------------------------------------------------------
 
 def test_agent_05_scores_and_updates(sample_icp, full_lead):

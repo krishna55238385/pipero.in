@@ -357,14 +357,37 @@ def get_leads_for_enrichment(limit: int = 50, icp_id: int | None = None) -> list
     return _get("/leads_raw", params=params)
 
 
-def get_leads_for_signals(limit: int = 50, icp_id: int | None = None) -> list[dict]:
+def get_leads_for_signals(
+    limit: int = 50, icp_id: int | None = None, exclude_cold: bool = True
+) -> list[dict]:
+    """Leads eligible for a signals scan.
+
+    exclude_cold (default True, Task from 2026-08-19 SerpAPI-usage audit):
+    skips leads already scored 'cold' — the daily signal-refresh scheduler
+    was re-spending 2 SerpAPI calls per lead per day on leads that were
+    never going anywhere, the single biggest recurring cost against the
+    250/month free-tier quota. Safe to default on everywhere (not just the
+    scheduler) because it's a pure no-op on a lead's very first pass through
+    this agent: score_tier is NULL until Agent 03 scores it (signals run
+    BEFORE scoring in the pipeline), and this filter only ever excludes a
+    literal 'cold' value — a NULL tier is never excluded, so first-time
+    signal detection for brand-new leads is completely unaffected. Pass
+    exclude_cold=False to force a full rescan (e.g. a manual QC pass).
+    Filtered in Python, not via the query DSL — the DSL has no OR combinator
+    and "score_tier != cold" alone would also silently drop NULL-tier rows
+    (SQL NULL comparison semantics), which is exactly the case we need to
+    keep.
+    """
     params: dict = {
         "company_domain": "not.is.null",
         "limit": limit,
     }
     if icp_id is not None:
         params["icp_id"] = f"eq.{icp_id}"
-    return _get("/leads_raw", params=params)
+    rows = _get("/leads_raw", params=params)
+    if exclude_cold:
+        rows = [r for r in rows if r.get("score_tier") != "cold"]
+    return rows
 
 
 def insert_signals(signals: list[BuyingSignal]) -> list[int]:

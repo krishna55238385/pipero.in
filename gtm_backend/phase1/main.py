@@ -38,6 +38,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sig.add_argument("--icp", type=int, default=None, dest="icp_id")
     p_sig.add_argument("--days", type=int, default=90, dest="lookback_days")
     p_sig.add_argument("--limit", type=int, default=50)
+    p_sig.add_argument(
+        "--include-cold", action="store_false", dest="exclude_cold",
+        help="also rescan cold-tier leads (default: skipped, to save SerpAPI quota)",
+    )
 
     p_score = sub.add_parser("score", help="Agent 03: score leads")
     p_score.add_argument("--mode", choices=["unscored", "icp_id", "lead_id"], default="unscored")
@@ -126,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "enrich":
         enrich_leads(args.icp_id, args.limit)
     elif command == "signals":
-        detect_signals(args.icp_id, args.lookback_days, args.limit)
+        detect_signals(args.icp_id, args.lookback_days, args.limit, args.exclude_cold)
     elif command == "score":
         score_leads(args.mode, args.lead_id, args.icp_id, args.limit)
     elif command == "social-listening":
