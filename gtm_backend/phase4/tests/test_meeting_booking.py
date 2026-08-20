@@ -319,6 +319,7 @@ _PAST_DUE_MEETING = {
     "id": 5, "lead_id": 1, "reply_id": 9,
     "scheduled_at": "2026-08-10T09:00:00+00:00",
     "attendee_timezone": "Asia/Kolkata", "reschedule_count": 0,
+    "calcom_booking_uid": "gcal-event-stale-1",
 }
 _ATTENDEE_REPLY = {"email": "priya@acmehr.com"}
 
@@ -328,6 +329,7 @@ def test_no_show_offers_reschedule_when_under_attempt_cap():
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.supabase.get_reply_by_id", return_value=_ATTENDEE_REPLY), \
          patch(f"{_MOD}.calendar.get_available_slots", return_value=_SLOTS), \
+         patch(f"{_MOD}.calendar.cancel_booking", return_value=True) as cancel_mock, \
          patch(f"{_MOD}.gmail_oauth.send_html_email") as send_mock, \
          patch(f"{_MOD}.supabase.update_meeting") as update_mock:
         summary = detect_no_shows_and_reschedule()
@@ -335,6 +337,8 @@ def test_no_show_offers_reschedule_when_under_attempt_cap():
     assert summary["rescheduled"] == 1
     send_mock.assert_called_once()
     assert send_mock.call_args.kwargs["to"] == "priya@acmehr.com"
+    # The old (missed) Calendar event must be cancelled, not left dangling.
+    cancel_mock.assert_called_once_with("gcal-event-stale-1")
     kwargs = update_mock.call_args[1]
     assert kwargs["status"] == "proposed"
     assert kwargs["proposed_slots"] == _SLOTS
@@ -350,6 +354,7 @@ def test_no_show_moves_to_nurture_after_max_attempts():
     with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[maxed_meeting]), \
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.calendar.get_available_slots") as slots_mock, \
+         patch(f"{_MOD}.calendar.cancel_booking", return_value=True) as cancel_mock, \
          patch(f"{_MOD}.gmail_oauth.send_html_email") as send_mock, \
          patch(f"{_MOD}.supabase.update_meeting") as update_mock:
         summary = detect_no_shows_and_reschedule()
@@ -357,7 +362,44 @@ def test_no_show_moves_to_nurture_after_max_attempts():
     assert summary["moved_to_nurture"] == 1
     slots_mock.assert_not_called()
     send_mock.assert_not_called()
+    # Moving to nurture is also a resolution of the missed meeting — the
+    # stale event must be cancelled here too, not just on the reschedule path.
+    cancel_mock.assert_called_once_with("gcal-event-stale-1")
     assert update_mock.call_args[1]["status"] == "moved_to_nurture"
+
+
+def test_no_show_cancel_failure_does_not_block_reschedule():
+    """cancel_booking() failing (e.g. Calendar API hiccup) must not stop the
+    reschedule offer from going out — it's best-effort, not a blocking step."""
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[_PAST_DUE_MEETING]), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
+         patch(f"{_MOD}.supabase.get_reply_by_id", return_value=_ATTENDEE_REPLY), \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=_SLOTS), \
+         patch(f"{_MOD}.calendar.cancel_booking", return_value=False), \
+         patch(f"{_MOD}.gmail_oauth.send_html_email") as send_mock, \
+         patch(f"{_MOD}.supabase.update_meeting") as update_mock:
+        summary = detect_no_shows_and_reschedule()
+
+    assert summary["rescheduled"] == 1
+    send_mock.assert_called_once()
+    assert update_mock.call_args[1]["status"] == "proposed"
+
+
+def test_no_show_skips_cancel_when_no_prior_booking_uid():
+    """A meeting with no calcom_booking_uid (should be rare for a
+    status='confirmed' row, but defensively handled) must not call
+    cancel_booking with an empty/None uid."""
+    no_uid_meeting = {**_PAST_DUE_MEETING, "calcom_booking_uid": None}
+    with patch(f"{_MOD}.supabase.get_confirmed_meetings_past_due", return_value=[no_uid_meeting]), \
+         patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
+         patch(f"{_MOD}.supabase.get_reply_by_id", return_value=_ATTENDEE_REPLY), \
+         patch(f"{_MOD}.calendar.get_available_slots", return_value=_SLOTS), \
+         patch(f"{_MOD}.calendar.cancel_booking") as cancel_mock, \
+         patch(f"{_MOD}.gmail_oauth.send_html_email"), \
+         patch(f"{_MOD}.supabase.update_meeting"):
+        detect_no_shows_and_reschedule()
+
+    cancel_mock.assert_not_called()
 
 
 def test_no_show_no_slots_available_does_not_burn_an_attempt():
@@ -379,11 +421,13 @@ def test_no_show_without_attendee_email_moves_to_nurture():
          patch(f"{_MOD}.supabase.get_lead_by_id", return_value=_LEAD), \
          patch(f"{_MOD}.supabase.get_reply_by_id", return_value={"email": ""}), \
          patch(f"{_MOD}.calendar.get_available_slots") as slots_mock, \
+         patch(f"{_MOD}.calendar.cancel_booking", return_value=True) as cancel_mock, \
          patch(f"{_MOD}.supabase.update_meeting") as update_mock:
         summary = detect_no_shows_and_reschedule()
 
     assert summary["moved_to_nurture"] == 1
     slots_mock.assert_not_called()
+    cancel_mock.assert_called_once_with("gcal-event-stale-1")
     assert update_mock.call_args[1]["status"] == "moved_to_nurture"
 
 

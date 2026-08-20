@@ -197,3 +197,55 @@ def test_get_booking_returns_none_on_failure_status():
          patch.object(gcal.gmail_oauth, "_access_token", return_value="tok"), \
          patch.object(gcal.httpx, "get", return_value=fail_resp):
         assert gcal.get_booking("evt-1") is None
+
+
+def test_cancel_booking_returns_false_when_not_configured():
+    with patch.object(gcal, "is_configured", return_value=False):
+        assert gcal.cancel_booking("evt-1") is False
+
+
+def test_cancel_booking_returns_false_without_uid():
+    with patch.object(gcal, "is_configured", return_value=True):
+        assert gcal.cancel_booking("") is False
+        assert gcal.cancel_booking(None) is False
+
+
+def test_cancel_booking_returns_true_on_success():
+    ok_resp = type("R", (), {"status_code": 204})()
+    with patch.object(gcal, "is_configured", return_value=True), \
+         patch.object(gcal.gmail_oauth, "_get_mailbox", return_value=_MAILBOX), \
+         patch.object(gcal.gmail_oauth, "_access_token", return_value="tok"), \
+         patch.object(gcal.httpx, "delete", return_value=ok_resp) as delete_mock:
+        assert gcal.cancel_booking("evt-1") is True
+
+    args, kwargs = delete_mock.call_args
+    assert args[0].endswith("/evt-1")
+    assert kwargs["params"]["sendUpdates"] == "all"
+
+
+def test_cancel_booking_returns_true_when_already_gone():
+    """A 404 (already deleted / never existed) is treated as success — the
+    desired end state (not on the calendar) is already true either way."""
+    gone_resp = type("R", (), {"status_code": 404})()
+    with patch.object(gcal, "is_configured", return_value=True), \
+         patch.object(gcal.gmail_oauth, "_get_mailbox", return_value=_MAILBOX), \
+         patch.object(gcal.gmail_oauth, "_access_token", return_value="tok"), \
+         patch.object(gcal.httpx, "delete", return_value=gone_resp):
+        assert gcal.cancel_booking("evt-1") is True
+
+
+def test_cancel_booking_returns_false_on_real_failure():
+    fail_resp = type("R", (), {"status_code": 500})()
+    with patch.object(gcal, "is_configured", return_value=True), \
+         patch.object(gcal.gmail_oauth, "_get_mailbox", return_value=_MAILBOX), \
+         patch.object(gcal.gmail_oauth, "_access_token", return_value="tok"), \
+         patch.object(gcal.httpx, "delete", return_value=fail_resp):
+        assert gcal.cancel_booking("evt-1") is False
+
+
+def test_cancel_booking_returns_false_on_network_error():
+    with patch.object(gcal, "is_configured", return_value=True), \
+         patch.object(gcal.gmail_oauth, "_get_mailbox", return_value=_MAILBOX), \
+         patch.object(gcal.gmail_oauth, "_access_token", return_value="tok"), \
+         patch.object(gcal.httpx, "delete", side_effect=RuntimeError("network down")):
+        assert gcal.cancel_booking("evt-1") is False

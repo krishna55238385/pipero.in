@@ -255,3 +255,36 @@ def get_booking(uid: str) -> dict | None:
         return resp.json()
     except Exception:
         return None
+
+
+def cancel_booking(uid: str) -> bool:
+    """Cancel/delete a previously-booked event by its Calendar event id —
+    used when a meeting is rescheduled after a no-show (see
+    agent_22_meeting_booking._handle_no_show), so the old event doesn't sit
+    on the org's real calendar forever after the meeting row itself has
+    moved back to 'proposed' with a new set of slots.
+
+    Best-effort, like get_booking(): returns True/False rather than raising,
+    since a failed cancel here shouldn't block the reschedule flow that
+    calls it — worst case is a stale/duplicate calendar event, an
+    annoyance, not a broken booking (the NEW booking, if the prospect picks
+    a new slot, is created separately via create_booking() and is
+    unaffected by this call's outcome). Deleting an already-deleted or
+    never-existed event returns True (204/404 both treated as "not on the
+    calendar anymore," which is the desired end state either way) — sending
+    cancellation notices to the attendee via sendUpdates='all', same as
+    create_booking(), so they're told the original invite is off.
+    """
+    if not is_configured() or not uid:
+        return False
+    try:
+        headers = _auth_headers()
+        resp = httpx.delete(
+            f"{_EVENTS_URL}/{uid}",
+            headers=headers,
+            params={"sendUpdates": "all"},
+            timeout=20,
+        )
+    except Exception:
+        return False
+    return resp.status_code in (200, 204, 404)

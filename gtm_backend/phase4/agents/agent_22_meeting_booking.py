@@ -388,12 +388,20 @@ def _handle_no_show(meeting: dict) -> dict:
     lead_id = meeting.get("lead_id")
     reply_id = meeting.get("reply_id")
     reschedule_count = meeting.get("reschedule_count") or 0
+    # The Calendar event created for the missed meeting — needs cancelling
+    # whichever way this no-show resolves (rescheduled or moved to nurture),
+    # otherwise it sits on the org's real calendar forever even after the
+    # meetings row itself has moved on. Read once, up front, since
+    # update_meeting() below clears meetings.calcom_booking_uid as part of
+    # the reschedule path.
+    stale_booking_uid = meeting.get("calcom_booking_uid")
 
     lead = supabase.get_lead_by_id(lead_id) if lead_id else None
     company = (lead or {}).get("company_name") or "there"
     log_label = f"meeting {meeting_id} ({company})"
 
     if reschedule_count >= _MAX_RESCHEDULE_ATTEMPTS:
+        _cancel_stale_booking(stale_booking_uid, log_label)
         supabase.update_meeting(meeting_id, status="moved_to_nurture")
         print(f"  [Agent 22] {log_label} → no-show, {reschedule_count} reschedule attempt(s) already made, moving to nurture")
         return {"status": "moved_to_nurture", "meeting_id": meeting_id}
@@ -405,6 +413,7 @@ def _handle_no_show(meeting: dict) -> dict:
     if not attendee_email:
         # Nothing to email a reschedule offer to — mark it moved_to_nurture
         # rather than looping on an unreschedulable meeting forever.
+        _cancel_stale_booking(stale_booking_uid, log_label)
         supabase.update_meeting(meeting_id, status="moved_to_nurture")
         print(f"  [Agent 22] {log_label} → no-show, no attendee email on file, moving to nurture")
         return {"status": "moved_to_nurture", "meeting_id": meeting_id}
@@ -438,6 +447,12 @@ def _handle_no_show(meeting: dict) -> dict:
         print(f"  [Agent 22] {log_label} → reschedule email failed: {exc}")
         return {"status": "failed", "meeting_id": meeting_id, "error": str(exc)}
 
+    # Old event is being replaced by a fresh proposal below — cancel it now
+    # that we know the reschedule offer actually went out, so a failed email
+    # send (handled above) doesn't cancel an event we're not actually
+    # replacing.
+    _cancel_stale_booking(stale_booking_uid, log_label)
+
     # Re-open the meeting for confirmation-sync to pick up again, same as a
     # brand new proposal: status back to 'proposed', new slot set, fresh
     # proposed_at (so get_replies_for_lead_since only looks at replies after
@@ -454,6 +469,18 @@ def _handle_no_show(meeting: dict) -> dict:
     )
     print(f"  [Agent 22] {log_label} → no-show, reschedule offer #{reschedule_count + 1} sent, {len(slots)} slot(s)")
     return {"status": "rescheduled", "meeting_id": meeting_id}
+
+
+def _cancel_stale_booking(uid: str | None, log_label: str) -> None:
+    """Best-effort cancel of a no-show meeting's old Calendar event (see
+    google_calendar.cancel_booking's docstring for why this never raises).
+    A no-op when there's no uid to cancel (e.g. a meeting that was never
+    actually confirmed with a real event in the first place)."""
+    if not uid:
+        return
+    ok = calendar.cancel_booking(uid)
+    if not ok:
+        print(f"  [Agent 22] {log_label} → failed to cancel stale calendar event {uid} (non-fatal)")
 
 
 def _reschedule_email(slots: list[str], tz_name: str) -> str:
