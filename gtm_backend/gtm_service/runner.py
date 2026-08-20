@@ -102,6 +102,30 @@ def build_commands(phase: str, params: dict) -> list[list[str]]:
     raise ValueError(f"unknown phase: {phase}")
 
 
+def build_reply_pipeline_commands() -> list[list[str]]:
+    """Same 3 steps as the EC2 crontab's reply-pipeline entry (poll inbox →
+    detect objections → draft replies), order matters: objections must be
+    detected before drafting so a drafted reply already accounts for any
+    objection found in the same tick (see agent_18's own documented rule)."""
+    return [
+        ["-m", "gtm_backend.phase3", "poll-inbox", "--days-back", "1"],
+        ["-m", "gtm_backend.phase3", "detect-objections"],
+        ["-m", "gtm_backend.phase3", "draft-replies"],
+    ]
+
+
+def build_meeting_pipeline_commands() -> list[list[str]]:
+    """Same 4 steps as the EC2 crontab's meeting-pipeline entry, order
+    matters: propose→sync→brief→no-show, each depends on the previous
+    step's output (see agent_22/23's own module docstrings)."""
+    return [
+        ["-m", "gtm_backend.phase4", "propose-meetings"],
+        ["-m", "gtm_backend.phase4", "sync-meeting-confirmations"],
+        ["-m", "gtm_backend.phase4", "generate-meeting-briefs"],
+        ["-m", "gtm_backend.phase4", "detect-no-shows"],
+    ]
+
+
 def build_schedule_commands(
     icp_id: int | None,
     leads_per_day: int,

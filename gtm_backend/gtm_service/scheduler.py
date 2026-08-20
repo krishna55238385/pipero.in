@@ -42,6 +42,14 @@ _warmup_last_run_date: str = ""
 # Same once-per-UTC-day guard for the GA4 website-visitor ingest.
 _ga4_last_run_date: str = ""
 
+# Reply/meeting pipelines (Task #50) run on their own ~10-minute cadence, not
+# every 60s tick — matches the old EC2 crontab's `*/10 * * * *` frequency
+# this replaces. Tracked as a monotonic-ish wall-clock timestamp rather than
+# a UTC-date guard (unlike warmup/GA4 above) since this needs to fire many
+# times a day, not once.
+_REPLY_MEETING_INTERVAL_SECONDS = 10 * 60
+_reply_meeting_last_run_at: float = 0.0
+
 
 async def run_forever() -> None:
     """The background loop: ping the CRM worker + tick schedules every 60s."""
@@ -63,6 +71,10 @@ async def run_forever() -> None:
             await asyncio.to_thread(sync_ga4_once_daily)
         except Exception as exc:  # noqa: BLE001 - never crash the loop
             print(f"[scheduler] GA4 sync crashed: {exc}")
+        try:
+            await asyncio.to_thread(tick_reply_and_meeting_pipelines)
+        except Exception as exc:  # noqa: BLE001 - never crash the loop
+            print(f"[scheduler] reply/meeting pipeline tick crashed: {exc}")
         await asyncio.sleep(TICK_SECONDS)
 
 
@@ -249,3 +261,69 @@ def _run_schedule(row: dict) -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[scheduler] could not record result for schedule {schedule_id}: {exc}")
     print(f"[scheduler] schedule {schedule_id} finished: {status}")
+
+
+# --------------------------------------------------------------------------- #
+# 5) Reply/meeting pipelines — per-org, every ~10 minutes (Task #50)
+# --------------------------------------------------------------------------- #
+def tick_reply_and_meeting_pipelines() -> None:
+    """Run the reply-pipeline (poll-inbox → detect-objections →
+    draft-replies) and meeting-pipeline (propose-meetings →
+    sync-meeting-confirmations → generate-meeting-briefs → detect-no-shows)
+    for every org that has a connected Gmail mailbox.
+
+    Replaces the old EC2 crontab entries, which hardcoded GTM_ORG_ID to a
+    single org (Jobraux) — fine for one client, but meant a second org's
+    inbox/meetings would never be touched by anything automatic. This reuses
+    the exact same org-context mechanism the daily gtm_schedules jobs above
+    already use (runner.run_commands sets GTM_ORG_ID + per-org BYO API keys
+    in the subprocess env), just triggered by "has a mailbox" instead of "has
+    a gtm_schedules row" — a schedule config controls *lead generation*
+    cadence (opt-in, since it costs SerpAPI/LLM spend to find NEW leads), but
+    reply-handling and meeting-booking are working EXISTING pipeline output
+    and cost far less per tick, so every connected org gets it automatically,
+    no separate opt-in table needed.
+    """
+    global _reply_meeting_last_run_at
+    now_ts = datetime.now(ZoneInfo("UTC")).timestamp()
+    if now_ts - _reply_meeting_last_run_at < _REPLY_MEETING_INTERVAL_SECONDS:
+        return
+    _reply_meeting_last_run_at = now_ts
+
+    try:
+        org_ids = db.get_orgs_with_connected_mailbox()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[scheduler] could not read connected mailboxes: {exc}")
+        return
+    if not org_ids:
+        return
+    print(f"[scheduler] reply/meeting pipelines due for {len(org_ids)} org(s)")
+    for org_id in org_ids:
+        threading.Thread(
+            target=_run_reply_and_meeting_pipelines_for_org,
+            args=(org_id,),
+            daemon=True,
+            name=f"gtm-reply-meeting-{org_id}",
+        ).start()
+
+
+def _run_reply_and_meeting_pipelines_for_org(org_id: str) -> None:
+    for phase_label, commands in (
+        ("reply-pipeline", runner.build_reply_pipeline_commands()),
+        ("meeting-pipeline", runner.build_meeting_pipeline_commands()),
+    ):
+        run_id = db.create_phase_run(
+            phase=phase_label,
+            command=runner.commands_label(commands),
+            organization_id=org_id,
+            icp_id=None,
+            params={},
+            triggered_by="scheduler",
+        )
+        try:
+            status, _logs = runner.run_commands(run_id, commands, org_id)
+        except Exception as exc:  # noqa: BLE001 - one org's failure must not affect others
+            print(f"[scheduler] {phase_label} for org {org_id} crashed: {exc}")
+            continue
+        if status != "succeeded":
+            print(f"[scheduler] {phase_label} for org {org_id} finished: {status}")

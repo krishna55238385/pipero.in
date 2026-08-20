@@ -124,6 +124,23 @@ def has_existing_leads(icp_id: int) -> bool:
 # --------------------------------------------------------------------------- #
 # gtm_schedules
 # --------------------------------------------------------------------------- #
+def get_orgs_with_connected_mailbox() -> list[str]:
+    """Every distinct organization_id with at least one connected Gmail
+    mailbox — used by the scheduler's reply/meeting pipeline tick (Task #50)
+    to decide which orgs actually have something to poll/draft/propose for,
+    instead of the old single hardcoded-org crontab entry. An org with no
+    mailbox has nothing this pipeline could do (poll-inbox needs a mailbox
+    to read, draft-replies/propose-meetings need one to send from), so it's
+    filtered out here rather than iterated and silently no-op'd every tick."""
+    with _get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT organization_id FROM engage_mailboxes "
+                "WHERE provider = 'gmail' AND organization_id IS NOT NULL"
+            )
+            return [row["organization_id"] for row in cur.fetchall()]
+
+
 def get_enabled_schedules() -> list[dict]:
     with _get_db_connection() as conn:
         with conn.cursor() as cur:
