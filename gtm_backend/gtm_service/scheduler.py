@@ -241,7 +241,7 @@ def _run_schedule(row: dict) -> None:
                 organization_id=org,
                 icp_id=icp_id,
                 params=params,
-                triggered_by="scheduler",
+                triggered_by=None,
             )
             phase_status, logs = runner.run_commands(run_id, commands[phase], org)
             combined += f"\n=== {phase} ({phase_status}) — run {run_id} ===\n{logs}"
@@ -318,7 +318,7 @@ def _run_reply_and_meeting_pipelines_for_org(org_id: str) -> None:
             organization_id=org_id,
             icp_id=None,
             params={},
-            triggered_by="scheduler",
+            triggered_by=None,
         )
         try:
             status, _logs = runner.run_commands(run_id, commands, org_id)
