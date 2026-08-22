@@ -288,6 +288,21 @@ Hard rules:
 - never use buzzwords; write in plain business language
 - outreach is EMAIL-ONLY: which_channel.primary_channel is ALWAYS "email"
   (this organization does not use LinkedIn, phone, events, or any other channel)
+- NEVER invent a person's name. entry_point_name and every name inside
+  secondary_contacts must come ONLY from stakeholder_map's own
+  entry_point_full_name field or its stakeholders list — never a name you
+  infer, guess, or consider plausible for a role at this kind of company.
+  If stakeholder_map has no entry_point_full_name and an empty stakeholders
+  list, entry_point_name must be an empty string "" (not a placeholder like
+  "Unknown" or "TBD" written as if it were a name) — describe the ROLE
+  you'd want to reach in entry_point_role instead (e.g. "Head of
+  Compliance" is fine as a target title), just never attach a specific
+  person's name to it unless that exact name appears in stakeholder_map.
+  This applies to next_actions too: never write a next action naming a
+  specific person ("confirm the email address of Ankita Sharma") unless
+  that name came from stakeholder_map — a made-up name presented as a
+  concrete next step is worse than no next action at all, since someone
+  could act on it believing it's a real, researched contact.
 
 Return ONLY this JSON shape:
 {

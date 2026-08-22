@@ -818,6 +818,201 @@ def test_agent_10_writes_insight_with_normalised_channel(mocker, fake_lead, fake
     assert summary["pending_review"] == 1
 
 
+def test_agent_10_blanks_entry_point_name_not_in_stakeholder_data(mocker, fake_lead, fake_brief_row):
+    """Found live 2026-08-22: "Ankita Sharma, Chief Compliance Officer"
+    appeared as a next-action target for a lead whose stakeholder phase
+    (Agent 07) had never even run — no such name existed anywhere in the
+    input data. The LLM's claimed entry_point_name/secondary_contacts/
+    next_actions must be re-validated against the ACTUAL verified
+    stakeholder names, not trusted outright."""
+    llm_payload = {
+        "executive_summary": "...",
+        "who_to_target": {
+            "segment": "...", "priority_rank": 1,
+            "entry_point_name": "Ankita Sharma",  # not in stakeholder data below
+            "entry_point_role": "Chief Compliance Officer",
+            "secondary_contacts": ["Rahul Mehta", "Priya Iyer"],  # only Rahul is real
+        },
+        "what_to_say": {
+            "core_message": "...", "unique_value_proposition": "...",
+            "pain_points_to_address": [], "competitive_angle": "...",
+        },
+        "which_channel": {"primary_channel": "email", "sequence": [], "cadence": ""},
+        "why_market_rationale": "...", "why_account_rationale": "...",
+        "urgency_signal": "",
+        "flags_and_contradictions": [],
+        "next_actions": [
+            "Research and confirm the email address of Ankita Sharma (Chief Compliance Officer).",
+            "Send a personalised note to Rahul Mehta.",
+            "Prepare a short demo deck mapping compliance dashboards.",
+        ],
+    }
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_leads_for_account_intel",
+        return_value=[fake_lead],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_account_brief",
+        return_value=fake_brief_row,
+    )
+    # Agent 07 never ran for this lead — no stakeholders, no entry point.
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_stakeholders_for_lead",
+        return_value=[{"full_name": "Rahul Mehta", "job_title": "Founder", "role_type": "champion",
+                        "seniority": "Exec", "confidence": "high"}],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_stakeholder_map_for_lead",
+        return_value=None,
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_competitors_for_icp",
+        return_value=[],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_market_segments",
+        return_value=[],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.llm.chat_json",
+        return_value=llm_payload,
+    )
+    upsert_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.upsert_gtm_insight",
+        return_value=1,
+    )
+
+    generate_insights(icp_id=1, limit=5)
+
+    insight = upsert_mock.call_args[0][0]
+    # Unverified name -> blanked, not trusted.
+    assert insight.who_to_target.entry_point_name == ""
+    # Verified name kept, unverified name dropped from the list.
+    assert insight.who_to_target.secondary_contacts == ["Rahul Mehta"]
+    # The next action naming the fabricated person is dropped; the one
+    # naming the real, verified person and the generic one are both kept.
+    assert "Research and confirm the email address of Ankita Sharma (Chief Compliance Officer)." not in insight.next_actions
+    assert "Send a personalised note to Rahul Mehta." in insight.next_actions
+    assert "Prepare a short demo deck mapping compliance dashboards." in insight.next_actions
+
+
+def test_agent_10_keeps_entry_point_name_when_verified(mocker, fake_lead, fake_brief_row):
+    """A name that DOES appear in the real stakeholder data must pass
+    through untouched — the validation should never strip a legitimate,
+    verified contact."""
+    llm_payload = {
+        "executive_summary": "...",
+        "who_to_target": {
+            "segment": "...", "priority_rank": 1,
+            "entry_point_name": "Rahul Mehta", "entry_point_role": "Founder",
+            "secondary_contacts": [],
+        },
+        "what_to_say": {
+            "core_message": "...", "unique_value_proposition": "...",
+            "pain_points_to_address": [], "competitive_angle": "...",
+        },
+        "which_channel": {"primary_channel": "email", "sequence": [], "cadence": ""},
+        "why_market_rationale": "...", "why_account_rationale": "...",
+        "urgency_signal": "", "flags_and_contradictions": [], "next_actions": [],
+    }
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_leads_for_account_intel",
+        return_value=[fake_lead],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_account_brief",
+        return_value=fake_brief_row,
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_stakeholders_for_lead",
+        return_value=[],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_stakeholder_map_for_lead",
+        return_value={"entry_point_full_name": "Rahul Mehta", "entry_point_role_type": "champion",
+                       "multi_threading_status": "single"},
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_competitors_for_icp",
+        return_value=[],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_market_segments",
+        return_value=[],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.llm.chat_json",
+        return_value=llm_payload,
+    )
+    upsert_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.upsert_gtm_insight",
+        return_value=1,
+    )
+
+    generate_insights(icp_id=1, limit=5)
+
+    insight = upsert_mock.call_args[0][0]
+    assert insight.who_to_target.entry_point_name == "Rahul Mehta"
+
+
+def test_agent_10_title_only_next_action_not_mistaken_for_a_name(mocker, fake_lead, fake_brief_row):
+    """A generic action mentioning only a job title (no person's name) must
+    never be stripped — the name-detection heuristic excludes common title
+    words specifically to avoid this false positive."""
+    llm_payload = {
+        "executive_summary": "...",
+        "who_to_target": {
+            "segment": "...", "priority_rank": 1, "entry_point_name": None,
+            "entry_point_role": "Chief Compliance Officer", "secondary_contacts": [],
+        },
+        "what_to_say": {
+            "core_message": "...", "unique_value_proposition": "...",
+            "pain_points_to_address": [], "competitive_angle": "...",
+        },
+        "which_channel": {"primary_channel": "email", "sequence": [], "cadence": ""},
+        "why_market_rationale": "...", "why_account_rationale": "...",
+        "urgency_signal": "", "flags_and_contradictions": [],
+        "next_actions": ["Identify the Chief Compliance Officer and confirm their contact details."],
+    }
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_leads_for_account_intel",
+        return_value=[fake_lead],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_account_brief",
+        return_value=fake_brief_row,
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_stakeholders_for_lead",
+        return_value=[],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_stakeholder_map_for_lead",
+        return_value=None,
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_competitors_for_icp",
+        return_value=[],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.get_market_segments",
+        return_value=[],
+    )
+    mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.llm.chat_json",
+        return_value=llm_payload,
+    )
+    upsert_mock = mocker.patch(
+        "gtm_backend.phase2.agents.agent_10_gtm_insights.supabase.upsert_gtm_insight",
+        return_value=1,
+    )
+
+    generate_insights(icp_id=1, limit=5)
+
+    insight = upsert_mock.call_args[0][0]
+    assert insight.next_actions == ["Identify the Chief Compliance Officer and confirm their contact details."]
+
+
 # Agent 07 — coverage / budget / reporting -------------------------------
 
 def _patch_agent_07_reads(mocker, fake_lead, fake_icp, fake_brief_row, llm_payload):

@@ -13,6 +13,7 @@ Business rules enforced (from architecture PDF):
 - Output is the strategic north star for outreach agents (phase 3).
 """
 import json
+import re
 from datetime import date
 
 from gtm_backend.phase2.connectors import openai as llm
@@ -130,6 +131,22 @@ def _build_one(
     message = raw.get("what_to_say") if isinstance(raw.get("what_to_say"), dict) else {}
     channel = raw.get("which_channel") if isinstance(raw.get("which_channel"), dict) else {}
 
+    # Defense in depth against the LLM inventing a plausible-sounding name
+    # despite the prompt's explicit rule against it (found live 2026-08-22:
+    # "Ankita Sharma, Chief Compliance Officer" appeared as a next-action
+    # target for a lead whose stakeholder phase had never even run — no such
+    # name existed anywhere in the input data). A prompt instruction alone
+    # isn't reliable enough for something this consequential (a fabricated
+    # name presented as a real researched contact), so it's re-validated
+    # here against the actual verified stakeholder names this call was given
+    # — the one source of truth, not the LLM's own output.
+    known_names = _known_stakeholder_names(stakeholder_map, stakeholders)
+    entry_point_name = _verified_name_or_blank(targeting.get("entry_point_name"), known_names)
+    secondary_contacts = _drop_unverified_names(
+        _safe_str_list(targeting.get("secondary_contacts")), known_names
+    )
+    next_actions = _drop_unverified_names(_safe_str_list(raw.get("next_actions")), known_names)
+
     insight = GTMInsight(
         lead_id=lead["id"],
         icp_id=lead.get("icp_id"),
@@ -139,9 +156,9 @@ def _build_one(
         who_to_target=GTMTargeting(
             segment=targeting.get("segment"),
             priority_rank=_clamp_rank(targeting.get("priority_rank")),
-            entry_point_name=targeting.get("entry_point_name"),
+            entry_point_name=entry_point_name,
             entry_point_role=targeting.get("entry_point_role"),
-            secondary_contacts=_safe_str_list(targeting.get("secondary_contacts")),
+            secondary_contacts=secondary_contacts,
         ),
         what_to_say=GTMMessage(
             core_message=str(message.get("core_message") or ""),
@@ -158,7 +175,7 @@ def _build_one(
         why_account_rationale=str(raw.get("why_account_rationale") or ""),
         urgency_signal=str(raw.get("urgency_signal") or ""),
         flags_and_contradictions=_safe_str_list(raw.get("flags_and_contradictions")),
-        next_actions=_safe_str_list(raw.get("next_actions")),
+        next_actions=next_actions,
     )
 
     print(
@@ -226,6 +243,80 @@ def _trim_market_row(row: dict | None) -> dict:
         "priority_rank": row.get("priority_rank"),
         "priority_rationale": row.get("priority_rationale"),
     }
+
+
+def _known_stakeholder_names(stakeholder_map: dict | None, stakeholders: list[dict]) -> set[str]:
+    """Every real, verified name available to this call — the entry-point
+    name on the stakeholder map (if set) plus every stakeholder's full_name.
+    Lowercased/stripped for case-insensitive comparison. Empty set means
+    genuinely no verified names exist (Agent 07 hasn't run for this lead, or
+    ran and found nobody) — the caller's job is to make sure nothing gets
+    attributed to a person in that case."""
+    names: set[str] = set()
+    if stakeholder_map:
+        name = stakeholder_map.get("entry_point_full_name")
+        if name:
+            names.add(str(name).strip().lower())
+    for s in stakeholders:
+        name = s.get("full_name") if isinstance(s, dict) else None
+        if name:
+            names.add(str(name).strip().lower())
+    return names
+
+
+def _verified_name_or_blank(name: object, known_names: set[str]) -> str | None:
+    """The LLM's claimed entry_point_name, kept only if it matches a real
+    verified stakeholder name — otherwise blanked rather than trusted, since
+    an unverifiable name is indistinguishable from a fabricated one and
+    presenting it as a real contact is the actual harm (see this function's
+    caller docstring for the live incident that prompted this check)."""
+    if not name:
+        return None
+    if str(name).strip().lower() in known_names:
+        return str(name)
+    return ""
+
+
+def _drop_unverified_names(items: list[str], known_names: set[str]) -> list[str]:
+    """Drop any string that names a specific person not in known_names.
+
+    Deliberately narrow: only filters an item when it contains one of the
+    KNOWN-to-be-wrong signals (a capitalized two-or-three-word sequence that
+    looks like a person's name) AND that name isn't verified — a generic
+    action like "Research and confirm the decision maker's email" is left
+    untouched, since it doesn't claim a specific unverified person exists.
+    Not a perfect NLP name-detector (that's real scope creep for what's
+    meant to be a safety net, not the primary defense — the prompt rule is
+    the primary defense), but catches the exact failure shape seen live:
+    a specific "First Last" name attached to a next action/contact list
+    when no such name was ever actually verified.
+    """
+    if not items:
+        return items
+    out: list[str] = []
+    for item in items:
+        candidate_names = [
+            n for n in re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+\b", item)
+            # Exclude common job-title words so a title-only phrase like
+            # "Chief Compliance Officer" or "Head of Product" isn't
+            # mistaken for a person's name — this heuristic is only meant
+            # to catch a "First Last" shaped name, not every two-capitalized-
+            # words phrase (titles are exactly the kind of legitimate,
+            # non-person phrase that would otherwise false-positive here).
+            if not _TITLE_WORDS & set(n.lower().split())
+        ]
+        if any(name.strip().lower() not in known_names for name in candidate_names):
+            continue
+        out.append(item)
+    return out
+
+
+_TITLE_WORDS = {
+    "chief", "head", "director", "manager", "officer", "senior", "executive",
+    "vice", "president", "founder", "co-founder", "lead", "global", "regional",
+    "compliance", "product", "engineering", "operations", "sales", "marketing",
+    "finance", "hr", "technology", "growth", "revenue", "partnerships",
+}
 
 
 def _safe_str_list(value: object) -> list[str]:
