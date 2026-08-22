@@ -37,6 +37,72 @@ def test_agent_01_rejects_empty_prompt():
         define_icp("")
 
 
+def test_agent_01_backfills_null_product_line_from_org_product_description():
+    """Found live 2026-08-22: the LLM sometimes returns an explicit
+    "product_line": null instead of the string "Core" the prompt asks for
+    when no product is mentioned — an explicit None bypasses the Pydantic
+    field default entirely and used to crash model_validate. Must fall back
+    to the org's own configured product description first."""
+    icp_dict = {
+        "name": "Test ICP", "product_line": None,
+        "industry": ["SaaS"], "geography": ["India"], "buyer_titles": ["CEO"],
+    }
+    with patch("gtm_backend.phase1.agents.agent_01_icp.llm.chat_json", return_value=icp_dict), \
+         patch("gtm_backend.phase1.agents.agent_01_icp.crm_supabase.get_current_org_product_description", return_value="AI GTM automation platform"), \
+         patch("gtm_backend.phase1.agents.agent_01_icp.supabase.insert_icp", return_value=42) as inserter:
+        icp_id = define_icp("Series A-C SaaS in India")
+
+    assert icp_id == 42
+    inserted_icp = inserter.call_args[0][0]
+    assert inserted_icp.product_line == "AI GTM automation platform"
+
+
+def test_agent_01_backfills_missing_product_line_key_too():
+    """Same fallback must apply when the key is omitted entirely, not just
+    when it's explicitly null."""
+    icp_dict = {
+        "name": "Test ICP",
+        "industry": ["SaaS"], "geography": ["India"], "buyer_titles": ["CEO"],
+    }
+    with patch("gtm_backend.phase1.agents.agent_01_icp.llm.chat_json", return_value=icp_dict), \
+         patch("gtm_backend.phase1.agents.agent_01_icp.crm_supabase.get_current_org_product_description", return_value="AI GTM automation platform"), \
+         patch("gtm_backend.phase1.agents.agent_01_icp.supabase.insert_icp", return_value=42) as inserter:
+        define_icp("Series A-C SaaS in India")
+
+    assert inserter.call_args[0][0].product_line == "AI GTM automation platform"
+
+
+def test_agent_01_falls_back_to_core_when_no_org_product_description_set():
+    """When the org hasn't set a product description in Settings either,
+    fall back to the schema's own generic "Core" default rather than
+    crashing or inserting an empty string."""
+    icp_dict = {
+        "name": "Test ICP", "product_line": None,
+        "industry": ["SaaS"], "geography": ["India"], "buyer_titles": ["CEO"],
+    }
+    with patch("gtm_backend.phase1.agents.agent_01_icp.llm.chat_json", return_value=icp_dict), \
+         patch("gtm_backend.phase1.agents.agent_01_icp.crm_supabase.get_current_org_product_description", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_01_icp.supabase.insert_icp", return_value=42) as inserter:
+        define_icp("Series A-C SaaS in India")
+
+    assert inserter.call_args[0][0].product_line == "Core"
+
+
+def test_agent_01_does_not_call_product_description_lookup_when_llm_provided_one():
+    """The org-settings lookup is a fallback, not the primary source — must
+    not fire (extra DB round trip) when the LLM already gave a real value."""
+    icp_dict = {
+        "name": "Test ICP", "product_line": "Billing software",
+        "industry": ["SaaS"], "geography": ["India"], "buyer_titles": ["CEO"],
+    }
+    with patch("gtm_backend.phase1.agents.agent_01_icp.llm.chat_json", return_value=icp_dict), \
+         patch("gtm_backend.phase1.agents.agent_01_icp.crm_supabase.get_current_org_product_description") as lookup_mock, \
+         patch("gtm_backend.phase1.agents.agent_01_icp.supabase.insert_icp", return_value=42):
+        define_icp("Series A-C SaaS in India")
+
+    lookup_mock.assert_not_called()
+
+
 # Agent 02 ---------------------------------------------------------------
 
 def test_agent_02_dedups_and_inserts(sample_icp):
