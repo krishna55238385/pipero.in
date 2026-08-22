@@ -213,6 +213,53 @@ _GEOGRAPHY_LOCATION_MAP = {
     "singapore": "Singapore",
 }
 
+# City-level geographies (an ICP saying "Bangalore" rather than "India") used
+# to fall straight through every lookup below as unrecognized — _location_for/
+# _country_for returned None (no SerpAPI location/gl bias at all, so the
+# search wasn't even soft-steered toward the right country), AND
+# _expected_country_codes returned an empty set, which the post-search filter
+# treats as "can't judge, don't reject" (a deliberately conservative default
+# for genuinely unmapped geographies — see that function's docstring). The
+# combination meant a city-scoped ICP got NO geography enforcement anywhere
+# in the pipeline. Found live 2026-08-22: an ICP for "Bangalore" surfaced
+# leads from Auckland, Dallas, Tel Aviv, Toronto, Singapore, and Palo Alto —
+# Agent 03's scoring correctly flagged all of them cold/disqualified, but
+# only after Agent 02 had already spent SerpAPI + LLM calls fetching and
+# normalizing them. Mapping the common major cities here closes the gap for
+# the same class of ICP (a specific city rather than a country/region).
+_CITY_TO_COUNTRY_NAME = {
+    "bangalore": "India", "bengaluru": "India", "mumbai": "India",
+    "delhi": "India", "new delhi": "India", "gurgaon": "India",
+    "gurugram": "India", "noida": "India", "chennai": "India",
+    "hyderabad": "India", "pune": "India", "kolkata": "India",
+    "ahmedabad": "India", "jaipur": "India",
+    "san francisco": "United States", "new york": "United States",
+    "los angeles": "United States", "austin": "United States",
+    "seattle": "United States", "boston": "United States",
+    "chicago": "United States", "dallas": "United States",
+    "toronto": "Canada", "vancouver": "Canada",
+    "london": "United Kingdom", "manchester": "United Kingdom",
+    "sydney": "Australia", "melbourne": "Australia",
+    "berlin": "Germany", "munich": "Germany",
+    "paris": "France",
+    "singapore": "Singapore",
+}
+_CITY_TO_COUNTRY_CODE = {
+    "bangalore": "in", "bengaluru": "in", "mumbai": "in", "delhi": "in",
+    "new delhi": "in", "gurgaon": "in", "gurugram": "in", "noida": "in",
+    "chennai": "in", "hyderabad": "in", "pune": "in", "kolkata": "in",
+    "ahmedabad": "in", "jaipur": "in",
+    "san francisco": "us", "new york": "us", "los angeles": "us",
+    "austin": "us", "seattle": "us", "boston": "us", "chicago": "us",
+    "dallas": "us",
+    "toronto": "ca", "vancouver": "ca",
+    "london": "gb", "manchester": "gb",
+    "sydney": "au", "melbourne": "au",
+    "berlin": "de", "munich": "de",
+    "paris": "fr",
+    "singapore": "sg",
+}
+
 # ISO 3166-1 alpha-2 country codes for SerpAPI's `gl` param — a HARD country
 # restriction, unlike `location` above which is only a soft ranking hint.
 # Without this, broad queries like "software companies in India" kept
@@ -276,6 +323,8 @@ def _expected_country_codes(geographies: list[str]) -> set[str]:
             codes |= _GEOGRAPHY_ACCEPTABLE_CODES[key]
         elif key in _GEOGRAPHY_COUNTRY_CODE_MAP:
             codes.add(_GEOGRAPHY_COUNTRY_CODE_MAP[key])
+        elif key in _CITY_TO_COUNTRY_CODE:
+            codes.add(_CITY_TO_COUNTRY_CODE[key])
     return codes
 
 
@@ -349,14 +398,16 @@ def _build_queries(icp: dict, max_leads: int) -> list[tuple[str, str | None, str
 
     def _location_for(geos: list[str]) -> str | None:
         for geo in geos:
-            mapped = _GEOGRAPHY_LOCATION_MAP.get(geo.strip().lower())
+            key = geo.strip().lower()
+            mapped = _GEOGRAPHY_LOCATION_MAP.get(key) or _CITY_TO_COUNTRY_NAME.get(key)
             if mapped:
                 return mapped
         return None
 
     def _country_for(geos: list[str]) -> str | None:
         for geo in geos:
-            mapped = _GEOGRAPHY_COUNTRY_CODE_MAP.get(geo.strip().lower())
+            key = geo.strip().lower()
+            mapped = _GEOGRAPHY_COUNTRY_CODE_MAP.get(key) or _CITY_TO_COUNTRY_CODE.get(key)
             if mapped:
                 return mapped
         return None

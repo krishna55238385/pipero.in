@@ -185,6 +185,49 @@ def test_agent_02_region_geography_accepts_both_countries():
     assert _country_mismatch("Freedonia", codes) is False  # unmapped never rejected
 
 
+def test_agent_02_city_level_geography_still_enforces_country():
+    """Found live 2026-08-22: an ICP scoped to a CITY ("Bangalore") rather
+    than a country/region got zero geography enforcement anywhere in the
+    pipeline — _expected_country_codes(["Bangalore"]) used to return an empty
+    set (city not in the country-only map), which the mismatch filter treats
+    as "can't judge, don't reject." Leads from Auckland, Dallas, Tel Aviv,
+    Toronto, Singapore, and Palo Alto all slipped through as a result. A
+    city-level geography must resolve to the same country enforcement a
+    country-level one would."""
+    from gtm_backend.phase1.agents.agent_02_leads import _expected_country_codes, _country_mismatch
+
+    codes = _expected_country_codes(["Bangalore"])
+    assert codes == {"in"}
+    assert _country_mismatch("India", codes) is False
+    assert _country_mismatch("New Zealand", codes) is True
+    assert _country_mismatch("United States", codes) is True
+    assert _country_mismatch("Israel", codes) is True
+
+
+def test_agent_02_city_level_geography_still_biases_serpapi_location():
+    """The SerpAPI location/gl bias (separate from the post-search mismatch
+    filter) must also resolve a city to its country, not silently return
+    None (no bias at all) the way it used to for any city not already in
+    _GEOGRAPHY_LOCATION_MAP/_GEOGRAPHY_COUNTRY_CODE_MAP."""
+    from gtm_backend.phase1.agents.agent_02_leads import _build_queries
+
+    icp = {"industry": ["SaaS"], "geography": ["Bangalore"], "company_size_min": None, "company_size_max": None}
+    queries = _build_queries(icp, max_leads=20)
+    assert queries, "expected at least one query"
+    _, location, country = queries[0]
+    assert location == "India"
+    assert country == "in"
+
+
+def test_agent_02_unmapped_city_still_falls_back_to_unfiltered():
+    """A genuinely unrecognized geography (not a known country, region, OR
+    city) must still resolve to 'don't filter' rather than guessing wrong —
+    the conservative default for a truly unmapped value is preserved."""
+    from gtm_backend.phase1.agents.agent_02_leads import _expected_country_codes
+
+    assert _expected_country_codes(["Atlantis"]) == set()
+
+
 def test_agent_02_scrubs_internally_contradictory_location(sample_icp):
     """Root-caused bug: Agent 02's batched LLM call sometimes cross-attributes
     fields between different companies named in the same shared article (a
