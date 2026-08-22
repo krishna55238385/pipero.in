@@ -228,6 +228,53 @@ def test_agent_02_unmapped_city_still_falls_back_to_unfiltered():
     assert _expected_country_codes(["Atlantis"]) == set()
 
 
+def test_agent_02_filters_known_job_board_domains():
+    """Found live 2026-08-22: monster.com.vn, startup.jobs, and
+    careerxperts.com job-listing pages leaked through as company_name
+    candidates (their own job-posting headline used as the "company"). These
+    domains were never in the aggregator exclusion list, so they reached the
+    LLM instead of being filtered out before it ever saw them."""
+    from gtm_backend.phase1.agents.agent_02_leads import _dedupe_raw_by_domain
+
+    raw = [
+        {"title": "Manager, Software Engineering", "link": "https://www.monster.com.vn/job/123"},
+        {"title": "IT Support Engineer", "link": "https://startup.jobs/listings/456"},
+        {"title": "Jobs", "link": "https://jobs.careerxperts.com/openings/789"},
+        {"title": "Real Company", "link": "https://acmehr.com/about"},
+    ]
+    out = _dedupe_raw_by_domain(raw)
+    links = [r["link"] for r in out]
+    assert links == ["https://acmehr.com/about"]
+
+
+def test_agent_02_job_board_pattern_catches_unlisted_jobs_tld():
+    """Pattern-based detection (not just the fixed domain list) must catch
+    any future job board on the .jobs gTLD or a jobs. subdomain, the same
+    "a fixed list is always one behind" reasoning as _is_academic_domain."""
+    from gtm_backend.phase1.agents.agent_02_leads import _is_job_board_domain
+
+    assert _is_job_board_domain("https://somebrandnewboard.jobs/listing/1") is True
+    assert _is_job_board_domain("https://jobs.somecompany.com/careers") is True
+    assert _is_job_board_domain("https://acmehr.com/careers") is False
+    assert _is_job_board_domain("https://acmehr.com/jobs") is False  # path, not host
+
+
+def test_agent_02_filters_business_directory_and_partner_ecosystem_domains():
+    """justdial.com (business directory) and hubspot's own partner/app
+    ecosystem directory both describe OTHER companies, same as g2.com —
+    found live 2026-08-22 producing bogus company names."""
+    from gtm_backend.phase1.agents.agent_02_leads import _dedupe_raw_by_domain
+
+    raw = [
+        {"title": "Top Computer Software Solution Providers", "link": "https://www.justdial.com/Bangalore/xyz"},
+        {"title": "Search Top Agencies", "link": "https://ecosystem.hubspot.com/marketplace/agencies"},
+        {"title": "Real Company", "link": "https://acmehr.com/about"},
+    ]
+    out = _dedupe_raw_by_domain(raw)
+    links = [r["link"] for r in out]
+    assert links == ["https://acmehr.com/about"]
+
+
 def test_agent_02_scrubs_internally_contradictory_location(sample_icp):
     """Root-caused bug: Agent 02's batched LLM call sometimes cross-attributes
     fields between different companies named in the same shared article (a

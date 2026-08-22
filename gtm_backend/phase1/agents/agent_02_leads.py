@@ -551,7 +551,41 @@ _AGGREGATOR_DOMAINS = {
     # company_name with the author's email attached during enrichment.
     "researchgate.net", "semanticscholar.org", "arxiv.org", "ssrn.com",
     "jstor.org", "sciencedirect.com", "springer.com", "ieee.org",
+    # Job boards not already covered above (indeed.com/glassdoor.com/
+    # wellfound.com/angel.co/ambitionbox.com only caught the biggest global
+    # names) — found live 2026-08-22: a job-listing page's own headline
+    # ("Manager, Software Engineering (Bangalore) with 10", "IT Support
+    # Engineer (4:00 PM TO 1:00 AM Shift)") got inserted as company_name,
+    # with the enriched contact email traced back to monster.com.vn and
+    # startup.jobs — these domains were never excluded, so they reached the
+    # LLM normalize call and relied entirely on its judgment instead of
+    # being filtered out before it ever saw them.
+    "monster.com", "foundit.com", "foundit.sg", "naukri.com", "shine.com",
+    "timesjobs.com", "dice.com", "ziprecruiter.com", "simplyhired.com",
+    "snagajob.com", "careerxperts.com",
+    # Business directories/listicle-farms — same failure shape as the
+    # job boards above ("Forensic Accounting & CFE Fraud Investigation in
+    # HSR Layout ...", "Top Computer Software Solution Providers in Nad
+    # Kotha ..." both traced to justdial.com).
+    "justdial.com", "sulekha.com", "indiamart.com", "tradeindia.com",
+    # HubSpot's own partner/app-marketplace directory — hubspot.com itself
+    # is a real company, but this specific subdomain lists OTHER
+    # companies/agencies, same "describes, doesn't sell" issue as g2.com
+    # etc. ("Search Top Agencies & Service Providers" traced here).
+    "ecosystem.hubspot.com",
 }
+
+
+# Job-board hosts detected by pattern rather than an exhaustive domain list
+# (same reasoning as _is_academic_domain — a fixed list is always one board
+# behind). Catches the ".jobs" gTLD (e.g. startup.jobs) and any "jobs."
+# subdomain (e.g. jobs.careerxperts.com) regardless of the base domain.
+_JOB_BOARD_DOMAIN_RE = re.compile(r"(^|\.)jobs(\.[a-z]{2,3})?$|^jobs\.", re.IGNORECASE)
+
+
+def _is_job_board_domain(link: str) -> bool:
+    host = dns_lookup.extract_domain_from_url(link) or ""
+    return bool(_JOB_BOARD_DOMAIN_RE.search(host))
 
 
 def _filter_aggregators(raw_results: list[dict]) -> list[dict]:
@@ -564,6 +598,8 @@ def _filter_aggregators(raw_results: list[dict]) -> list[dict]:
         # enumerated. See _is_academic_domain's docstring for why a fixed
         # list alone will always be one university/directory behind.
         and not _is_academic_domain(r.get("link") or "")
+        # Same reasoning applied to job boards — see _is_job_board_domain.
+        and not _is_job_board_domain(r.get("link") or "")
     ]
 
 
@@ -578,6 +614,8 @@ def _dedupe_raw_by_domain(raw_results: list[dict]) -> list[dict]:
     for r in raw_results:
         link = r.get("link") or ""
         if any(agg in link for agg in _AGGREGATOR_DOMAINS):
+            continue
+        if _is_job_board_domain(link):
             continue
         host = dns_lookup.extract_domain_from_url(link)
         if host is None:
