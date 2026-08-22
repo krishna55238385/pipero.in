@@ -183,7 +183,22 @@ export async function getProspectLeadById(id: number) {
       linkedin: (row.contact_linkedin_url as string) || (row.company_linkedin_url as string) || null,
       companyLinkedin: (row.company_linkedin_url as string) || null,
       icpId: (row.icp_id as number) ?? null, icpScore: (row.icp_score as number) ?? null,
-      scoreTier: (row.score_tier as string) || null, scoreReasoning: (row.score_reasoning as string) || null,
+      scoreTier: (row.score_tier as string) || null,
+      // icp_score/score_tier above are the LLM's FINAL judgment (see
+      // gtm_backend's update_lead_score docstring) — llm_reasoning is the
+      // matching explanation for THAT number. score_reasoning is a
+      // different field entirely: the deterministic rule-scorer's own text,
+      // which has its own "Score X/100 (TIER)" sentence baked in and can
+      // legitimately disagree with the final LLM score/tier shown above it
+      // (that's often exactly why the LLM re-scored it). Showing
+      // score_reasoning as if it explained icpScore/scoreTier was
+      // confusing — two different numbers in the same card with no
+      // indication they're not the same score. Both are now exposed so the
+      // UI can label them distinctly instead of conflating them.
+      scoreReasoning: (row.llm_reasoning as string) || null,
+      ruleScore: (row.rule_icp_score as number) ?? null,
+      ruleScoreTier: (row.rule_score_tier as string) || null,
+      ruleScoreReasoning: (row.score_reasoning as string) || null,
       createdAt: (row.created_at as string) || null,
     }
   } catch (err: any) { console.error('getProspectLeadById error:', err.message); return null }

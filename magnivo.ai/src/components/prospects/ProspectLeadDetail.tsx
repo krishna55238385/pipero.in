@@ -189,7 +189,30 @@ export function ProspectLeadDetail({
           <span className="text-sm text-muted-foreground">/100</span>
           {lead.scoreTier && <Badge variant="outline" className="capitalize">{lead.scoreTier}</Badge>}
         </div>
+        {/* This is the LLM's final re-score (same number shown above) —
+            scoreReasoning now maps to llm_reasoning, not the deterministic
+            rule-scorer's text, so this explanation actually matches the
+            badge instead of describing a different score/tier (found live
+            2026-08-22: badge showed "34/100 Cold" while the old
+            score_reasoning text underneath said "Score 44/100 (WARM)..."). */}
         {lead.scoreReasoning && <p className="mt-2 text-sm text-muted-foreground">{lead.scoreReasoning}</p>}
+        {/* The deterministic rule score, shown separately and clearly
+            labeled — it can legitimately differ from the LLM's final
+            judgment above (that disagreement is often exactly why the LLM
+            re-scored it), so it's never presented as if it were the same
+            number. */}
+        {lead.ruleScore !== null && lead.ruleScore !== undefined && (
+          <div className="mt-3 border-t pt-3">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>Rule-based score:</span>
+              <span className="font-medium">{lead.ruleScore}/100</span>
+              {lead.ruleScoreTier && <Badge variant="outline" className="capitalize text-xs">{lead.ruleScoreTier}</Badge>}
+            </div>
+            {lead.ruleScoreReasoning && (
+              <p className="mt-1 text-xs text-muted-foreground">{lead.ruleScoreReasoning}</p>
+            )}
+          </div>
+        )}
       </Section>
 
       {/* Phase 1 — Signals (Agent 04) */}
