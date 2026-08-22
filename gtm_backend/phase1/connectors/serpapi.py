@@ -68,7 +68,18 @@ def _serper_request(params: dict) -> dict:
         body["tbs"] = params["tbs"]
     headers = {"X-API-KEY": _settings.serper_api_key, "Content-Type": "application/json"}
     response = _client.post(url, json=body, headers=headers)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        # Found live 2026-08-22: every Serper.dev call failed with a bare
+        # "400 Bad Request" and no other detail — raise_for_status()'s
+        # default message doesn't include the response body, which is
+        # exactly where Serper puts the actual reason (bad param, plan
+        # limit, invalid key, etc.). Surfacing it here turns "it's broken,
+        # no idea why" into an actionable error the next time this fires,
+        # instead of guessing at a fix with no evidence of the real cause.
+        print(f"  [Serper] {response.status_code} on {url}: {response.text[:300]}")
+        raise
     data = response.json()
 
     if is_news:
