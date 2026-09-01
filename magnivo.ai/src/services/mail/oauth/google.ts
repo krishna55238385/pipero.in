@@ -26,6 +26,13 @@ export function getGoogleScopes(): string[] {
     // this scope was added need to reconnect once — Google does not
     // retroactively grant new scopes to an existing refresh_token.
     'https://www.googleapis.com/auth/calendar.events',
+    // freebusy.query (get_available_slots' availability lookup) rejects
+    // calendar.events-only tokens with 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT —
+    // that scope only covers reading/writing Event resources, not the
+    // Freebusy resource. calendar.readonly is the narrowest scope that
+    // actually grants freebusy.query. Keep calendar.events too since booking
+    // itself (create_booking) still needs to write events.
+    'https://www.googleapis.com/auth/calendar.readonly',
   ]
 }
 
