@@ -30,6 +30,12 @@ export interface ProspectLeadRow {
   email: string | null
   verified: boolean
   bounceStatus: string | null
+  // Task #5 — honest email verification confidence, distinct from the plain
+  // `verified` boolean above: 'domain_verified' (disify MX/domain check
+  // only) vs 'person_confirmed' (contact's name found on the company's own
+  // team page too). null when verified is false.
+  emailVerificationTier: 'domain_verified' | 'person_confirmed' | null
+  needsReverification: boolean
   location: string | null
   industry: string | null
   companySize: string | null

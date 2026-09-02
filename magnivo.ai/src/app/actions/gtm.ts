@@ -150,6 +150,12 @@ export async function getProspectLeads(opts: {
       return {
         id: r.id, company: r.company_name, contactName: r.contact_name, title: r.contact_title,
         email: r.contact_email, verified: !!r.verified, bounceStatus: r.bounce_status,
+        // Task #5: NULL tier on an old (pre-this-feature) row with
+        // verified=true reads as 'domain_verified' — that's exactly what
+        // `verified` already meant before this column existed, so no
+        // backend backfill is needed for old leads to display correctly.
+        emailVerificationTier: r.verified ? (r.email_verification_tier || 'domain_verified') : null,
+        needsReverification: !!r.needs_reverification,
         location: loc || null, industry: r.company_industry, companySize: r.company_size,
         domain: r.company_domain, linkedin: r.contact_linkedin_url || r.company_linkedin_url,
         icpId: r.icp_id, icpScore: r.icp_score, scoreTier: r.score_tier,
@@ -177,7 +183,10 @@ export async function getProspectLeadById(id: number) {
       domain: (row.company_domain as string) || null, website: (row.company_website as string) || null,
       contactName: (row.contact_name as string) || null, title: (row.contact_title as string) || null,
       email: (row.contact_email as string) || null, verified: !!row.verified,
-      bounceStatus: (row.bounce_status as string) || null, phone: (row.company_phone as string) || null,
+      bounceStatus: (row.bounce_status as string) || null,
+      emailVerificationTier: row.verified ? ((row.email_verification_tier as string) || 'domain_verified') : null,
+      needsReverification: !!row.needs_reverification,
+      phone: (row.company_phone as string) || null,
       address: (row.company_address as string) || null, location: location || null,
       industry: (row.company_industry as string) || null, companySize: (row.company_size as string) || null,
       linkedin: (row.contact_linkedin_url as string) || (row.company_linkedin_url as string) || null,

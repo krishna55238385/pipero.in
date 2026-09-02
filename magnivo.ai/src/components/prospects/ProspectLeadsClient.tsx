@@ -64,12 +64,23 @@ function EmailCell({ lead }: { lead: ProspectLeadRow }) {
         {lead.email}
       </span>
       {lead.verified ? (
-        <Badge
-          variant="outline"
-          className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 text-[10px] px-1.5 py-0"
-        >
-          Verified
-        </Badge>
+        lead.emailVerificationTier === 'person_confirmed' ? (
+          <Badge
+            variant="outline"
+            className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 text-[10px] px-1.5 py-0"
+            title="Domain passed an MX check AND this contact's name was found on the company's own team page."
+          >
+            Person confirmed
+          </Badge>
+        ) : (
+          <Badge
+            variant="outline"
+            className="bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30 text-[10px] px-1.5 py-0"
+            title="Domain passed an MX check — does not confirm this specific person still works there."
+          >
+            Domain verified
+          </Badge>
+        )
       ) : (
         <Badge
           variant="outline"
@@ -77,6 +88,15 @@ function EmailCell({ lead }: { lead: ProspectLeadRow }) {
           title="Pattern email (first.last@domain) — not verified"
         >
           Pattern
+        </Badge>
+      )}
+      {lead.needsReverification && (
+        <Badge
+          variant="outline"
+          className="bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/30 text-[10px] px-1.5 py-0"
+          title="A previous send to this address hit a hard bounce — re-verify before sending again."
+        >
+          Needs reverification
         </Badge>
       )}
     </div>

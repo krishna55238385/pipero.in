@@ -162,12 +162,35 @@ export function ProspectLeadDetail({
             <Mail className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm">{lead.email}</span>
             {lead.verified ? (
-              <Badge variant="outline" className="text-[10px] text-green-600 border-green-600/40">
-                <CheckCircle2 className="h-3 w-3 mr-1" /> verified
-              </Badge>
+              lead.emailVerificationTier === 'person_confirmed' ? (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] text-green-600 border-green-600/40"
+                  title="This contact's name was found on the company's own team/about page, in addition to the domain passing an MX check."
+                >
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> person confirmed
+                </Badge>
+              ) : (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] text-sky-600 border-sky-600/40"
+                  title="The email domain passed an MX/domain-record check — this does not confirm the specific person still works there or that the mailbox itself exists."
+                >
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> domain verified
+                </Badge>
+              )
             ) : (
               <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-600/40">
                 <AlertTriangle className="h-3 w-3 mr-1" /> unverified ({lead.bounceStatus || 'pattern'})
+              </Badge>
+            )}
+            {lead.needsReverification && (
+              <Badge
+                variant="outline"
+                className="text-[10px] text-red-600 border-red-600/40"
+                title="A previous send to this address hit a hard bounce — re-verify before sending again."
+              >
+                <AlertTriangle className="h-3 w-3 mr-1" /> needs reverification
               </Badge>
             )}
           </div>
