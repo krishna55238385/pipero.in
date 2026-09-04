@@ -12,6 +12,7 @@ Business rules enforced (from architecture PDF):
 """
 import json
 
+from gtm_backend.phase1.connectors import dns as dns_lookup
 from gtm_backend.phase2.connectors import openai as llm
 from gtm_backend.phase2.connectors import serpapi
 from gtm_backend.phase2.connectors import supabase
@@ -233,15 +234,25 @@ def _extract_company_name(title: str) -> str:
 
 
 def _build_one(icp: dict, competitor_name: str) -> Competitor | None:
-    snippets = _gather_competitor_snippets(competitor_name)
-    news = _gather_competitor_news(competitor_name)
+    # Resolved once and reused for both search disambiguation and the stored
+    # card (competitor_domain was previously always None — see
+    # _card_from_raw). Best-effort DNS-based guess, same mechanism Agent 02
+    # already uses for lead domains — not itself immune to a name collision
+    # (two same-named companies could both resolve a live domain), but it's
+    # what anchors the disambiguated search below rather than searching by
+    # bare name alone.
+    industry_context = ", ".join(icp.get("industry") or []) or None
+    domain = dns_lookup.discover_domain(competitor_name, context=industry_context)
+    snippets = _gather_competitor_snippets(competitor_name, domain)
+    news = _gather_competitor_news(competitor_name, domain)
     if not snippets and not news:
         # Free fallback: no web/news for this competitor — analyse from model
         # knowledge instead of dropping the card entirely.
-        return _build_from_knowledge(icp, competitor_name)
+        return _build_from_knowledge(icp, competitor_name, domain)
 
     payload = json.dumps({
         "competitor_name": competitor_name,
+        "competitor_domain": domain,
         "icp_industry": icp.get("industry"),
         "icp_geography": icp.get("geography"),
         "buyer_titles": icp.get("buyer_titles") or [],
@@ -270,7 +281,7 @@ def _build_one(icp: dict, competitor_name: str) -> Competitor | None:
 
     sources = [s.get("source_url") for s in snippets if s.get("source_url")]
     sources += [n.get("link") for n in news if n.get("link")]
-    card = _card_from_raw(icp, competitor_name, raw, sources)
+    card = _card_from_raw(icp, competitor_name, raw, sources, domain=domain)
     print(
         f"  [Agent 08] {competitor_name:<28} → "
         f"{len(card.complaint_categories)} complaint buckets · "
@@ -279,7 +290,7 @@ def _build_one(icp: dict, competitor_name: str) -> Competitor | None:
     return card
 
 
-def _build_from_knowledge(icp: dict, competitor_name: str) -> Competitor | None:
+def _build_from_knowledge(icp: dict, competitor_name: str, domain: str | None = None) -> Competitor | None:
     """Build a competitor card from model knowledge when no web/news is found."""
     payload = json.dumps({
         "competitor_name": competitor_name,
@@ -303,7 +314,7 @@ def _build_from_knowledge(icp: dict, competitor_name: str) -> Competitor | None:
         print(f"  [Agent 08] {competitor_name:<28} → LLM returned non-object JSON ({type(raw).__name__}) on knowledge fallback, skipping")
         return None
 
-    card = _card_from_raw(icp, competitor_name, raw, sources=["llm_internal_knowledge"])
+    card = _card_from_raw(icp, competitor_name, raw, sources=["llm_internal_knowledge"], domain=domain)
     print(
         f"  [Agent 08] {competitor_name:<28} → LLM-knowledge card · "
         f"{len(card.talk_tracks)} talk tracks · threat={card.threat_level}"
@@ -312,12 +323,12 @@ def _build_from_knowledge(icp: dict, competitor_name: str) -> Competitor | None:
 
 
 def _card_from_raw(
-    icp: dict, competitor_name: str, raw: dict, sources: list[str]
+    icp: dict, competitor_name: str, raw: dict, sources: list[str], domain: str | None = None,
 ) -> Competitor:
     return Competitor(
         icp_id=icp["id"],
         competitor_name=competitor_name,
-        competitor_domain=None,
+        competitor_domain=domain,
         summary=str(raw.get("summary") or ""),
         biggest_weakness=raw.get("biggest_weakness"),
         who_loves_them=raw.get("who_loves_them"),
@@ -329,8 +340,12 @@ def _card_from_raw(
     )
 
 
-def _gather_competitor_snippets(competitor_name: str) -> list[dict]:
-    query = f'"{competitor_name}" pricing OR features OR review OR alternatives'
+def _gather_competitor_snippets(competitor_name: str, domain: str | None = None) -> list[dict]:
+    # Domain disambiguator — same fix already proven in lead_enrichment.py
+    # and Agent 04/06's signal/news search: a bare competitor name can
+    # collide with an unrelated same-named company.
+    disambiguator = f' "{domain}"' if domain else ""
+    query = f'"{competitor_name}"{disambiguator} pricing OR features OR review OR alternatives'
     try:
         results = serpapi.search(query, num=8)
     except Exception:
@@ -346,9 +361,10 @@ def _gather_competitor_snippets(competitor_name: str) -> list[dict]:
     ]
 
 
-def _gather_competitor_news(competitor_name: str) -> list[dict]:
+def _gather_competitor_news(competitor_name: str, domain: str | None = None) -> list[dict]:
+    disambiguator = f' "{domain}"' if domain else ""
     query = (
-        f'"{competitor_name}" (problems OR complaints OR negative OR layoffs OR pricing)'
+        f'"{competitor_name}"{disambiguator} (problems OR complaints OR negative OR layoffs OR pricing)'
     )
     try:
         articles = serpapi.search_news(query, days=_NEWS_LOOKBACK_DAYS, num=6)
