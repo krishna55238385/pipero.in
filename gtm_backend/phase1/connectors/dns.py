@@ -1,3 +1,4 @@
+import json
 import math
 import re
 from urllib.parse import urlparse
@@ -5,6 +6,7 @@ from urllib.parse import urlparse
 import httpx
 
 from gtm_backend.phase1.core.retries import retry_on_transient
+from gtm_backend.phase1.connectors import openai as llm_lookup
 from gtm_backend.phase1.connectors import serpapi as serpapi_lookup
 from gtm_backend.phase1.connectors import website as website_lookup
 
@@ -53,6 +55,51 @@ _STOPWORDS = {
 # site) is not enough evidence on its own; a parenthetical alt name like
 # "XANT (InsideSales.com)" exists specifically to add that second anchor.
 _MATCH_THRESHOLD = 0.6
+
+# A short/one-word brand name (expected_tokens reduces to a single token —
+# "XANT", "Groove", "Apollo") is exactly the case keyword overlap can't
+# disambiguate: real, unrelated companies do collide on an exact one-word
+# brand (confirmed live — "XANT" also names an unrelated Polish company;
+# "Groove" names at least two other unrelated products). For that case only,
+# a passing keyword match is treated as merely a candidate, not a verdict,
+# and gets a final LLM read of the actual homepage content — same pattern as
+# Agent 06's account-intel entity check, applied here as the last
+# disambiguation step rather than a prompt instruction on a bigger call.
+_ENTITY_CHECK_SYSTEM = """You verify whether a company's homepage actually \
+belongs to a specific company, or to a different, unrelated company that \
+happens to share the same or a very similar name.
+
+You are given:
+- hostname: a candidate domain
+- expected_company_name: the company being searched for
+- industry_or_category_context: the expected company's industry/category, \
+if known (may be null)
+- homepage_evidence: real text pulled from the candidate domain's own \
+homepage (title, meta description, schema.org data)
+
+Company names occasionally collide: two real, unrelated companies can share \
+the exact same one-word brand. Judge ONLY the evidence given — does this \
+homepage's own description of itself match the expected company's \
+industry/category? If the evidence describes a clearly different business \
+(wrong industry, wrong product, a generic/parked page, or an unrelated \
+company that just happens to share the name), the answer is false even \
+though the name matches exactly.
+
+When industry_or_category_context is given, require the evidence to state \
+that SPECIFIC category, or a near-synonym of it, not just generic business \
+language. Vague phrasing like "helping businesses make better decisions" \
+or "market changes and opportunities" does NOT confirm a "sales engagement \
+software" company, a "market intelligence" company, and a "productivity \
+tool" company could all describe themselves that way — treat that as a \
+mismatch (false), not a match. Default to false whenever the evidence is \
+ambiguous or you are not confident the category actually lines up; a false \
+negative (falling through to search a name a second time) is far cheaper \
+than a false positive (confirming the wrong company).
+
+Return ONLY this JSON object, no prose, no markdown:
+{"same_entity": true or false, "reasoning": "one short sentence"}"""
+
+_LLM_EVIDENCE_CHARS = 1200
 
 
 @retry_on_transient()
@@ -116,6 +163,34 @@ def _tokenize(text: str) -> set[str]:
     return {t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS and len(t) > 1}
 
 
+def _llm_confirms_entity(
+    hostname: str, expected_name: str, context: str | None, evidence: str,
+) -> bool | None:
+    """Final disambiguation step for a short/one-word brand name match: ask
+    an LLM whether the candidate's own homepage content is actually about
+    ``expected_name`` (in ``context``'s industry, if given), or a different
+    company that happens to share the name.
+
+    Returns None — inconclusive — on any call failure (LLM quota/network/
+    malformed response), never True. An inconclusive read must not be
+    treated as a pass, same conservative bias as every other check here.
+    """
+    payload = json.dumps({
+        "hostname": hostname,
+        "expected_company_name": expected_name,
+        "industry_or_category_context": context,
+        "homepage_evidence": evidence[:_LLM_EVIDENCE_CHARS],
+    })
+    try:
+        raw = llm_lookup.chat_json(_ENTITY_CHECK_SYSTEM, payload, agent="dns_entity_check", phase="phase1")
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    verdict = raw.get("same_entity")
+    return verdict if isinstance(verdict, bool) else None
+
+
 def _verify_domain(hostname: str, expected_name: str, context: str | None = None) -> bool:
     """Confirm a DNS-resolved candidate's own homepage plausibly belongs to
     the expected company before trusting the guess — a live A record only
@@ -126,18 +201,18 @@ def _verify_domain(hostname: str, expected_name: str, context: str | None = None
     name/title as first-party evidence, and requires it to actually name the
     expected company rather than trusting the DNS hit alone.
 
-    ``context`` (e.g. an ICP's industry) is accepted but currently unused for
-    any pass/fail decision — a live run against ICP #62 (2026-09-04) showed
-    it actively backfiring: it rejected the real salesloft.com (whose own
+    ``context`` (e.g. an ICP's industry) is passed through to the LLM
+    entity-check step below for short/one-word names — a keyword-overlap
+    category gate on ``context`` was tried and removed (see
+    2026-09-04 history): it rejected the real salesloft.com (whose own
     marketing copy is "AI Predictive Revenue System", with no literal
     "sales"/"engagement"/"software" token) and fell through to the wrong,
-    thin salesloft.net instead — while still failing to catch the Groove
+    thin salesloft.net instead, while still failing to catch the Groove
     collision it was meant to prevent (groove.ai's copy happened to mention
-    "sales" incidentally). Net negative in practice; kept as a parameter for
-    API stability but intentionally not used as a gate. A real fix for
-    same-named-but-different-company collisions needs an actual semantic
-    read (e.g. an LLM entity check, same pattern as Agent 06's), not a
-    keyword-overlap heuristic.
+    "sales" incidentally). A keyword-overlap heuristic can't tell two
+    real, unrelated companies apart when they share an exact one-word
+    brand — that needs an actual semantic read, which is what
+    ``_llm_confirms_entity`` below provides instead.
 
     Returns False — "unverified" — on any failure, timeout, or inconclusive
     read (e.g. a bot-walled 403, or a page with no discoverable name at all).
@@ -160,7 +235,15 @@ def _verify_domain(hostname: str, expected_name: str, context: str | None = None
     evidence_tokens = _tokenize(evidence)
     overlap = expected_tokens & evidence_tokens
     required = max(1, math.ceil(len(expected_tokens) * _MATCH_THRESHOLD))
-    return len(overlap) >= required
+    if len(overlap) < required:
+        return False
+
+    if len(expected_tokens) <= 1:
+        # A single distinctive token is not enough evidence on its own —
+        # ask the LLM to judge the actual content as the final gate rather
+        # than trusting the keyword match blindly.
+        return _llm_confirms_entity(hostname, expected_name, context, evidence) is True
+    return True
 
 
 def _guess_hosts(base_name: str) -> list[str]:
@@ -176,8 +259,17 @@ def _guess_hosts(base_name: str) -> list[str]:
 
 def _search_official_site(company_name: str, context: str | None = None) -> str | None:
     """Fallback when DNS/TLD-guessing produced nothing verifiable: search for
-    the company's official site and take the top legitimate-looking result,
-    rather than trusting a bare, unverified domain guess.
+    the company's official site and take the top legitimate-looking, LLM-
+    confirmed result — never a bare, unverified guess.
+
+    An earlier version trusted the top search result outright when nothing
+    verified, on the theory that a top-ranked "official site" hit is still
+    better evidence than an alphabetic TLD guess. Live-tested against "XANT"
+    and "Groove" (2026-09-04) and confirmed wrong both times — it returned
+    forgeglobal.com and groovelife.com respectively, neither of which is
+    even the same company. For exactly the hard, ambiguous names this
+    function exists for, a top search hit is not reliable enough to trust
+    blindly; asking about its actual content is.
     """
     try:
         results = serpapi_lookup.search(f'"{company_name}" official site', num=5)
@@ -193,10 +285,26 @@ def _search_official_site(company_name: str, context: str | None = None) -> str 
     for hostname in candidates:
         if _verify_domain(hostname, company_name, context):
             return hostname
-    # Nothing verified — a top-ranked "official site" search result is still
-    # meaningfully better evidence than an alphabetic TLD guess, so use it as
-    # a last resort rather than returning nothing.
-    return candidates[0] if candidates else None
+
+    # No candidate passed the name-overlap check either — ask the LLM
+    # directly about the top couple of unverified candidates' real content
+    # before giving up, rather than trusting an unverified guess or a name
+    # match alone.
+    for hostname in candidates[:2]:
+        try:
+            site_name = website_lookup.fetch_site_name(hostname)
+            signals = website_lookup.fetch_homepage_signals(hostname)
+        except Exception:
+            continue
+        evidence = " ".join(
+            part for part in (site_name, signals.get("meta_description"), signals.get("schema_org_text"))
+            if part
+        )
+        if not evidence.strip():
+            continue
+        if _llm_confirms_entity(hostname, company_name, context, evidence) is True:
+            return hostname
+    return None
 
 
 def discover_domain(company_name: str, context: str | None = None) -> str | None:
