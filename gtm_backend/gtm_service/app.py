@@ -142,6 +142,24 @@ def run_phase(phase: str, body: RunRequest, background: BackgroundTasks) -> dict
     org = body.organization_id or config.DEFAULT_ORG_ID or None
     label = runner.command_label(phase, params)
 
+    # Guard against duplicate concurrent runs for the same ICP — e.g. a user
+    # clicking "Find leads" while "Define & run ICP" is still mid-flight for
+    # the same ICP, which previously spawned two overlapping subprocess
+    # chains writing to the same rows (one had to be manually SIGTERM'd in
+    # production). Only guards when icp_id is given; org-wide runs
+    # (icp_id=None) are unaffected.
+    if body.icp_id is not None:
+        active = db.get_active_run_for_icp(body.icp_id)
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"a {active['phase']} run ({active['status']}) is already in "
+                    f"progress for ICP {body.icp_id} (run_id={active['id']}) — "
+                    "wait for it to finish before starting another"
+                ),
+            )
+
     try:
         run_id = db.create_phase_run(
             phase=phase,

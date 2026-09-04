@@ -50,6 +50,7 @@ _LEAD_NORMALIZATION_RESPONSE: dict[str, Any] = {
             "company_country": "India",
             "company_industry": "HR Tech",
             "company_size": "51-200 employees",
+            "geography_confidence": "confirmed",
             "source_url": "https://acmehr.com",
         },
         {
@@ -59,6 +60,7 @@ _LEAD_NORMALIZATION_RESPONSE: dict[str, Any] = {
             "company_country": "India",
             "company_industry": "SaaS",
             "company_size": None,
+            "geography_confidence": "confirmed",
             "source_url": "https://betapeople.io",
         },
     ],

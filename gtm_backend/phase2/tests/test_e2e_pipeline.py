@@ -127,9 +127,12 @@ def _route_llm(system: str, _user: str, **_kwargs: object) -> dict:
         return _STAKEHOLDER_PAYLOAD
     if "competitor" in head or "competitive" in head:
         return _COMPETITOR_PAYLOAD
-    if "market" in head:
+    # Market sizing's own prompt head ("You are a GTM strategist...") contains
+    # the substring "gtm" too, so this check must run BEFORE the elite-GTM
+    # insight check below, and match on something unique to market sizing.
+    if "market sizing" in system.lower() or "tam" in head:
         return _MARKET_PAYLOAD
-    if "gtm" in head or "go-to-market" in head or "strategic" in head:
+    if "elite gtm strategist" in head or "go-to-market" in head or "strategic" in head:
         return _GTM_PAYLOAD
     # Fall back on full-prompt search if first line is generic.
     body = system.lower()

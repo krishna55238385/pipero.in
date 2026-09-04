@@ -25,6 +25,13 @@ _MAX_PAGES = 4
 _MAX_TEXT_PER_PAGE = 2500
 _MIN_USEFUL_TEXT = 120
 
+# Pages most likely to name real people (used by Agent 07 as a LinkedIn-search
+# fallback when SerpAPI/Serper are unavailable — e.g. quota/credits exhausted).
+_TEAM_PATHS = [
+    "/team", "/about/team", "/about-us/team", "/our-team",
+    "/company/team", "/leadership", "/about/leadership", "/people",
+]
+
 _client = httpx.Client(
     timeout=15.0,
     follow_redirects=True,
@@ -104,4 +111,44 @@ def fetch_company_pages(domain: str, max_pages: int = _MAX_PAGES) -> list[dict]:
             seen_text.add(fingerprint)
             snippets.append({"text": text, "source_url": str(resp.url)})
             break  # got this path on https; don't also fetch http
+    return snippets
+
+
+def fetch_team_pages(domain: str, max_pages: int = _MAX_PAGES) -> list[dict]:
+    """Fetch a company's own /team, /leadership, /people pages (real names only).
+
+    Free fallback for Agent 07 when LinkedIn search (SerpAPI/Serper) is
+    unavailable. Returns the same ``{"text": str, "source_url": str}`` shape
+    as fetch_company_pages(); returns ``[]`` on any failure so the caller can
+    fall through to its next strategy (or give up cleanly).
+    """
+    domain = _normalise_domain(domain)
+    if not domain:
+        return []
+
+    snippets: list[dict] = []
+    seen_text: set[str] = set()
+    for path in _TEAM_PATHS:
+        if len(snippets) >= max_pages:
+            break
+        url = f"https://{domain}{path}"
+        try:
+            resp = _client.get(url)
+        except httpx.HTTPError:
+            continue
+        if resp.status_code >= 400:
+            continue
+        ctype = resp.headers.get("content-type", "")
+        if "html" not in ctype and "text" not in ctype:
+            continue
+        header, body = _extract_text(resp.text)
+        text = (header + ". " + body).strip(" .") if header else body
+        text = text[:_MAX_TEXT_PER_PAGE].strip()
+        if len(text) < _MIN_USEFUL_TEXT:
+            continue
+        fingerprint = text[:200]
+        if fingerprint in seen_text:
+            continue
+        seen_text.add(fingerprint)
+        snippets.append({"text": text, "source_url": str(resp.url)})
     return snippets

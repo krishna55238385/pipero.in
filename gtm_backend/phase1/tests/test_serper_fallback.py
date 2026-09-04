@@ -31,12 +31,12 @@ def test_serper_request_reraises_and_logs_response_body_on_http_error(capsys):
 def test_serper_request_succeeds_normally_when_no_error():
     ok_response = MagicMock()
     ok_response.status_code = 200
-    ok_response.json.return_value = {"organic": [{"title": "Acme", "link": "https://acme.com", "snippet": "..."}]}
+    ok_response.json.return_value = {"organic": [{"title": "Acme", "link": "https://acme.com", "snippet": "...", "date": "Jun 30, 2026"}]}
     ok_response.raise_for_status.return_value = None
 
     with patch.object(serpapi._client, "post", return_value=ok_response):
         result = serpapi._serper_request({"q": "test query"})
 
     assert result == {
-        "organic_results": [{"title": "Acme", "link": "https://acme.com", "snippet": "..."}]
+        "organic_results": [{"title": "Acme", "link": "https://acme.com", "snippet": "...", "date": "Jun 30, 2026"}]
     }

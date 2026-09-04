@@ -4,6 +4,7 @@ Each test asserts the agent's correct behavior end-to-end: it reads the right
 data, calls the right connectors with the right args, and writes the right
 result back.
 """
+import json
 from unittest.mock import patch
 
 import pytest
@@ -112,8 +113,8 @@ def test_agent_02_dedups_and_inserts(sample_icp):
     ]
     normalized = {
         "companies": [
-            {"company_name": "Acme HR", "company_website": "https://acmehr.com", "source_url": "https://acmehr.com"},
-            {"company_name": "Beta HR Tools", "company_website": "https://betahr.io", "source_url": "https://betahr.io"},
+            {"company_name": "Acme HR", "company_website": "https://acmehr.com", "source_url": "https://acmehr.com", "geography_confidence": "confirmed"},
+            {"company_name": "Beta HR Tools", "company_website": "https://betahr.io", "source_url": "https://betahr.io", "geography_confidence": "confirmed"},
         ]
     }
     with patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_icp", return_value=sample_icp), \
@@ -121,6 +122,8 @@ def test_agent_02_dedups_and_inserts(sample_icp):
          patch("gtm_backend.phase1.agents.agent_02_leads.llm.chat_json", return_value=normalized), \
          patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.extract_domain_from_url", side_effect=lambda u: u.replace("https://", "")), \
          patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.discover_domain", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.website.fetch_site_name", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.website.fetch_homepage_signals", return_value={"meta_description": None, "schema_org_text": None}), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_names", return_value={"acme hr"}), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_domains", return_value={"acmehr.com"}), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.insert_leads", return_value=[1]) as inserter:
@@ -143,9 +146,9 @@ def test_agent_02_rejects_known_wrong_country(sample_icp):
     ]
     normalized = {
         "companies": [
-            {"company_name": "Acme HR", "company_website": "https://acmehr.com", "source_url": "https://acmehr.com", "company_country": "India"},
-            {"company_name": "Beta HR Tools", "company_website": "https://betahr.io", "source_url": "https://betahr.io", "company_country": "United States"},
-            {"company_name": "Gamma HR", "company_website": "https://gammahr.com", "source_url": "https://gammahr.com", "company_country": None},
+            {"company_name": "Acme HR", "company_website": "https://acmehr.com", "source_url": "https://acmehr.com", "company_country": "India", "geography_confidence": "confirmed"},
+            {"company_name": "Beta HR Tools", "company_website": "https://betahr.io", "source_url": "https://betahr.io", "company_country": "United States", "geography_confidence": "confirmed"},
+            {"company_name": "Gamma HR", "company_website": "https://gammahr.com", "source_url": "https://gammahr.com", "company_country": None, "geography_confidence": "unclear"},
         ]
     }
     with patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_icp", return_value=sample_icp), \
@@ -153,20 +156,104 @@ def test_agent_02_rejects_known_wrong_country(sample_icp):
          patch("gtm_backend.phase1.agents.agent_02_leads.llm.chat_json", return_value=normalized), \
          patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.extract_domain_from_url", side_effect=lambda u: u.replace("https://", "")), \
          patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.discover_domain", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.website.fetch_site_name", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.website.fetch_homepage_signals", return_value={"meta_description": None, "schema_org_text": None}), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_names", return_value=set()), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_domains", return_value=set()), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.supabase.insert_leads", return_value=[1]) as inserter:
+        # min_leads=1 so the pagination loop stops after page 1 — otherwise it
+        # keeps re-fetching (mocked to return the same 3 results every page)
+        # trying to reach the default min_leads=8, inflating the rejection
+        # counters by re-processing the same candidates on each page. Only 1
+        # candidate (Acme) ever survives both geography checks now, so
+        # min_leads=2 (the original value) would never stop pagination.
+        summary = generate_leads(icp_id=1, max_leads=20, min_leads=1)
+
+    # Beta (United States, confirmed) rejected by the confident-mismatch path;
+    # Gamma (no country evidence, geography_confidence="unclear") is now
+    # ALSO rejected — this is the exact Melbourne-style gap this task closes:
+    # an ICP with a target country no longer keeps a lead it can't confirm.
+    # Only Acme (India, confirmed) survives.
+    assert summary["geo_rejected"] == 1
+    assert summary["rejected_unclear_geography"] == 1
+    assert summary["leads_inserted"] == 1
+    inserted_leads = inserter.call_args[0][0]
+    inserted_names = {lead.company_name for lead in inserted_leads}
+    assert inserted_names == {"Acme HR"}
+    assert "Beta HR Tools" not in inserted_names
+    assert "Gamma HR" not in inserted_names
+
+
+def test_agent_02_corrects_event_forum_titles_to_domain_brand():
+    """Found live 2026-08-22: the LLM normalize path sometimes still copies a
+    literal event/forum/community thread title as company_name even on the
+    company's OWN legitimate domain (e.g. "D2L Connection: Bangalore Event by
+    D2L" on d2l.com) — this is a different failure shape from the
+    careers/listicle case (a THIRD-PARTY domain), so the code-level
+    correction targets it specifically via title phrasing, not domain
+    ownership."""
+    from gtm_backend.phase1.agents.agent_02_leads import _correct_event_forum_company_name
+
+    event_candidate = {
+        "company_name": "D2L Connection: Bangalore Event by D2L",
+        "company_website": "https://d2l.com/events/connection-bangalore",
+    }
+    _correct_event_forum_company_name(event_candidate)
+    assert event_candidate["company_name"] == "D2l"
+    assert event_candidate["_name_corrected_from"] == "D2L Connection: Bangalore Event by D2L"
+
+    webinar_candidate = {
+        "company_name": "Zero Trust Webinar",
+        "company_website": "https://acmesecurity.com/webinars/zero-trust",
+    }
+    _correct_event_forum_company_name(webinar_candidate)
+    assert webinar_candidate["company_name"] == "Acmesecurity"
+
+    # A normal, already-correct company_name must be left untouched.
+    normal_candidate = {"company_name": "Acme HR", "company_website": "https://acmehr.com"}
+    _correct_event_forum_company_name(normal_candidate)
+    assert normal_candidate["company_name"] == "Acme HR"
+    assert "_name_corrected_from" not in normal_candidate
+
+    # No website/domain to derive from — leave the (possibly wrong) name as-is
+    # rather than guessing; nothing crashes.
+    no_domain_candidate = {"company_name": "Some Forum Thread"}
+    _correct_event_forum_company_name(no_domain_candidate)
+    assert no_domain_candidate["company_name"] == "Some Forum Thread"
+
+
+def test_agent_02_rejects_confident_industry_mismatch(sample_icp):
+    """A candidate the LLM explicitly flags industry_match='no' must be
+    dropped before it ever reaches scoring — this is what previously let a
+    Mumbai fintech ICP fill up with cybersecurity/legal/HR-consulting leads
+    that Agent 03 could only catch AFTER paying for the search+enrichment."""
+    search_results = [
+        {"title": "Acme HR | Best HR Tech", "link": "https://acmehr.com", "snippet": "..."},
+        {"title": "Beta HR Tools", "link": "https://betahr.io", "snippet": "..."},
+        {"title": "Gamma HR", "link": "https://gammahr.com", "snippet": "..."},
+    ]
+    normalized = {
+        "companies": [
+            {"company_name": "Acme HR", "company_website": "https://acmehr.com", "source_url": "https://acmehr.com", "industry_match": "yes", "geography_confidence": "confirmed"},
+            {"company_name": "Beta HR Tools", "company_website": "https://betahr.io", "source_url": "https://betahr.io", "industry_match": "no", "geography_confidence": "confirmed"},
+            {"company_name": "Gamma HR", "company_website": "https://gammahr.com", "source_url": "https://gammahr.com", "industry_match": "unclear", "geography_confidence": "confirmed"},
+        ]
+    }
+    with patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_icp", return_value=sample_icp), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.serpapi.search", return_value=search_results), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.llm.chat_json", return_value=normalized), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.extract_domain_from_url", side_effect=lambda u: u.replace("https://", "")), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.discover_domain", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.website.fetch_site_name", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.website.fetch_homepage_signals", return_value={"meta_description": None, "schema_org_text": None}), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_names", return_value=set()), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_domains", return_value=set()), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.insert_leads", return_value=[1, 2]) as inserter:
-        # min_leads=2 so the pagination loop stops after page 1 — otherwise it
-        # keeps re-fetching (mocked to return the same 3 results every page)
-        # trying to reach the default min_leads=8, inflating geo_rejected by
-        # re-processing the same candidates on each page.
         summary = generate_leads(icp_id=1, max_leads=20, min_leads=2)
 
-    # Beta (United States) rejected; Acme (India) and Gamma (unknown/blank) kept.
-    assert summary["geo_rejected"] == 1
+    assert summary["industry_rejected"] == 1
     assert summary["leads_inserted"] == 2
-    inserted_leads = inserter.call_args[0][0]
-    inserted_names = {lead.company_name for lead in inserted_leads}
+    inserted_names = {lead.company_name for lead in inserter.call_args[0][0]}
     assert inserted_names == {"Acme HR", "Gamma HR"}
     assert "Beta HR Tools" not in inserted_names
 
@@ -183,6 +270,24 @@ def test_agent_02_region_geography_accepts_both_countries():
     assert _country_mismatch("Pakistan", codes) is True
     assert _country_mismatch(None, codes) is False  # unknown never rejected
     assert _country_mismatch("Freedonia", codes) is False  # unmapped never rejected
+
+
+def test_agent_02_industry_mismatch_rejects_only_explicit_no():
+    """Mirrors _country_mismatch's conservative bias: only an explicit "no"
+    from the LLM's industry_match field rejects a lead. "unclear", "yes",
+    missing, or any unexpected value must never reject — the prompt itself
+    is instructed to default to "unclear" whenever it can't confidently
+    judge fit, so anything other than a literal "no" here is deliberate."""
+    from gtm_backend.phase1.agents.agent_02_leads import _industry_mismatch
+
+    assert _industry_mismatch("no") is True
+    assert _industry_mismatch("No") is True
+    assert _industry_mismatch("  NO  ") is True
+    assert _industry_mismatch("yes") is False
+    assert _industry_mismatch("unclear") is False
+    assert _industry_mismatch(None) is False
+    assert _industry_mismatch("") is False
+    assert _industry_mismatch("maybe") is False
 
 
 def test_agent_02_city_level_geography_still_enforces_country():
@@ -295,13 +400,13 @@ def test_agent_02_scrubs_internally_contradictory_location(sample_icp):
                 "company_name": "Supabase", "company_website": "https://supabase.com",
                 "source_url": "https://supabase.com",
                 "company_city": "San Francisco", "company_state": "California",
-                "company_country": "India",
+                "company_country": "India", "geography_confidence": "confirmed",
             },
             {
                 "company_name": "Beta HR Tools", "company_website": "https://betahr.io",
                 "source_url": "https://betahr.io",
                 "company_city": "Bangalore", "company_state": "Karnataka",
-                "company_country": "India",
+                "company_country": "India", "geography_confidence": "confirmed",
             },
         ]
     }
@@ -310,6 +415,8 @@ def test_agent_02_scrubs_internally_contradictory_location(sample_icp):
          patch("gtm_backend.phase1.agents.agent_02_leads.llm.chat_json", return_value=normalized), \
          patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.extract_domain_from_url", side_effect=lambda u: u.replace("https://", "")), \
          patch("gtm_backend.phase1.agents.agent_02_leads.dns_lookup.discover_domain", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.website.fetch_site_name", return_value=None), \
+         patch("gtm_backend.phase1.agents.agent_02_leads.website.fetch_homepage_signals", return_value={"meta_description": None, "schema_org_text": None}), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_names", return_value=set()), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.get_existing_company_domains", return_value=set()), \
          patch("gtm_backend.phase1.agents.agent_02_leads.supabase.insert_leads", return_value=[1, 2]) as inserter:
@@ -412,7 +519,7 @@ def test_agent_03_drops_literal_null_strings(sample_icp):
     company = {
         "company_city": "null",          # literal string, must be dropped
         "company_state": "N/A",          # must be dropped
-        "company_country": "Ireland",    # real value, kept
+        "company_country": "India",      # real value, matches the ICP's target geography — kept
         "company_address": "  ",         # blank, dropped
         "company_phone": "null",         # dropped
         "company_industry": "IT Services",
@@ -421,14 +528,14 @@ def test_agent_03_drops_literal_null_strings(sample_icp):
     }
     with patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_icp", return_value=sample_icp), \
          patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \
-         patch("gtm_backend.phase1.agents.lead_enrichment.website.fetch_text", return_value="Acme HR, an IT services firm in Ireland."), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.website.fetch_text", return_value="Acme HR, an IT services firm in India."), \
          patch("gtm_backend.phase1.agents.lead_enrichment.hunter.domain_metadata", return_value={}), \
          patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin", return_value=[]), \
          patch("gtm_backend.phase1.agents.lead_enrichment.llm.chat_json", return_value=company), \
          patch("gtm_backend.phase1.agents.lead_enrichment.supabase.update_lead") as updater:
         enrich_leads(icp_id=1)
     kwargs = updater.call_args.kwargs
-    assert kwargs == {"company_country": "Ireland", "company_industry": "IT Services"}
+    assert kwargs == {"company_country": "India", "company_industry": "IT Services"}
 
 
 @pytest.mark.parametrize(
@@ -479,7 +586,7 @@ def test_agent_03_uses_location_and_size_search_and_bands_size(sample_icp):
          patch("gtm_backend.phase1.agents.lead_enrichment.supabase.update_lead") as updater:
         enrich_leads(icp_id=1)
 
-    loc_search.assert_called_once_with("Acme HR")
+    loc_search.assert_called_once_with("Acme HR", domain="acmehr.com")
     size_search.assert_called_once_with("Acme HR")
     # The LLM payload carried the search snippets so it had evidence to work from.
     payload = llm_mock.call_args.args[1]
@@ -560,17 +667,19 @@ def test_agent_04_generates_queries_then_classifies_signals(sample_icp):
         "title": "Acme HR raises $5M Series A",
         "snippet": "led by Sequoia",
         "link": "https://news/funding",
+        "date": "5 days ago",
     }
     web_result = {
         "title": "Acme HR Careers — We're hiring",
         "snippet": "Open roles for engineers",
         "link": "https://acmehr.com/careers",
+        "date": None,
     }
 
     def fake_news(query, days=90, num=10):
         return [news_article] if query else []
 
-    def fake_web(query, num=10):
+    def fake_web(query, num=10, days=None):
         return [web_result] if "hiring" in query else []
 
     query_plan = {
@@ -620,6 +729,15 @@ def test_agent_04_generates_queries_then_classifies_signals(sample_icp):
         assert signal.signal_source_url
     funding_high = [s for s in inserted if s.signal_type == "funding" and s.buying_intent == "high"]
     assert funding_high and funding_high[0].weight == 10
+    # signal_date captured from the provider's "5 days ago" and passed
+    # through to the stored row — distinct from detected_at (insert time).
+    assert funding_high[0].signal_date is not None
+
+    # Classification payload carries a real "date" field per candidate now,
+    # not just id/signal_text/source.
+    classify_call_user = llm_mock.call_args_list[1].args[1]
+    classify_payload = json.loads(classify_call_user)
+    assert all("date" in c for c in classify_payload["candidates"])
 
 
 def test_agent_04_falls_back_to_static_queries_on_llm_failure(sample_icp):

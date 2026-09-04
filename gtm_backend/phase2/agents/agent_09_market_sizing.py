@@ -34,6 +34,12 @@ from gtm_backend.phase2.core.schemas import MarketMap, SegmentSizing
 
 _MIN_LEADS_THRESHOLD = 5
 _TOO_SMALL_THRESHOLD = 100
+# Max ICP segments per LLM call. A single call across all active ICPs (seen
+# live at 28 segments) produces enough per-segment JSON (TAM/SAM/SOM text,
+# competition/seasonal notes, rationale) to blow the model's completion-token
+# budget mid-document, causing a hard JSON-parse failure and the whole agent
+# skipping. Batching keeps each call's output well under that ceiling.
+_BATCH_SIZE = 8
 
 
 def size_markets(force: bool = False) -> dict:
@@ -73,25 +79,53 @@ def size_markets(force: bool = False) -> dict:
         )
         return {"week_of": week_of, "total_leads": total_leads, "skipped": True}
 
-    payload = json.dumps({
-        "week_of": week_of,
-        "current_month": date.today().strftime("%B"),
-        "total_leads": total_leads,
-        "segments": segments,
-    })
-    try:
-        raw = llm.chat_json(
-            MARKET_SIZING_SYSTEM,
-            payload,
-            agent="agent_09_market_sizing",
-            icp_id=None,
-            phase="phase2",
-        )
-    except Exception as exc:
-        print(f"  [Agent 09] LLM error: {exc}")
+    current_month = date.today().strftime("%B")
+    enriched: list[SegmentSizing] = []
+    batches = [segments[i:i + _BATCH_SIZE] for i in range(0, len(segments), _BATCH_SIZE)]
+    for batch_num, batch in enumerate(batches, start=1):
+        payload = json.dumps({
+            "week_of": week_of,
+            "current_month": current_month,
+            "total_leads": total_leads,
+            "segments": batch,
+        })
+        try:
+            raw = llm.chat_json(
+                MARKET_SIZING_SYSTEM,
+                payload,
+                agent="agent_09_market_sizing",
+                icp_id=None,
+                phase="phase2",
+            )
+        except Exception as exc:
+            print(f"  [Agent 09] batch {batch_num}/{len(batches)} LLM error: {exc}")
+            continue
+        enriched.extend(_enrich_segments(raw, batch, week_of))
+
+    if not enriched:
+        print("  [Agent 09] no segments sized — all batches failed")
         return {"week_of": week_of, "total_leads": total_leads, "skipped": True}
 
-    market_map = _from_llm(raw, segments, week_of, total_leads)
+    # Portfolio-level primary/secondary/avoid picks are computed here (not by
+    # the LLM) since each batch only ever sees a subset of segments and can't
+    # rank across the full portfolio. Rank by priority_rank first (1=best),
+    # then hot leads, then total leads, as a deterministic tiebreaker.
+    ranked = sorted(enriched, key=lambda s: (s.priority_rank, -s.lead_hot, -s.lead_total))
+    primary = ranked[0].segment_name if ranked else None
+    secondary = ranked[1].segment_name if len(ranked) > 1 else None
+    avoid = next((s.segment_name for s in reversed(ranked) if s.too_small_flag or s.priority_rank == 3), None)
+
+    market_map = MarketMap(
+        week_of=week_of,
+        total_leads=total_leads,
+        skipped=False,
+        summary=f"{len(enriched)} segment(s) sized across {len(batches)} batch(es).",
+        primary_gtm_segment=primary,
+        secondary_gtm_segment=secondary,
+        avoid_this_week=avoid,
+        focus_reason=None,
+        segments=enriched,
+    )
     inserted_ids = supabase.upsert_market_segments(market_map.segments)
 
     summary = {
@@ -140,9 +174,10 @@ def _build_segments(icps: list[dict], week_of: str) -> list[dict]:
     return rows
 
 
-def _from_llm(
-    raw: dict, segments: list[dict], week_of: str, total_leads: int,
-) -> MarketMap:
+def _enrich_segments(
+    raw: dict, segments: list[dict], week_of: str,
+) -> list[SegmentSizing]:
+    """Merge one batch's LLM sizing output onto that batch's base segment rows."""
     raw_segments = raw.get("segments") if isinstance(raw.get("segments"), list) else []
     by_icp = {seg["icp_id"]: seg for seg in segments}
     enriched: list[SegmentSizing] = []
@@ -173,18 +208,7 @@ def _from_llm(
             recommended_volume=_clamp_volume(item.get("recommended_volume")),
             week_of=week_of,
         ))
-
-    return MarketMap(
-        week_of=week_of,
-        total_leads=total_leads,
-        skipped=False,
-        summary=str(raw.get("summary") or ""),
-        primary_gtm_segment=raw.get("primary_gtm_segment"),
-        secondary_gtm_segment=raw.get("secondary_gtm_segment"),
-        avoid_this_week=raw.get("avoid_this_week"),
-        focus_reason=raw.get("focus_reason"),
-        segments=enriched,
-    )
+    return enriched
 
 
 def _clamp_rank(value: object) -> int:

@@ -64,6 +64,11 @@ def test_request_hits_real_client_when_test_mode_off(monkeypatch, mocker):
     # live-call code path, not on a leftover cache entry from another test.
     mocker.patch.object(serpapi_mod, "_cache_get", return_value=None)
     mocker.patch.object(serpapi_mod, "_cache_set")
+    # Task #7's proactive quota check also calls _client.get() once (a
+    # separate, free account.json lookup) — irrelevant to what THIS test is
+    # actually verifying (that a real search request happens), so it's
+    # disabled here rather than asserting on call count == 2.
+    mocker.patch.object(serpapi_mod, "check_serpapi_quota")
     result = serpapi_mod.search("some unique test-mode-off query")
     get_mock.assert_called_once()
     assert result[0]["title"] == "Real Co"

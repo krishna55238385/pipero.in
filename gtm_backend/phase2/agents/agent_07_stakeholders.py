@@ -18,7 +18,11 @@ import json
 from gtm_backend.phase2.connectors import openai as llm
 from gtm_backend.phase2.connectors import serpapi
 from gtm_backend.phase2.connectors import supabase
-from gtm_backend.phase2.core.prompts import STAKEHOLDER_MAPPING_SYSTEM
+from gtm_backend.phase2.connectors import website
+from gtm_backend.phase2.core.prompts import (
+    STAKEHOLDER_MAPPING_SYSTEM,
+    STAKEHOLDER_MAPPING_WEBSITE_SYSTEM,
+)
 from gtm_backend.phase2.core.schemas import Stakeholder, StakeholderMap
 
 
@@ -98,25 +102,55 @@ def _build_one(lead: dict, icp: dict | None) -> StakeholderMap | None:
         print(f"  [Agent 07] linkedin search failed for {company_name}: {exc}")
         snippets = []
 
-    if not snippets:
-        print(f"  [Agent 07] {company_name:<28} → no linkedin snippets")
+    if snippets:
+        compact = [{
+            "title": s.get("title"),
+            "link": s.get("link"),
+            "snippet": s.get("snippet"),
+        } for s in snippets[:_MAX_LINKEDIN_SNIPPETS]]
+        payload = json.dumps({
+            "company_name": company_name,
+            "buyer_titles": (icp or {}).get("buyer_titles") or [],
+            "user_titles": (icp or {}).get("user_titles") or [],
+            "blocker_titles": (icp or {}).get("blocker_titles") or [],
+            "linkedin_snippets": compact,
+        })
+        try:
+            raw = llm.chat_json(
+                STAKEHOLDER_MAPPING_SYSTEM,
+                payload,
+                agent="agent_07_stakeholders",
+                icp_id=lead.get("icp_id"),
+                phase="phase2",
+            )
+        except Exception as exc:
+            print(f"  [Agent 07] {company_name:<28} → LLM error: {exc}")
+            return None
+        return _from_llm(lead, raw)
+
+    # Free fallback: LinkedIn search unavailable (SerpAPI/Serper quota
+    # exhausted) — read the company's OWN /team, /leadership, /people pages
+    # instead. Real names only; the prompt forbids inventing anyone.
+    domain = lead.get("company_domain")
+    team_snippets = website.fetch_team_pages(domain) if domain else []
+    if not team_snippets:
+        print(f"  [Agent 07] {company_name:<28} → no linkedin snippets; no team page found")
         return None
 
-    compact = [{
-        "title": s.get("title"),
-        "link": s.get("link"),
-        "snippet": s.get("snippet"),
-    } for s in snippets[:_MAX_LINKEDIN_SNIPPETS]]
+    print(
+        f"  [Agent 07] {company_name:<28} → linkedin unavailable; "
+        f"read {len(team_snippets)} team page(s) from {domain} directly"
+    )
     payload = json.dumps({
         "company_name": company_name,
         "buyer_titles": (icp or {}).get("buyer_titles") or [],
         "user_titles": (icp or {}).get("user_titles") or [],
         "blocker_titles": (icp or {}).get("blocker_titles") or [],
-        "linkedin_snippets": compact,
+        "team_page_text": team_snippets,
     })
     try:
         raw = llm.chat_json(
-            STAKEHOLDER_MAPPING_SYSTEM,
+            STAKEHOLDER_MAPPING_WEBSITE_SYSTEM,
             payload,
             agent="agent_07_stakeholders",
             icp_id=lead.get("icp_id"),
