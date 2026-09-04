@@ -113,10 +113,7 @@ def generate_leads(
             if _country_mismatch(cand.get("company_country"), expected_countries):
                 geo_rejected += 1
                 continue
-            if (
-                cand.get("_normalization_method") != "regex_fallback"
-                and _unclear_geography_rejected(cand.get("geography_confidence"), expected_countries)
-            ):
+            if _unclear_geography_rejected(cand.get("geography_confidence"), expected_countries):
                 # ICP has an explicit target country, but this candidate's own
                 # country couldn't be confidently confirmed (missing/"unclear"
                 # geography_confidence) — distinct from geo_rejected above,
@@ -125,17 +122,24 @@ def generate_leads(
                 # through an India-only ICP: an unmapped/unconfirmed country
                 # used to default to "keep", not "reject".
                 #
-                # EXCEPTION (found live 2026-09-02, ICP #57): regex-fallback
-                # candidates (used when the LLM normalize call itself fails)
-                # NEVER carry geography_confidence at all — that field only
-                # exists in the LLM's structured output. Applying the strict
-                # check to them meant ANY LLM failure zeroed out results
-                # entirely for every country-scoped ICP, which is worse than
-                # the old permissive behavior this fix was meant to improve
-                # on. These candidates are already flagged needs_review=True
-                # (see _tag_normalization_method/_to_lead) — that's the right
-                # signal for "unverified," not silent deletion before a
-                # human ever sees them.
+                # regex-fallback candidates (used when the LLM normalize call
+                # itself fails) NEVER carry geography_confidence at all — that
+                # field only exists in the LLM's structured output — so they
+                # always land here too, exactly like an LLM-normalized
+                # "unclear" candidate. An EARLIER version of this fix (found
+                # live 2026-09-02, ICP #57) exempted regex-fallback candidates
+                # from this check entirely, because applying it blindly meant
+                # ANY LLM failure zeroed out results for every country-scoped
+                # ICP. That exemption was itself a live bug, not a fix — it
+                # bypassed geography enforcement for the fallback path
+                # unconditionally, regardless of how confident the check could
+                # actually be (confirmed 2026-09-04: 59 wrong-country leads
+                # across 8 ICPs, all regex-fallback, none from before this
+                # exemption existed). The exemption is removed; the homepage-
+                # confirmation escape hatch immediately below is what now
+                # covers the "don't zero out every fallback result" concern —
+                # a regex-fallback candidate whose own domain confirms the
+                # right country still gets kept, same as an LLM-normalized one.
                 #
                 # SECOND EXCEPTION (found live 2026-09-03, ICP #60/#61): a
                 # search snippet from a content-marketing/comparison-blog
