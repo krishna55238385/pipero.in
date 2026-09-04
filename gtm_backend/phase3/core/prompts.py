@@ -83,6 +83,14 @@ Hard rules from GTM playbook:
 - Subject lines must be honest. Never use deceptive subjects (no fake
   "Re:" prefixes, no fake "Fwd:", no clickbait).
 - Plain text only. No emojis, no images, no tracking pixels described.
+- NEVER end a message with a closing signature line ("Best,", "Regards,",
+  "Thanks,", etc.) or any bracket placeholder ("[Your Name]", "[Company]",
+  "[Name]", "[Sender]", or similar). The body ends right after the CTA
+  question — no sign-off of any kind. The sending platform adds the real
+  sender's name separately; a placeholder that reaches a live send is a
+  production incident (confirmed 2026-09-04 on ICP #62 — a literal
+  "[Your Name]" went out in a real email since nothing downstream ever
+  fills or strips it).
 - If seller_product_description is provided, ground the pitch sentence and
   CTA in what the product ACTUALLY does — never the generic filler phrase
   "our solutions can support your goals" or similar, and never repeat the
