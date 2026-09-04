@@ -23,7 +23,7 @@ from gtm_backend.phase1.agents.agent_02_leads import (
     _unclear_geography_rejected,
     verify_lead_identity,
 )
-from gtm_backend.phase1.agents.lead_enrichment import _find_contact
+from gtm_backend.phase1.agents.lead_enrichment import _affiliation_mismatch, _find_contact
 
 
 def _result(title, link="https://example.com/page", snippet=""):
@@ -138,7 +138,12 @@ def test_icp_without_target_country_keeps_leads_regardless_of_geography_confiden
 
 # -- 4. LinkedIn accuracy ------------------------------------------------------
 
-def test_linkedin_low_confidence_match_leaves_field_blank(mocker):
+def test_linkedin_low_confidence_match_drops_contact_entirely(mocker):
+    """UPDATED 2026-09-05: a "low" match_confidence used to keep contact_name/
+    contact_title and only blank the LinkedIn URL. Found live (ICP #62,
+    Bloomberry) that a wrong-company match can still land "high" confidence
+    for the wrong reason, and a "low" one has no reliable signal left to
+    salvage even the name from — the whole contact is dropped now."""
     mocker.patch(
         "gtm_backend.phase1.agents.lead_enrichment.hunter.find_emails", return_value=[]
     )
@@ -156,8 +161,7 @@ def test_linkedin_low_confidence_match_leaves_field_blank(mocker):
         },
     )
     result = _find_contact("Acme HR", ["Founder"], "acmehr.com", icp_id=1)
-    assert result["contact_name"] == "Jane Doe"  # name/title still kept
-    assert result["contact_linkedin_url"] is None  # URL blanked, not guessed
+    assert result is None
 
 
 def test_linkedin_high_confidence_match_keeps_url(mocker):
@@ -181,10 +185,10 @@ def test_linkedin_high_confidence_match_keeps_url(mocker):
     assert result["contact_linkedin_url"] == "https://linkedin.com/in/janedoe"
 
 
-def test_linkedin_missing_confidence_field_defaults_to_blank():
+def test_linkedin_missing_confidence_field_defaults_to_dropped():
     """An LLM response missing match_confidence entirely (e.g. an older
-    cached response shape) must default to the safe/blank behavior, not
-    silently trust the URL."""
+    cached response shape) must default to dropping the whole contact, not
+    silently trusting the name or the URL."""
     from gtm_backend.phase1.agents.lead_enrichment import _find_contact as _fc  # noqa
     # covered via the mocked-call tests above; this documents the default
     # explicitly for the missing-key case.
@@ -228,4 +232,102 @@ def test_verify_lead_identity_leaves_matching_name_untouched(mocker):
 def test_names_diverge_ignores_legal_suffix_and_substring_variants():
     assert _names_diverge("Acme HR", "Acme HR Inc.") is False
     assert _names_diverge("Acme HR", "Acme HR Technologies") is False
+
+
+# --- 6. Entity-collision fix (2026-09-05, ICP #62, "Bloomberry") ------------
+#
+# lead_enrichment's contact search (like Agent 04's signal search and Agent
+# 08's competitor search, both already fixed) queried LinkedIn by bare
+# company name only. Confirmed live: a "Bloomberry" search surfaced the
+# real, verifiable LinkedIn profile of the founder of a DIFFERENT, unrelated
+# company also named Bloomberry, and the LLM marked it "high" confidence
+# because his profile genuinely does say "Bloomberry" — just the wrong one.
+# Two layers now guard against this: (1) a deterministic pre-filter drops
+# any snippet whose own text names a different company outright, and (2) a
+# non-"high" match_confidence now drops the WHOLE contact, not just the URL.
+
+def test_affiliation_mismatch_detects_explicit_different_company():
+    # The exact real text stored for the wrong "Khloe Amante" stakeholder.
+    assert _affiliation_mismatch("Khloe Amante - Manager at Mitek Systems", "Bloomberry") is True
+
+
+def test_affiliation_mismatch_allows_matching_company():
+    assert _affiliation_mismatch("Sadok Hasan - Founder at Bloomberry", "Bloomberry") is False
+
+
+def test_affiliation_mismatch_inconclusive_when_no_affiliation_stated():
+    # No "at <Company>" language at all -- left alone, not rejected.
+    assert _affiliation_mismatch("Sadok Hasan - Head of Growth", "Bloomberry") is False
+
+
+def test_affiliation_mismatch_ignores_legal_suffix_differences():
+    assert _affiliation_mismatch("Jane Doe - CEO at Acme HR Inc.", "Acme HR") is False
+
+
+def test_find_contact_drops_snippet_naming_a_different_company(mocker):
+    """The pre-filter alone should already exclude the wrong-company snippet
+    before any LLM call happens — confirmed by chat_json never being
+    invoked at all when it's the only snippet."""
+    mocker.patch(
+        "gtm_backend.phase1.agents.lead_enrichment.hunter.find_emails", return_value=[]
+    )
+    mocker.patch(
+        "gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin",
+        return_value=[{
+            "title": "Khloe Amante - Manager at Mitek Systems",
+            "link": "https://ph.linkedin.com/in/khloe-amante",
+            "snippet": "Manager at Mitek Systems",
+        }],
+    )
+    llm_mock = mocker.patch("gtm_backend.phase1.agents.lead_enrichment.llm.chat_json")
+
+    result = _find_contact("Bloomberry", ["Founder", "CEO"], "bloomberry.com", icp_id=62)
+
+    assert result is None
+    llm_mock.assert_not_called()
+
+
+def test_find_contact_passes_domain_to_search_linkedin(mocker):
+    mocker.patch(
+        "gtm_backend.phase1.agents.lead_enrichment.hunter.find_emails", return_value=[]
+    )
+    search_mock = mocker.patch(
+        "gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin", return_value=[],
+    )
+    _find_contact("Bloomberry", ["Founder"], "bloomberry.com", icp_id=62)
+    search_mock.assert_called_once_with("Bloomberry", ["Founder"], domain="bloomberry.com")
+
+
+def test_find_contact_drops_contact_when_llm_correctly_flags_low_confidence(mocker):
+    """The harder case the pre-filter can't catch: the snippet genuinely
+    says the search company's bare name (Sadok Hasan's real profile really
+    does say "Bloomberry"), just referring to a different real company. The
+    LLM's own entity check is what has to catch this one, given
+    company_context; confirms the whole contact is dropped, not just kept
+    with a blank URL."""
+    mocker.patch(
+        "gtm_backend.phase1.agents.lead_enrichment.hunter.find_emails", return_value=[]
+    )
+    mocker.patch(
+        "gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin",
+        return_value=[{
+            "title": "Sadok Hasan - Head of Growth | Bloomberry",
+            "link": "https://linkedin.com/in/sadokhasan",
+            "snippet": "Head of Growth. Bloomberry. San Francisco Bay Area.",
+        }],
+    )
+    mocker.patch(
+        "gtm_backend.phase1.agents.lead_enrichment.llm.chat_json",
+        return_value={
+            "contact_name": "Sadok Hasan",
+            "contact_title": "Head of Growth",
+            "contact_linkedin_url": "https://linkedin.com/in/sadokhasan",
+            "match_confidence": "low",
+        },
+    )
+    result = _find_contact(
+        "Bloomberry", ["Founder"], "bloomberry.com",
+        company_context="B2B sales intelligence", icp_id=62,
+    )
+    assert result is None
     assert _names_diverge("Top 100 VARs 2024", "Netatwork") is True

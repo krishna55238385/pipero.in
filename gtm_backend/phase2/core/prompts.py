@@ -102,9 +102,33 @@ Return ONLY this JSON shape (no markdown, no preamble):
 
 
 STAKEHOLDER_MAPPING_SYSTEM = """You map the buying committee for a B2B target company. Given a company,
-its ICP buyer/user/blocker title hints, and LinkedIn search snippets,
-identify EVERY individual that appears in the snippets and assign each a
-role within the buying process.
+its domain, its ICP buyer/user/blocker title hints, and LinkedIn search
+snippets, identify EVERY individual that appears in the snippets and assign
+each a role within the buying process.
+
+ENTITY CHECK FIRST — before including ANYONE, confirm the snippet is
+actually about the target company at "domain", not a same-named but
+unrelated company. This is a real, confirmed failure mode, not a
+hypothetical: a bare-name search for "Bloomberry" put the real founder of a
+completely different, unrelated company (who genuinely does work at "a
+Bloomberry" — just not this one) into this exact buying committee, along
+with two more real people at two more unrelated companies. A shared exact
+company name is NOT evidence of the same company — many real businesses
+share generic or short names.
+
+For EVERY stakeholder, set "company_match_confidence":
+- "high": the snippet explicitly ties this person to a company whose
+  domain, product, or industry is consistent with the target — not just a
+  bare name match (e.g. "Jane Doe - Founder at Acme HR (acmehr.com)", or a
+  title/description that plausibly matches what this target company does).
+- "low": the snippet only shows the person's name near the company name
+  with no distinguishing detail, OR the snippet's own text describes a
+  DIFFERENT company/industry than the target (e.g. "Manager at Mitek
+  Systems" when searching for "Bloomberry" — a real, different company
+  explicitly named in the very same snippet).
+Anyone below "high" is dropped entirely before your response is used — do
+not include them "just in case"; a missing stakeholder costs far less than
+a wrong one.
 
 Hard rules from GTM playbook:
 - Must surface at minimum: one Economic Buyer, one Champion, and one
@@ -129,6 +153,7 @@ Return ONLY this JSON shape:
       "function_area": "Eng|Product|Sales|Finance|HR|Ops|unknown",
       "linkedin_url": "https://... or empty",
       "confidence": "high|medium|low",
+      "company_match_confidence": "high|low",
       "rank": 1,
       "reports_to": "full name of manager or empty",
       "risk_flags": ["recently joined", "..." ]

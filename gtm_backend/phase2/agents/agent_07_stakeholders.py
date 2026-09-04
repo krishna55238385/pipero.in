@@ -14,6 +14,7 @@ Business rules enforced (from architecture PDF):
 - Never selects the Blocker as the entry point.
 """
 import json
+import re
 
 from gtm_backend.phase2.connectors import openai as llm
 from gtm_backend.phase2.connectors import serpapi
@@ -27,6 +28,29 @@ from gtm_backend.phase2.core.schemas import Stakeholder, StakeholderMap
 
 
 _MAX_LINKEDIN_SNIPPETS = 12
+
+# Deterministic pre-filter, same fix as lead_enrichment.py's _find_contact
+# (see there for the incident this closes): drops a LinkedIn snippet whose
+# own text explicitly states an affiliation with a company sharing none of
+# the target company's name tokens, before it ever reaches the LLM.
+_AFFILIATION_RE = re.compile(r"\bat\s+([A-Za-z0-9&.,'\-‑ ]{2,60})", re.I)
+_NAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_NAME_STOPWORDS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company", "the", "group"}
+
+
+def _name_tokens(text: str) -> set[str]:
+    return {t for t in _NAME_TOKEN_RE.findall(text.lower()) if t not in _NAME_STOPWORDS and len(t) > 1}
+
+
+def _affiliation_mismatch(text: str, company_name: str) -> bool:
+    match = _AFFILIATION_RE.search(text or "")
+    if not match:
+        return False
+    mentioned = _name_tokens(match.group(1))
+    target = _name_tokens(company_name)
+    if not mentioned or not target:
+        return False
+    return not (mentioned & target)
 
 
 def map_stakeholders(icp_id: int | None = None, limit: int | None = None) -> dict:
@@ -93,14 +117,29 @@ def map_stakeholders(icp_id: int | None = None, limit: int | None = None) -> dic
 
 def _build_one(lead: dict, icp: dict | None) -> StakeholderMap | None:
     company_name = lead.get("company_name") or "?"
+    domain = lead.get("company_domain")
     role_hints = _collect_role_hints(icp)
     try:
         snippets = serpapi.search_linkedin_people(
-            company_name, role_keywords=role_hints, num=_MAX_LINKEDIN_SNIPPETS
+            company_name, role_keywords=role_hints, num=_MAX_LINKEDIN_SNIPPETS, domain=domain,
         )
     except Exception as exc:
         print(f"  [Agent 07] linkedin search failed for {company_name}: {exc}")
         snippets = []
+
+    # Fast, free, deterministic pre-filter before spending an LLM call: drop
+    # any snippet that explicitly states the person's affiliation is with a
+    # DIFFERENT company than the one being searched for. Found live
+    # 2026-09-05, ICP #62: real people at Donorbox and Formulytic became
+    # this lead's stakeholders this way. A snippet with no explicit
+    # affiliation stated is left alone (inconclusive) — the LLM's own entity
+    # check (STAKEHOLDER_MAPPING_SYSTEM) is what catches the harder case
+    # where the snippet genuinely names the search company, just referring
+    # to a different real company by that same name.
+    snippets = [
+        s for s in snippets
+        if not _affiliation_mismatch(f"{s.get('title') or ''} {s.get('snippet') or ''}", company_name)
+    ]
 
     if snippets:
         compact = [{
@@ -110,6 +149,7 @@ def _build_one(lead: dict, icp: dict | None) -> StakeholderMap | None:
         } for s in snippets[:_MAX_LINKEDIN_SNIPPETS]]
         payload = json.dumps({
             "company_name": company_name,
+            "domain": domain,
             "buyer_titles": (icp or {}).get("buyer_titles") or [],
             "user_titles": (icp or {}).get("user_titles") or [],
             "blocker_titles": (icp or {}).get("blocker_titles") or [],
@@ -126,12 +166,13 @@ def _build_one(lead: dict, icp: dict | None) -> StakeholderMap | None:
         except Exception as exc:
             print(f"  [Agent 07] {company_name:<28} → LLM error: {exc}")
             return None
-        return _from_llm(lead, raw)
+        return _from_llm(lead, raw, require_company_match=True)
 
     # Free fallback: LinkedIn search unavailable (SerpAPI/Serper quota
     # exhausted) — read the company's OWN /team, /leadership, /people pages
-    # instead. Real names only; the prompt forbids inventing anyone.
-    domain = lead.get("company_domain")
+    # instead. Real names only; the prompt forbids inventing anyone. No
+    # entity-collision risk here (unlike the bare-name web search above) —
+    # this reads content straight off the resolved domain's own site.
     team_snippets = website.fetch_team_pages(domain) if domain else []
     if not team_snippets:
         print(f"  [Agent 07] {company_name:<28} → no linkedin snippets; no team page found")
@@ -163,12 +204,21 @@ def _build_one(lead: dict, icp: dict | None) -> StakeholderMap | None:
     return _from_llm(lead, raw)
 
 
-def _from_llm(lead: dict, raw: dict) -> StakeholderMap:
+def _from_llm(lead: dict, raw: dict, require_company_match: bool = False) -> StakeholderMap:
     raw_list = raw.get("stakeholders") if isinstance(raw.get("stakeholders"), list) else []
     stakeholders: list[Stakeholder] = []
     for idx, item in enumerate(raw_list):
         if not isinstance(item, dict):
             continue
+        # Identity-verification gate: on the LinkedIn-snippet path (the one
+        # exposed to entity collisions — see STAKEHOLDER_MAPPING_SYSTEM),
+        # drop anyone the LLM didn't mark "high" for company_match_confidence
+        # rather than including them unconfirmed. The website-team-page path
+        # has no such field (and no collision risk to gate) so it's exempt.
+        if require_company_match:
+            match_confidence = str(item.get("company_match_confidence") or "").strip().lower()
+            if match_confidence != "high":
+                continue
         stakeholders.append(Stakeholder(
             lead_id=lead["id"],
             full_name=str(item.get("full_name") or "").strip() or f"Unknown {idx + 1}",

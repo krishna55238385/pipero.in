@@ -211,9 +211,21 @@ def search_linkedin_people(
     company_name: str,
     role_keywords: list[str] | None = None,
     num: int = 10,
+    domain: str | None = None,
 ) -> list[dict]:
-    """Find LinkedIn profile snippets at a company, biased toward decision-makers."""
+    """Find LinkedIn profile snippets at a company, biased toward decision-makers.
+
+    ``domain`` (optional): same disambiguator already used elsewhere in this
+    file (Agent 08's competitor search) — a bare company name can collide
+    with an unrelated same-named company (confirmed live 2026-09-04, ICP #62:
+    "Bloomberry" surfaced real people at three different unrelated companies
+    also called Bloomberry). The domain rarely appears in a LinkedIn
+    snippet's own text, so this alone doesn't fully solve the collision —
+    the real gate is the identity-verification step in the caller
+    (agent_07_stakeholders.py).
+    """
     role_keywords = role_keywords or ["CEO", "Founder", "VP", "Director", "Head"]
     roles_clause = " OR ".join(f'"{role}"' for role in role_keywords)
-    query = f'site:linkedin.com/in "{company_name}" ({roles_clause})'
+    disambiguator = f' "{domain}"' if domain else ""
+    query = f'site:linkedin.com/in "{company_name}"{disambiguator} ({roles_clause})'
     return search(query, num=num)

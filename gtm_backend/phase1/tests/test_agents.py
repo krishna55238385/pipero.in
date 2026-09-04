@@ -458,6 +458,7 @@ def test_agent_03_finds_contact_and_verifies_email(sample_icp):
         "contact_name": "Priya Iyer",
         "contact_title": "CEO",
         "contact_linkedin_url": "https://linkedin.com/in/priya",
+        "match_confidence": "high",
     }
     with patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_icp", return_value=sample_icp), \
          patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_leads_for_enrichment", return_value=pending), \

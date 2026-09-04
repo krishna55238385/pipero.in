@@ -115,10 +115,21 @@ def _enrich_one(
         # contradicts that, don't silently overwrite it: drop the location
         # fields (the lead keeps its earlier value, blank or not) and flag
         # needs_review so a human resolves the conflict instead.
+        #
+        # This originally only covered city/state/country — confirmed live
+        # 2026-09-05 that it wasn't enough: company_address came back from
+        # the SAME contaminated snippet in the SAME LLM call (the literal
+        # Solaire Resort/Parañaque City HQ address of the Philippine resorts
+        # company sharing the "Bloomberry" name) and was written through
+        # untouched, since only city/state/country were in the discard set.
+        # An address is tied to a location the same way city/state/country
+        # are, so it's discarded on the same signal.
         new_country = company_updates.get("company_country")
         if expected_countries and new_country and _country_mismatch(new_country, expected_countries):
             conflicting = {
-                k: company_updates.pop(k) for k in ("company_city", "company_state", "company_country")
+                k: company_updates.pop(k) for k in (
+                    "company_city", "company_state", "company_country", "company_address",
+                )
                 if k in company_updates
             }
             print(
@@ -139,7 +150,10 @@ def _enrich_one(
     email = lead.get("contact_email")
     verified = bool(lead.get("verified"))
     if not contact_found:
-        contact = _find_contact(company_name, role_keywords, domain, icp_id=icp_id)
+        contact = _find_contact(
+            company_name, role_keywords, domain,
+            company_context=lead.get("company_industry"), icp_id=icp_id,
+        )
         contact_found = bool(contact and contact.get("contact_name"))
         if contact_found:
             email, bounce_status, verified = _find_email(contact["contact_name"], domain)
@@ -345,6 +359,35 @@ def _clean_value(value):
     return stripped if stripped.lower() not in _EMPTY_VALUES else None
 
 
+# Deterministic pre-filter for _find_contact (see its docstring/comment for
+# the incident this fixes): extracts an explicitly-stated "at <Company>"
+# affiliation from a LinkedIn search snippet and checks whether it shares
+# any token with the company actually being searched for.
+_AFFILIATION_RE = re.compile(r"\bat\s+([A-Za-z0-9&.,'\-‑ ]{2,60})", re.I)
+_NAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_NAME_STOPWORDS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company", "the", "group"}
+
+
+def _name_tokens(text: str) -> set[str]:
+    return {t for t in _NAME_TOKEN_RE.findall(text.lower()) if t not in _NAME_STOPWORDS and len(t) > 1}
+
+
+def _affiliation_mismatch(text: str, company_name: str) -> bool:
+    """True when a search snippet explicitly states an affiliation with a
+    company that shares none of the target company's name tokens. A snippet
+    with no explicit "at <Company>" language is left alone — inconclusive,
+    not a mismatch — since most real matches never phrase it that plainly.
+    """
+    match = _AFFILIATION_RE.search(text or "")
+    if not match:
+        return False
+    mentioned = _name_tokens(match.group(1))
+    target = _name_tokens(company_name)
+    if not mentioned or not target:
+        return False
+    return not (mentioned & target)
+
+
 def _hunter_contact(domain: str, role_keywords: list[str]) -> dict | None:
     """Reuse Hunter's already-cached domain-search results (free — same lookup
     ``_enrich_company`` already made for this domain) to see if a real,
@@ -370,21 +413,45 @@ def _hunter_contact(domain: str, role_keywords: list[str]) -> dict | None:
 
 
 def _find_contact(
-    company_name: str, role_keywords: list[str], domain: str, icp_id: int | None = None
+    company_name: str, role_keywords: list[str], domain: str,
+    company_context: str | None = None, icp_id: int | None = None,
 ) -> dict | None:
     hunter_contact = _hunter_contact(domain, role_keywords)
     if hunter_contact:
         return hunter_contact
 
     try:
-        snippets = serpapi.search_linkedin(company_name, role_keywords)
+        snippets = serpapi.search_linkedin(company_name, role_keywords, domain=domain)
     except Exception as exc:
         print(f"  [Lead Enrichment] linkedin search failed for {company_name}: {exc}")
         return None
     if not snippets:
         return None
+
+    # Fast, free, deterministic pre-filter before ever spending an LLM call:
+    # drop any snippet that explicitly states the person's affiliation is
+    # with a DIFFERENT company than the one being searched for (e.g. "Manager
+    # at Mitek Systems" when searching for "Bloomberry"). Found live
+    # 2026-09-05, ICP #62: this exact pattern let real people at unrelated
+    # companies (Donorbox, Formulytic) become this lead's stakeholders — the
+    # same class of bug affects the primary-contact search here. A snippet
+    # with NO explicit affiliation stated is left alone (inconclusive, not
+    # rejected) — this only catches the loud, unambiguous mismatches; the
+    # LLM's own entity check below (see CONTACT_EXTRACTION_SYSTEM) is what
+    # catches the harder case where the snippet genuinely does say the
+    # search company's name, just referring to a different real company by
+    # that same name.
+    snippets = [
+        s for s in snippets
+        if not _affiliation_mismatch(f"{s.get('title') or ''} {s.get('snippet') or ''}", company_name)
+    ]
+    if not snippets:
+        return None
+
     payload = json.dumps({
         "company_name": company_name,
+        "domain": domain,
+        "company_context": company_context,
         "preferred_titles": role_keywords,
         "linkedin_snippets": [
             {"title": s.get("title"), "link": s.get("link"), "snippet": s.get("snippet")}
@@ -403,16 +470,22 @@ def _find_contact(
         print(f"  [Lead Enrichment] LLM contact extraction failed: {exc}")
         return None
 
-    # LinkedIn accuracy (Task: Lead Identity Verification, item 4): only trust
-    # the LLM's contact_linkedin_url when it explicitly marked the name+company
-    # match as "high" confidence. A "low"-confidence match (or a timeout/error
-    # above, already handled by the except block returning None outright)
-    # still keeps whatever real contact_name/contact_title were found — losing
-    # a correct name because the LINK guess was shaky would throw out a good
-    # contact over a bad URL — but the URL itself is blanked rather than
-    # attaching a best-guess link that may point at the wrong person entirely.
+    # Identity verification gate: only trust a contact when the LLM
+    # explicitly marked the name+company match as "high" confidence.
+    #
+    # UPDATED 2026-09-05 (was: keep contact_name/contact_title, blank only
+    # contact_linkedin_url on non-"high"). That older behavior was found live
+    # to let a real person at a completely different, unrelated company
+    # (ICP #62's "Bloomberry" -> a different company's founder, real name and
+    # title, wrong employer) become this lead's primary contact whenever the
+    # LLM's confidence happened to land on "high" for the wrong reason (the
+    # snippet genuinely said the search company's bare name — just referring
+    # to a different real company by that name). Once confidence is anything
+    # other than "high", there's no reliable signal left to salvage even the
+    # name from — the whole contact is dropped rather than attached with an
+    # unconfirmed employer.
     if str(result.get("match_confidence") or "").strip().lower() != "high":
-        result["contact_linkedin_url"] = None
+        return None
     return result
 
 

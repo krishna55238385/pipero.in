@@ -77,6 +77,44 @@ def test_conflicting_country_discarded_and_flagged_not_silently_written():
     assert kwargs["raw_data"]["geography_confirmed_via"] == "homepage_check"
 
 
+def test_conflicting_address_also_discarded_not_just_location_fields():
+    """UPDATED 2026-09-05: confirmed live that this originally only guarded
+    city/state/country — company_address came back from the SAME
+    contaminated LLM response (the literal Solaire Resort/Parañaque City HQ
+    address of the Philippine resorts company sharing the "Bloomberry" name)
+    and was written straight through untouched, since address wasn't in the
+    discard set. It's tied to the same wrong location, so it's discarded on
+    the same signal now."""
+    lead = {
+        "id": 10554, "icp_id": 62, "company_name": "Bloomberry", "company_domain": "bloomberry.com",
+        "raw_data": {"needs_review": False},
+    }
+    company_from_llm = {
+        "company_city": "Parañaque City", "company_state": "Metro Manila", "company_country": "Philippines",
+        "company_address": "The Executive Offices, Solaire Resort Entertainment City, 1 Aseana Avenue, "
+                            "Entertainment City, Parañaque City, Metro Manila, Philippines",
+        "company_industry": "Gaming",
+    }
+    with patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_icp", return_value=_ICP_US_TARGET), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.get_leads_for_enrichment", return_value=[lead]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.website.fetch_text", return_value=""), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.hunter.domain_metadata", return_value={}), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_company_location", return_value=[]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.serpapi.search_linkedin", return_value=[]), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.llm.chat_json", return_value=company_from_llm), \
+         patch("gtm_backend.phase1.agents.lead_enrichment.supabase.update_lead") as updater:
+        enrich_leads(icp_id=62)
+
+    kwargs = updater.call_args.kwargs
+    assert "company_address" not in kwargs
+    assert "company_city" not in kwargs
+    assert "company_country" not in kwargs
+    assert kwargs.get("company_industry") == "Gaming"
+    assert kwargs["raw_data"]["geography_conflict_at_enrichment"]["company_address"].startswith(
+        "The Executive Offices, Solaire Resort"
+    )
+
+
 def test_matching_country_written_through_normally():
     """No conflict — enrichment's country matches the ICP's target geography,
     so it's written exactly as before this fix."""

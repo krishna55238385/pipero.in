@@ -82,6 +82,7 @@ _CONTACT_RESPONSE: dict[str, Any] = {
     "contact_name": "Priya Iyer",
     "contact_title": "CEO",
     "contact_linkedin_url": "https://linkedin.com/in/priya-iyer",
+    "match_confidence": "high",
 }
 
 _SIGNAL_RESPONSE: dict[str, Any] = {

@@ -446,12 +446,21 @@ def search_news(query: str, days: int = 90, num: int = 10) -> list[dict]:
     return data.get("news_results", []) or []
 
 
-def search_linkedin(company_name: str, role_keywords: list[str]) -> list[dict]:
+def search_linkedin(company_name: str, role_keywords: list[str], domain: str | None = None) -> list[dict]:
+    # Domain disambiguator — same fix already proven for lead_enrichment's
+    # location search and Agent 08's competitive intel: a bare company name
+    # can collide with an unrelated same-named company (confirmed live
+    # 2026-09-04, ICP #62: "Bloomberry" bare-name search surfaced the real
+    # founder of a DIFFERENT company also called Bloomberry as this lead's
+    # primary contact). The domain rarely appears in a LinkedIn snippet's own
+    # text, so this alone doesn't fully solve the collision — the real gate
+    # is the identity-verification step in the caller (lead_enrichment.py).
+    disambiguator = f' "{domain}"' if domain else ""
     if role_keywords:
         roles_clause = " OR ".join(f'"{role}"' for role in role_keywords)
-        query = f'site:linkedin.com/in "{company_name}" ({roles_clause})'
+        query = f'site:linkedin.com/in "{company_name}"{disambiguator} ({roles_clause})'
     else:
-        query = f'site:linkedin.com/in "{company_name}"'
+        query = f'site:linkedin.com/in "{company_name}"{disambiguator}'
     return search(query)
 
 

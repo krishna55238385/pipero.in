@@ -183,6 +183,16 @@ Map any headcount to a band (e.g. "~120 employees"->"51-200", "5,000 staff"->"10
 No stated headcount? Give your best estimate from description/maturity/funding/offices/knowledge — null only if truly impossible.
 
 OTHER: company_address (full HQ address or null), company_phone (or null), company_industry, company_linkedin_url (linkedin.com/company/... or null).
+For these four fields specifically, trust hunter_metadata or website_text
+FIRST — they're first-party evidence for this exact domain. Only pull a
+value from location_snippets/size_snippets when it's consistent with what
+website_text/hunter_metadata already say about the company (same industry/
+description); a bare company-name web search can surface an unrelated
+company that happens to share the name (confirmed live: a Philippine
+resorts company's HQ address leaked into a same-named but unrelated SaaS
+company's record this way). If a snippet's address/phone/LinkedIn contradicts
+or has no support from the domain's own website_text, leave that field null
+rather than guessing from the snippet alone.
 
 Return ONLY this JSON, no markdown:
 {"company_city":"string|null","company_state":"string|null","company_country":"string|null","company_address":"string|null","company_phone":"string|null","company_industry":"string|null","company_size":"band|null","company_size_is_estimate":true|false,"company_linkedin_url":"string|null"}"""
@@ -190,17 +200,34 @@ Return ONLY this JSON, no markdown:
 CONTACT_EXTRACTION_SYSTEM = """You extract the best decision-maker contact from LinkedIn search snippets about a company.
 Prefer Owner > CEO > Founder > President > VP > Director > Manager. Match the ICP buyer_titles when possible.
 
-MATCH CONFIDENCE — set match_confidence based on how sure you are that BOTH the person's name
-AND their company affiliation are correctly evidenced by the snippets, not just plausible:
-- "high": the snippet(s) for the chosen contact_linkedin_url clearly show both this person's
-  name AND this specific company together (e.g. "Jane Doe - Founder at Acme HR" in the
-  title/snippet of that exact result).
-- "low": the name/title look right but the company link isn't clearly confirmed by the
-  snippet text (e.g. a same-named person with an ambiguous or unstated employer, multiple
-  candidates with conflicting company signals, or the URL was guessed from a weak match).
-Default to "low" whenever the company affiliation isn't directly evidenced in that result's
-own text — this is what lets a downstream step decide whether to trust the LinkedIn URL at
-all, so never mark "high" just because the person's name/title alone look plausible.
+Input JSON includes "domain" and, when known, "company_context" (industry/
+what the company does) for the SPECIFIC company being searched for.
+
+ENTITY CHECK FIRST — before trusting ANY snippet, confirm it is actually
+about the target company at "domain", not a same-named but unrelated
+company. This is a real, confirmed failure mode, not a hypothetical: a bare
+company-name search for "Bloomberry" surfaced the genuine, verifiable
+LinkedIn profile of the founder of a completely different company that
+also happens to be named Bloomberry — his profile really does say
+"Bloomberry", just the wrong one. A shared exact name is NOT evidence of
+the same company, however confident the name match looks.
+
+MATCH CONFIDENCE — set match_confidence based on how sure you are that BOTH
+the person's name AND their company affiliation are correctly evidenced as
+THIS SPECIFIC company (domain/company_context), not just plausible:
+- "high": the snippet(s) for the chosen contact_linkedin_url clearly show
+  this person at a company whose stated details (domain mentioned directly,
+  OR industry/product described in the snippet matching company_context)
+  are consistent with the target — not just the bare company name.
+- "low": the name/title look right but nothing in the snippet ties them to
+  THIS company's actual domain/industry rather than just its name — e.g. a
+  same-named person with an ambiguous or unstated employer, a snippet that
+  describes a different industry/product than company_context, or the URL
+  was guessed from a weak match.
+Default to "low" whenever you cannot rule out that the snippet describes a
+different company of the same name — a downstream step drops the entire
+contact (not just the URL) on anything less than "high", so a false "high"
+is far more costly than a missed contact.
 
 Return JSON:
 {
