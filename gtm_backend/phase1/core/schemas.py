@@ -50,7 +50,7 @@ class Lead(BaseModel):
     company_state: str | None = None
     company_country: str | None = None
     company_industry: str | None = None
-    company_size: int | None = None
+    company_size: int | str | None = None
     company_linkedin_url: str | None = None
     contact_name: str | None = None
     contact_email: str | None = None
@@ -58,16 +58,45 @@ class Lead(BaseModel):
     contact_linkedin_url: str | None = None
     verified: bool = False
     bounce_status: str | None = None
+    # Task #5 — honest email verification confidence. "domain_verified": the
+    # disify.com MX/domain check passed (existing `verified` behavior,
+    # unchanged) but nothing confirms this specific person still works there.
+    # "person_confirmed": the contact's name was independently found on the
+    # company's own team/about page (lead_enrichment.py, reusing the same
+    # team-page fetch Agent 07 uses for stakeholder mapping). None when the
+    # email isn't verified at all — unchanged meaning from before this field
+    # existed, so older leads with verified=True and no tier read as
+    # "domain_verified" in the CRM (see gtm.ts's mapping), not as unverified.
+    email_verification_tier: str | None = None
+    # Task #5 — bounce feedback loop. Set True when Phase 3's actual send hit
+    # a hard bounce for this lead's email (see phase3/agents/agent_16_inbox.py
+    # record_hard_bounce) — the email looked good enough to send but proved
+    # wrong in practice, so it needs a human/re-enrichment pass rather than
+    # being silently retried or silently trusted on the next campaign.
+    needs_reverification: bool = False
     source: str = "serpapi"
     sources: list[str] = Field(default_factory=list)
     raw_data: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("company_size", mode="before")
     @classmethod
-    def _parse_company_size(cls, value: Any) -> int | None:
-        """Accept '51-200 employees', '200+', '~150', etc. Pick the largest int found."""
+    def _parse_company_size(cls, value: Any) -> int | str | None:
+        """Accept '51-200 employees', '200+', '~150', etc. Pick the largest int found.
+
+        The literal "Unknown" (Task #4 — Agent 02's firmographic-confidence
+        step) is preserved as-is rather than digit-parsed, so a lead whose
+        size genuinely couldn't be confirmed from real homepage evidence
+        displays as "Unknown" in the CRM instead of silently going blank —
+        ProspectLeadDetail.tsx's Field() component hides null/empty values
+        but renders any non-empty string plainly, "Unknown" included, with
+        no frontend changes needed. This is a distinct, intentional signal
+        from an ordinary unparseable string (still None below, unchanged) —
+        only the exact sentinel is preserved.
+        """
         if value is None or value == "":
             return None
+        if isinstance(value, str) and value.strip().lower() == "unknown":
+            return "Unknown"
         if isinstance(value, int):
             return value
         if isinstance(value, float):
@@ -107,6 +136,12 @@ class BuyingSignal(BaseModel):
     signal_source_url: str | None = None
     buying_intent: str  # high | low | na
     detected_at: datetime = Field(default_factory=_utc_now)
+    # The event's OWN real-world date (when a search provider supplied one),
+    # distinct from detected_at above which is purely insert time — a signal
+    # detected today about an event from 2015 has detected_at=today,
+    # signal_date=2015. None when the provider gave no date for this
+    # candidate (e.g. a static company page with no publish date).
+    signal_date: datetime | None = None
 
 
 class SocialListeningLead(BaseModel):

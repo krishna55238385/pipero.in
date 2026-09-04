@@ -126,6 +126,15 @@ def build_meeting_pipeline_commands() -> list[list[str]]:
     ]
 
 
+def build_data_refresh_commands() -> list[list[str]]:
+    """Task #6: Agent 37 (Data Refresh) — a single step, no limit set (refresh
+    everything due, same as a manual `refresh-data` CLI call with no --limit).
+    Its own internal 90-day staleness + bounce checks (agent_37_data_refresh.py)
+    already make a daily call cheap — most leads examined on any given day
+    were already refreshed recently and get skipped without a network call."""
+    return [["-m", "gtm_backend.phase4", "refresh-data"]]
+
+
 def build_schedule_commands(
     icp_id: int | None,
     leads_per_day: int,

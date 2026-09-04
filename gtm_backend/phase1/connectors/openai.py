@@ -1,7 +1,7 @@
 import json
 import os
 
-from openai import OpenAI, RateLimitError
+from openai import BadRequestError, OpenAI, RateLimitError
 
 from gtm_backend.phase1.core.config import get_settings
 from gtm_backend.phase1.core.retries import retry_on_transient
@@ -76,6 +76,42 @@ def log_usage(
         )
 
 
+def _log_bad_request(exc: BadRequestError, model: str) -> None:
+    """Surface Groq's FULL error body on a 400, not just str(exc) (which is
+    often just "Error code: 400"). For json_validate_failed specifically,
+    Groq's body carries a `failed_generation` field showing what the model
+    actually produced before validation rejected it — critical for telling
+    "model wrote garbage" apart from "model wrote nothing" (the latter points
+    at reasoning tokens eating the whole output budget on this reasoning
+    model, not a schema/prompt problem)."""
+    try:
+        body = exc.response.json()
+    except Exception:
+        body = getattr(exc, "body", None) or str(exc)
+    print(f"  [Groq] ✗ 400 on model={model}: {body}")
+
+
+def _groq_create(client, model: str, messages: list, temperature: float):
+    kwargs = {}
+    if "gpt-oss" in model:
+        # gpt-oss models spend part of the output budget on hidden reasoning
+        # before the final JSON. Left at Groq's default this can consume the
+        # entire completion budget on a large batched response, leaving
+        # nothing for the actual answer — surfacing as a 400
+        # json_validate_failed with an EMPTY failed_generation (validation
+        # had zero content to validate). Capping reasoning effort leaves more
+        # of the budget for the structured output.
+        kwargs["reasoning_effort"] = "low"
+    try:
+        return client.chat.completions.create(
+            model=model, messages=messages, temperature=temperature,
+            response_format={"type": "json_object"}, **kwargs,
+        )
+    except BadRequestError as exc:
+        _log_bad_request(exc, model)
+        raise
+
+
 def _chat_completion_with_fallback(model: str, system: str, user: str, temperature: float):
     """Call Groq, switching to the fallback key on a daily-quota rate limit.
 
@@ -102,24 +138,15 @@ def _chat_completion_with_fallback(model: str, system: str, user: str, temperatu
             # platform default -> per-item skip (handled by the caller).
             print(f"  [OpenRouter] org-supplied key/model failed ({exc}) — falling back to platform default.")
     if _use_fallback and _client_fallback is not None:
-        return _client_fallback.chat.completions.create(
-            model=model, messages=messages, temperature=temperature,
-            response_format={"type": "json_object"},
-        )
+        return _groq_create(_client_fallback, model, messages, temperature)
     try:
-        return _client.chat.completions.create(
-            model=model, messages=messages, temperature=temperature,
-            response_format={"type": "json_object"},
-        )
+        return _groq_create(_client, model, messages, temperature)
     except RateLimitError:
         if _client_fallback is None:
             raise
         print("  [Groq] ⚠ primary key rate-limited (daily quota) — switching to fallback key.")
         _use_fallback = True
-        return _client_fallback.chat.completions.create(
-            model=model, messages=messages, temperature=temperature,
-            response_format={"type": "json_object"},
-        )
+        return _groq_create(_client_fallback, model, messages, temperature)
 
 
 @retry_on_transient(max_attempts=2)

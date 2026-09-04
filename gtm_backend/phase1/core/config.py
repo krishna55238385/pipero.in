@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # exhausted). Unset = no fallback, same behaviour as before (SerpQuotaError
     # propagates and callers use their existing LLM-knowledge fallback, if any).
     serper_api_key: str | None = None
+    # Task #7 — second fallback / third independent search provider, tried
+    # when BOTH SerpAPI and Serper.dev are exhausted (the exact failure mode
+    # that stalled lead generation entirely during a live demo — two
+    # providers hit zero credits at the same time with nothing behind them).
+    # Unset = skipped in the fallback chain, same graceful-degradation
+    # pattern as an unset serper_api_key above.
+    tavily_api_key: str | None = None
     database_url: str
     supabase_url: str
     supabase_key: str

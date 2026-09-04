@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from gtm_backend.phase1.agents.agent_01_icp import define_icp
-from gtm_backend.phase1.agents.agent_02_leads import generate_leads
+from gtm_backend.phase1.agents.agent_02_leads import generate_leads, verify_lead_identity
 from gtm_backend.phase1.agents.lead_enrichment import enrich_leads
 from gtm_backend.phase1.agents.agent_04_signals import detect_signals
 from gtm_backend.phase1.agents.agent_03_icp_scoring import score_leads
@@ -143,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         generate_leads(icp_id, args.max_leads)
         enrich_leads(icp_id)
         detect_signals(icp_id)
+        verify_lead_identity(icp_id)
         score_leads(mode="icp_id", icp_id=icp_id)
         _print_buying_intent_summary(icp_id)
         elapsed = time.perf_counter() - start

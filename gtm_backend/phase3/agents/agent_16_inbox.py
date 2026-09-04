@@ -24,6 +24,8 @@ Business rules (from AI-GTM-Agency-Business-Architecture-A4.pdf, Agent 16):
   match any known contact_email, the reply is reported as unmatched rather
   than guessed at.
 """
+import re
+
 from gtm_backend.phase3.connectors import gmail_oauth
 from gtm_backend.phase3.connectors import openai as llm
 from gtm_backend.phase3.connectors import supabase
@@ -40,6 +42,86 @@ _VALID_CONFIDENCE = {"low", "medium", "high"}
 # unknown = auto-reply/bounce/ambiguous — needs a human to triage before any
 # draft is worth generating, so Agent 17 skips it too.
 _NO_DRAFT_NEEDED = {"not_interested", "unknown"}
+
+
+# Task #5 — bounce feedback loop. A real hard bounce arrives asynchronously
+# as a Delivery Status Notification (DSN) from the receiving mail system, not
+# as a synchronous error from Agent 14's own send call — Gmail's send API
+# returns 200 even for a mailbox that doesn't exist; the actual failure comes
+# back later as an inbound message, which is why this lives in the inbox
+# poller rather than gmail_oauth.send_html_email itself.
+_BOUNCE_SENDER_RE = re.compile(
+    r"mailer-daemon|postmaster|mail delivery subsystem|mail delivery system", re.IGNORECASE
+)
+_BOUNCE_SUBJECT_RE = re.compile(
+    r"delivery status notification|undelivered mail|mail delivery failed|"
+    r"delivery has failed|returned to sender|failure notice",
+    re.IGNORECASE,
+)
+# System addresses that show up IN THE BODY of a DSN (the reporting MTA's own
+# postmaster/mailer-daemon, quoted headers, etc.) — never the actual failed
+# recipient, so excluded when picking which extracted address to act on.
+_BOUNCE_SYSTEM_ADDRESS_RE = re.compile(r"mailer-daemon|postmaster|no-?reply", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+
+def _extract_bounce_recipient(from_email: str, subject: str, body_text: str) -> str | None:
+    """Returns the ORIGINALLY-FAILED recipient's email address if this
+    message looks like a hard-bounce DSN, else None.
+
+    Two-part check, both required: (1) the message itself looks like a DSN
+    (sender or subject matches the well-known mailer-daemon/postmaster/
+    "Delivery Status Notification" shape — this is a deterministic pattern,
+    not something worth an LLM call to judge), and (2) the body actually
+    contains a recoverable email address to act on. Best-effort: DSN body
+    formats vary a lot across mail systems, so this takes the first email
+    address in the body that isn't itself a system address — not a fully
+    robust MIME/DSN parser, but sufficient to close the loop for the common
+    case without a heavier dependency.
+    """
+    looks_like_bounce = bool(
+        _BOUNCE_SENDER_RE.search(from_email or "") or _BOUNCE_SUBJECT_RE.search(subject or "")
+    )
+    if not looks_like_bounce:
+        return None
+    for match in _EMAIL_RE.finditer(body_text or ""):
+        candidate = match.group(0)
+        if _BOUNCE_SYSTEM_ADDRESS_RE.search(candidate):
+            continue
+        return candidate.lower()
+    return None
+
+
+def record_hard_bounce(email: str) -> bool:
+    """Write a hard-bounce signal back to the lead this email belongs to.
+
+    Downgrades the honest-confidence work from Task #5 rather than leaving a
+    stale "Verified"/"domain_verified"/"person_confirmed" badge on an email
+    that just proved wrong in practice: verified is cleared, bounce_status is
+    set to the value Agent 14's own pre-send gate already checks for and
+    skips (_SKIP_BOUNCE_STATUSES), email_verification_tier is cleared (no
+    badge should show at all for a known-bad address), and
+    needs_reverification is set so this lead surfaces for a human/re-
+    enrichment pass instead of being silently retried or silently trusted on
+    the next campaign.
+
+    Returns True iff a lead with this contact_email was found and updated —
+    same "never invent which lead a signal belongs to" discipline
+    classify_reply already follows for replies.
+    """
+    lead = supabase.get_lead_by_email(email)
+    if lead is None:
+        print(f"  [Agent 16] hard bounce for {email:<32} → unmatched (no lead with this contact_email)")
+        return False
+    supabase.update_lead_raw(
+        lead["id"],
+        verified=False,
+        bounce_status="bounced",
+        email_verification_tier=None,
+        needs_reverification=True,
+    )
+    print(f"  [Agent 16] hard bounce for {email:<32} → {lead.get('company_name','?')} downgraded, flagged for reverification")
+    return True
 
 
 def classify_reply(
@@ -167,9 +249,22 @@ def poll_and_classify_inbox(days_back: int = 3, max_results: int = 25) -> dict:
     messages = gmail_oauth.list_inbox_replies(days_back=days_back, max_results=max_results)
     print(f"  → {len(messages)} inbox message(s) in window")
 
-    counts = {"classified": 0, "already_classified": 0, "unmatched": 0, "skipped_no_body": 0}
+    counts = {"classified": 0, "already_classified": 0, "unmatched": 0, "skipped_no_body": 0, "hard_bounces": 0}
     results = []
     for msg in messages:
+        bounced_email = _extract_bounce_recipient(
+            msg.get("from_email", ""), msg.get("subject", ""), msg.get("body_text", "")
+        )
+        if bounced_email:
+            # A DSN is an actionable delivery-failure signal, not an
+            # ambiguous reply — handled here instead of falling through to
+            # classify_reply, which would otherwise just bucket it as the
+            # generic "unknown" (auto-reply/bounce-looking/ambiguous) type
+            # and lose the specific recipient-downgrade action.
+            matched = record_hard_bounce(bounced_email)
+            counts["hard_bounces"] += 1
+            results.append({"status": "hard_bounce", "email": bounced_email, "matched": matched})
+            continue
         if not msg.get("body_text"):
             counts["skipped_no_body"] += 1
             continue
@@ -186,6 +281,7 @@ def poll_and_classify_inbox(days_back: int = 3, max_results: int = 25) -> dict:
     print(
         f"  ✓ Agent 16 poll complete: {counts['classified']} classified · "
         f"{counts['already_classified']} already done · {counts['unmatched']} unmatched · "
+        f"{counts['hard_bounces']} hard bounce(s) · "
         f"{counts['skipped_no_body']} skipped (no readable body)"
     )
     return {"polled": len(messages), "counts": counts, "results": results}

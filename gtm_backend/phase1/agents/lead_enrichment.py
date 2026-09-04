@@ -15,6 +15,7 @@ incorrect number. No functional change, filename only.
 import json
 import re
 
+from gtm_backend.phase1.agents.agent_02_leads import _country_mismatch, _expected_country_codes
 from gtm_backend.phase1.connectors import disify
 from gtm_backend.phase1.connectors import hunter
 from gtm_backend.phase1.connectors import openai as llm
@@ -54,13 +55,18 @@ def enrich_leads(icp_id: int | None = None, limit: int = 50) -> dict:
 
     icp_filter = supabase.get_icp(icp_id) if icp_id else None
     role_keywords = (icp_filter or {}).get("buyer_titles") or ["CEO", "Founder", "Head"]
+    # Same target-country resolution Agent 02 already enforced when this
+    # lead was generated — reused here so enrichment's own location fill
+    # can be checked against it instead of silently overwriting a value
+    # Agent 02's geography check already vetted (see _enrich_one below).
+    expected_countries = _expected_country_codes((icp_filter or {}).get("geography") or [])
     leads = supabase.get_leads_for_enrichment(limit=limit, icp_id=icp_id)
     print(f"  → {len(leads)} leads to enrich · target titles: {role_keywords[:3]}")
 
     enriched = 0
     skipped = 0
     for lead in leads:
-        success = _enrich_one(lead, role_keywords, icp_id=icp_id)
+        success = _enrich_one(lead, role_keywords, icp_id=icp_id, expected_countries=expected_countries)
         if success:
             enriched += 1
         else:
@@ -79,7 +85,10 @@ def enrich_leads(icp_id: int | None = None, limit: int = 50) -> dict:
     return summary
 
 
-def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None) -> bool:
+def _enrich_one(
+    lead: dict, role_keywords: list[str], icp_id: int | None = None,
+    expected_countries: set[str] | None = None,
+) -> bool:
     company_name = lead.get("company_name")
     domain = lead.get("company_domain")
     if not company_name or not domain:
@@ -95,7 +104,34 @@ def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None)
     if missing_company:
         company = _enrich_company(company_name, domain, missing_company, icp_id=icp_id)
         # Belt-and-braces: never overwrite a field the lead already had.
-        updates.update({k: v for k, v in company.items() if not _clean_value(lead.get(k))})
+        company_updates = {k: v for k, v in company.items() if not _clean_value(lead.get(k))}
+
+        # Found live 2026-09-03 (ICP #62, Jobraux): this step's location
+        # search is by company NAME, which can collide with an unrelated,
+        # more prominent same-named company (a "Bloomberry" SaaS company's
+        # domain got a Philippine casino operator's address written onto
+        # it). Agent 02 already vetted this lead against the ICP's target
+        # geography at generation time — if the freshly-found country now
+        # contradicts that, don't silently overwrite it: drop the location
+        # fields (the lead keeps its earlier value, blank or not) and flag
+        # needs_review so a human resolves the conflict instead.
+        new_country = company_updates.get("company_country")
+        if expected_countries and new_country and _country_mismatch(new_country, expected_countries):
+            conflicting = {
+                k: company_updates.pop(k) for k in ("company_city", "company_state", "company_country")
+                if k in company_updates
+            }
+            print(
+                f"  [Lead Enrichment] {company_name:<28} ⚠ enrichment found "
+                f"{conflicting.get('company_country')!r} which conflicts with this "
+                f"ICP's target geography — discarding, flagging needs_review"
+            )
+            raw_data = dict(lead.get("raw_data") or {})
+            raw_data["needs_review"] = True
+            raw_data["geography_conflict_at_enrichment"] = conflicting
+            updates["raw_data"] = raw_data
+
+        updates.update(company_updates)
 
     # 2) Decision-maker contact + verified email. Skip if already on file so a
     #    backfill re-run (lead has email but no location/size) stays cheap.
@@ -107,6 +143,7 @@ def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None)
         contact_found = bool(contact and contact.get("contact_name"))
         if contact_found:
             email, bounce_status, verified = _find_email(contact["contact_name"], domain)
+            tier = _email_verification_tier(verified, contact["contact_name"], domain)
             updates.update(
                 contact_name=contact.get("contact_name"),
                 contact_title=contact.get("contact_title"),
@@ -114,6 +151,7 @@ def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None)
                 contact_email=email,
                 verified=verified,
                 bounce_status=bounce_status,
+                email_verification_tier=tier,
             )
 
     if not updates:
@@ -133,6 +171,50 @@ def _enrich_one(lead: dict, role_keywords: list[str], icp_id: int | None = None)
     else:
         print(f"  [Lead Enrichment] {company_name:<28} ⊙ company details only (+{n_company} fields)")
     return True
+
+
+def _name_on_team_page(full_name: str, domain: str) -> bool:
+    """True when full_name is independently corroborated by the company's own
+    team/about page — a real presence signal distinct from a disify domain
+    check, which only confirms the MAILBOX'S DOMAIN accepts mail, never that
+    this specific person actually works there.
+
+    Deliberately a plain substring match (both first AND last name tokens
+    must appear somewhere in the fetched page text) rather than an LLM call —
+    Agent 07 already does the heavier LLM-based team-page reasoning for its
+    own stakeholder-mapping purpose; this check only needs a cheap, bounded-
+    cost yes/no signal for THIS contact specifically, not a full roster
+    extraction. False on any fetch failure or a name too short to check
+    meaningfully (avoids a single-token name matching common page filler).
+    """
+    parts = [p for p in re.split(r"\s+", full_name.strip()) if len(p) > 1]
+    if len(parts) < 2:
+        return False
+    try:
+        pages = website.fetch_team_pages(domain)
+    except Exception:
+        return False
+    if not pages:
+        return False
+    combined = " ".join(p.get("text", "") for p in pages).lower()
+    return all(part.lower() in combined for part in parts)
+
+
+def _email_verification_tier(verified: bool, full_name: str, domain: str) -> str | None:
+    """Task #5 — the honest confidence tier behind the CRM's "Verified" badge.
+
+    "domain_verified": the email passed disify's MX/domain-record check
+    (verified=True) but nothing confirms this specific person still works
+    there. "person_confirmed": the same check passed AND the contact's name
+    was independently found on the company's own team/about page — a real,
+    if imperfect, presence signal. None when the email isn't verified at all
+    (unchanged meaning — no badge shown either way).
+    """
+    if not verified:
+        return None
+    if _name_on_team_page(full_name, domain):
+        return "person_confirmed"
+    return "domain_verified"
 
 
 def _enrich_company(
@@ -158,7 +240,7 @@ def _enrich_company(
     # the homepage rarely states outright.
     needs_location = any(f in missing_fields for f in ("company_city", "company_state", "company_country"))
     needs_size = "company_size" in missing_fields
-    location_snippets = _location_snippets(company_name) if needs_location else []
+    location_snippets = _location_snippets(company_name, domain) if needs_location else []
     size_snippets = _size_snippets(company_name) if needs_size else []
 
     payload = json.dumps({
@@ -197,9 +279,9 @@ def _enrich_company(
     return cleaned
 
 
-def _location_snippets(company_name: str) -> list[dict]:
+def _location_snippets(company_name: str, domain: str | None = None) -> list[dict]:
     try:
-        results = serpapi.search_company_location(company_name)
+        results = serpapi.search_company_location(company_name, domain=domain)
     except Exception:
         return []
     return [
@@ -310,7 +392,7 @@ def _find_contact(
         ],
     })
     try:
-        return llm.chat_json(
+        result = llm.chat_json(
             CONTACT_EXTRACTION_SYSTEM,
             payload,
             agent="lead_enrichment",
@@ -320,6 +402,18 @@ def _find_contact(
     except Exception as exc:
         print(f"  [Lead Enrichment] LLM contact extraction failed: {exc}")
         return None
+
+    # LinkedIn accuracy (Task: Lead Identity Verification, item 4): only trust
+    # the LLM's contact_linkedin_url when it explicitly marked the name+company
+    # match as "high" confidence. A "low"-confidence match (or a timeout/error
+    # above, already handled by the except block returning None outright)
+    # still keeps whatever real contact_name/contact_title were found — losing
+    # a correct name because the LINK guess was shaky would throw out a good
+    # contact over a bad URL — but the URL itself is blanked rather than
+    # attaching a best-guess link that may point at the wrong person entirely.
+    if str(result.get("match_confidence") or "").strip().lower() != "high":
+        result["contact_linkedin_url"] = None
+    return result
 
 
 def _find_email(full_name: str, domain: str) -> tuple[str | None, str | None, bool]:

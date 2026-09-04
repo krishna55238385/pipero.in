@@ -72,7 +72,7 @@ def _build_one(lead: dict) -> AccountBrief | None:
         return None
 
     web_snippets = _gather_web_snippets(company_name, domain)
-    news_items = _gather_news(company_name)
+    news_items = _gather_news(company_name, domain)
 
     # Free fallback #1: when search returns nothing (e.g. the SerpAPI quota is
     # exhausted and every query 429s), read the company's OWN website directly.
@@ -184,9 +184,16 @@ def _gather_web_snippets(company_name: str, domain: str) -> list[dict]:
     return snippets
 
 
-def _gather_news(company_name: str) -> list[dict]:
+def _gather_news(company_name: str, domain: str | None = None) -> list[dict]:
+    # Anchored to the resolved domain — same fix already proven in
+    # lead_enrichment.py's search_company_location() and Agent 04's signal
+    # search (found live 2026-09-03, ICP #62, Jobraux: a bare-name news
+    # search for "Bloomberry" returned an unrelated same-named company's
+    # content almost exclusively). Applied unconditionally in code so it
+    # can't be silently skipped.
+    disambiguator = f' "{domain}"' if domain else ""
     query = (
-        f'"{company_name}" (funding OR raised OR hired OR layoffs OR '
+        f'"{company_name}"{disambiguator} (funding OR raised OR hired OR layoffs OR '
         f'launched OR acquired OR partnership)'
     )
     try:

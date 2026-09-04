@@ -50,6 +50,16 @@ _ga4_last_run_date: str = ""
 _REPLY_MEETING_INTERVAL_SECONDS = 10 * 60
 _reply_meeting_last_run_at: float = 0.0
 
+# Agent 37 (Data Refresh, Task #6) — once daily is enough. Its own internal
+# 90-day staleness + bounce-status checks already prevent redundant
+# re-verification of fresh leads; running daily just means a lead that goes
+# stale/bounces gets caught promptly instead of needing someone to notice
+# and trigger `refresh-data` manually. Interval-based like the reply/meeting
+# tick above (not a UTC-date guard) so it survives a service restart
+# mid-day without silently skipping that day's run until midnight UTC.
+_DATA_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
+_data_refresh_last_run_at: float = 0.0
+
 
 async def run_forever() -> None:
     """The background loop: ping the CRM worker + tick schedules every 60s."""
@@ -75,6 +85,10 @@ async def run_forever() -> None:
             await asyncio.to_thread(tick_reply_and_meeting_pipelines)
         except Exception as exc:  # noqa: BLE001 - never crash the loop
             print(f"[scheduler] reply/meeting pipeline tick crashed: {exc}")
+        try:
+            await asyncio.to_thread(tick_data_refresh)
+        except Exception as exc:  # noqa: BLE001 - never crash the loop
+            print(f"[scheduler] data refresh tick crashed: {exc}")
         await asyncio.sleep(TICK_SECONDS)
 
 
@@ -327,3 +341,56 @@ def _run_reply_and_meeting_pipelines_for_org(org_id: str) -> None:
             continue
         if status != "succeeded":
             print(f"[scheduler] {phase_label} for org {org_id} finished: {status}")
+
+
+# --------------------------------------------------------------------------- #
+# 6) Agent 37 — Data Refresh, per-org, once daily (Task #6)
+# --------------------------------------------------------------------------- #
+def tick_data_refresh() -> None:
+    """Run Agent 37 (re-verify stale/bounced leads, compute data quality
+    scores) for every org that has at least one lead with a contact_email.
+
+    No separate opt-in table, same reasoning as the reply/meeting pipeline
+    tick above: this works EXISTING lead data (a free disify.verify_email()
+    check, no LLM/SerpAPI spend), not new lead generation, so every org with
+    something to refresh gets it automatically.
+    """
+    global _data_refresh_last_run_at
+    now_ts = datetime.now(ZoneInfo("UTC")).timestamp()
+    if now_ts - _data_refresh_last_run_at < _DATA_REFRESH_INTERVAL_SECONDS:
+        return
+    _data_refresh_last_run_at = now_ts
+
+    try:
+        org_ids = db.get_orgs_with_leads()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[scheduler] could not read orgs with leads: {exc}")
+        return
+    if not org_ids:
+        return
+    print(f"[scheduler] data refresh (Agent 37) due for {len(org_ids)} org(s)")
+    for org_id in org_ids:
+        threading.Thread(
+            target=_run_data_refresh_for_org,
+            args=(org_id,),
+            daemon=True,
+            name=f"gtm-data-refresh-{org_id}",
+        ).start()
+
+
+def _run_data_refresh_for_org(org_id: str) -> None:
+    commands = runner.build_data_refresh_commands()
+    run_id = db.create_phase_run(
+        phase="data-refresh",
+        command=runner.commands_label(commands),
+        organization_id=org_id,
+        icp_id=None,
+        params={},
+        triggered_by=None,
+    )
+    try:
+        status, _logs = runner.run_commands(run_id, commands, org_id)
+    except Exception as exc:  # noqa: BLE001 - one org's failure must not affect others
+        print(f"[scheduler] data refresh for org {org_id} crashed: {exc}")
+        return
+    print(f"[scheduler] data refresh for org {org_id} finished: {status}")

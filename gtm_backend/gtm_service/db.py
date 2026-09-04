@@ -97,6 +97,35 @@ def get_org_api_keys(organization_id: str | None) -> dict:
     return result
 
 
+def get_active_run_for_icp(icp_id: int) -> dict | None:
+    """Return the currently queued/running phase_runs row for this ICP, if any.
+
+    Used to guard against duplicate concurrent pipeline runs for the same
+    ICP — e.g. a user double-clicking "Find leads" while "Define & run ICP"
+    is still mid-flight for the same ICP, which previously spawned two
+    overlapping subprocess chains against the same rows. Missing table or any
+    DB error resolves to "no active run" (fail open) so a guard-check outage
+    never blocks legitimate runs.
+    """
+    if icp_id is None:
+        return None
+    try:
+        with _get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, phase, status, started_at
+                    FROM phase_runs
+                    WHERE icp_id = %s AND status IN ('queued', 'running')
+                    LIMIT 1
+                    """,
+                    (icp_id,),
+                )
+                return cur.fetchone()
+    except Exception:
+        return None
+
+
 def has_existing_leads(icp_id: int) -> bool:
     """True if this ICP already has at least one row in leads_raw.
 
@@ -137,6 +166,26 @@ def get_orgs_with_connected_mailbox() -> list[str]:
             cur.execute(
                 "SELECT DISTINCT organization_id FROM engage_mailboxes "
                 "WHERE provider = 'gmail' AND organization_id IS NOT NULL"
+            )
+            return [row["organization_id"] for row in cur.fetchall()]
+
+
+def get_orgs_with_leads() -> list[str]:
+    """Every distinct organization_id with at least one lead that has a
+    contact_email — used by the scheduler's Agent 37 (Data Refresh) daily
+    tick (Task #6) to decide which orgs actually have something to
+    re-verify. Unlike the reply/meeting pipeline tick above, this
+    deliberately does NOT require a connected mailbox — Agent 37 only reads
+    leads_raw and calls the free disify.verify_email() check, nothing about
+    it depends on Gmail being connected. Mirrors get_leads_for_data_refresh's
+    own contact_email filter (phase3/connectors/supabase.py) so an org with
+    leads but no emails on any of them is correctly skipped too, same as
+    that function would examine 0 leads for it anyway."""
+    with _get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT organization_id FROM leads_raw "
+                "WHERE contact_email IS NOT NULL AND organization_id IS NOT NULL"
             )
             return [row["organization_id"] for row in cur.fetchall()]
 

@@ -7,14 +7,17 @@ Discard candidates the LLM marks as 'na'.
 Persist the rest in the buying_signals table.
 
 LLM contract (one call per lead, batch):
-    input:  {"company_name", "candidates": [{"id", "signal_text", "source"}, ...]}
+    input:  {"company_name", "company_domain", "candidates": [{"id", "signal_text", "source", "date"}, ...]}
     output: {"results": [{"id", "signal_type", "buying_intent"}, ...]}
 """
 import json
+import re
+from datetime import datetime, timedelta, timezone
 
 from gtm_backend.phase1.connectors import openai as llm
 from gtm_backend.phase1.connectors import serpapi
 from gtm_backend.phase1.connectors import supabase
+from gtm_backend.phase1.connectors import website
 from gtm_backend.phase1.core.prompts import SIGNAL_CLASSIFICATION_SYSTEM, SIGNAL_QUERY_GENERATION_SYSTEM
 from gtm_backend.phase1.core.schemas import BuyingSignal
 from gtm_backend.phase1.core.scoring import SIGNAL_TYPE_WEIGHTS
@@ -98,9 +101,30 @@ def detect_signals(
     return summary
 
 
+def _disambiguate_query(query: str, domain: str | None) -> str:
+    """Anchor a name-based search query to the lead's resolved domain so
+    results are about THAT company, not a same-named unrelated one.
+
+    Found live 2026-09-03 (ICP #62, Jobraux): a bare "Bloomberry" news/web
+    search returned almost exclusively content about an unrelated Philippine
+    casino operator sharing that name — none of it about the real target
+    (bloomberry.com, a New York SaaS company). Same fix already proven in
+    lead_enrichment.py's search_company_location(): appending the domain as
+    a disambiguator, applied unconditionally in code rather than left to the
+    query-generation LLM's discretion, so it can't be silently skipped.
+    """
+    query = query.strip()
+    if not query or not domain:
+        return query
+    if domain.lower() in query.lower():
+        return query  # already disambiguated
+    return f'{query} "{domain}"'
+
+
 def _gather_candidates(lead: dict, icp: dict | None, lookback_days: int, icp_id: int | None = None) -> list[dict]:
     """Pull raw signal candidates for a lead by executing LLM-generated queries."""
     company_name = lead.get("company_name")
+    domain = lead.get("company_domain")
     if not company_name:
         return []
 
@@ -110,16 +134,32 @@ def _gather_candidates(lead: dict, icp: dict | None, lookback_days: int, icp_id:
     candidates: list[dict] = []
     for spec in query_specs:
         engine = spec.get("engine") or "google_news"
-        query = (spec.get("q") or "").strip()
+        query = _disambiguate_query(spec.get("q") or "", domain)
         num = _clamp(spec.get("num"), low=1, high=10, default=3)
         if not query or engine not in _VALID_ENGINES:
             continue
         if engine == "google_news":
             candidates.extend(_news_candidates(query=query, lookback_days=lookback_days, limit=num))
         else:
-            candidates.extend(_web_candidates(query=query, limit=num))
+            candidates.extend(_web_candidates(query=query, lookback_days=lookback_days, limit=num))
 
-    return _dedupe(candidates)[:_MAX_CANDIDATES_PER_LEAD]
+    candidates = _dedupe(candidates)
+    candidates = _filter_stale(candidates, lookback_days)
+    if not candidates:
+        # Free fallback: search unavailable (SerpAPI/Serper quota exhausted) —
+        # read the company's own /careers, /news, /press, /blog pages instead.
+        # Weaker signal (self-reported, no third-party corroboration) but beats
+        # a hard 0; still runs through the same entity-check + classification LLM.
+        domain = lead.get("company_domain")
+        page_candidates = website.fetch_signal_pages(domain) if domain else []
+        if page_candidates:
+            print(
+                f"  [Agent 04] {company_name:<28} → search unavailable; "
+                f"read {len(page_candidates)} page(s) from {domain} directly"
+            )
+            candidates = _dedupe(page_candidates)
+
+    return candidates[:_MAX_CANDIDATES_PER_LEAD]
 
 
 def _generate_queries(lead: dict, icp: dict | None, icp_id: int | None = None) -> list[dict]:
@@ -179,7 +219,18 @@ def _news_candidates(query: str, lookback_days: int, limit: int) -> list[dict]:
         link = article.get("link")
         if not text or not link:
             continue
-        out.append({"signal_text": text, "source": link})
+        out.append({
+            "signal_text": text,
+            "source": link,
+            # Provider-supplied per-article date ("Jun 30, 2026", "1 month
+            # ago", etc.) — used below to reject stale candidates and to give
+            # the classification LLM real data instead of making it infer
+            # recency from whatever date-shaped text happens to appear in the
+            # title/URL. None when the provider didn't return one (e.g. a
+            # static page with no publish date) — never treated as "stale".
+            "date_raw": article.get("date"),
+            "date": _parse_candidate_date(article.get("date")),
+        })
     return out
 
 
@@ -192,9 +243,14 @@ def _source_to_str(source: object) -> str:
     return ""
 
 
-def _web_candidates(query: str, limit: int) -> list[dict]:
+def _web_candidates(query: str, lookback_days: int, limit: int) -> list[dict]:
     try:
-        results = serpapi.search(query, num=limit)
+        # Task (2026-09-03, ICP #62): plain web results used to carry no date
+        # restriction at all — a "expansion"/"hiring" query tagged engine
+        # "google" by the query-generation LLM could surface an article from
+        # any point in the site's history. Same tbs mechanism search_news()
+        # already used, now applied here too.
+        results = serpapi.search(query, num=limit, days=lookback_days)
     except Exception as exc:
         print(f"  [Agent 04] web search failed for '{query}': {exc}")
         return []
@@ -204,7 +260,12 @@ def _web_candidates(query: str, limit: int) -> list[dict]:
         link = result.get("link")
         if not text or not link:
             continue
-        out.append({"signal_text": text, "source": link})
+        out.append({
+            "signal_text": text,
+            "source": link,
+            "date_raw": result.get("date"),
+            "date": _parse_candidate_date(result.get("date")),
+        })
     return out
 
 
@@ -213,6 +274,80 @@ def _compose_text(title: object, body: object) -> str:
     body_str = body.strip() if isinstance(body, str) else ""
     joined = " — ".join(p for p in (title_str, body_str) if p)
     return joined[:_MAX_TEXT_LEN]
+
+
+_RELATIVE_DATE_RE = re.compile(r"^\s*(\d+)\s*(minute|hour|day|week|month|year)s?\s+ago\s*$", re.IGNORECASE)
+_ABSOLUTE_DATE_FORMATS = ("%b %d, %Y", "%B %d, %Y", "%m/%d/%Y", "%Y-%m-%d")
+_LEADING_MDY_RE = re.compile(r"^(\d{1,2}/\d{1,2}/\d{4})")
+
+
+def _parse_candidate_date(raw: object) -> datetime | None:
+    """Best-effort parse of a search provider's free-text date field
+    ("Jun 30, 2026", "1 month ago", "09/03/2026, 09:02 AM, +0000 UTC") into
+    an actual UTC datetime. Returns None on anything unparseable or absent —
+    callers must treat that as "no date evidence" (keep the candidate), never
+    as "confirmed stale"; plenty of legitimate signal sources (a company's
+    own careers page, a static review listing) carry no date at all.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+
+    rel = _RELATIVE_DATE_RE.match(text)
+    if rel:
+        n, unit = int(rel.group(1)), rel.group(2).lower()
+        delta = {
+            "minute": timedelta(minutes=n), "hour": timedelta(hours=n),
+            "day": timedelta(days=n), "week": timedelta(weeks=n),
+            "month": timedelta(days=n * 30), "year": timedelta(days=n * 365),
+        }[unit]
+        return datetime.now(timezone.utc) - delta
+
+    for fmt in _ABSOLUTE_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+
+    # SerpAPI's fuller timestamp shape: "09/03/2026, 09:02 AM, +0000 UTC" —
+    # pull just the leading MM/DD/YYYY rather than parsing the whole string.
+    prefix = _LEADING_MDY_RE.match(text)
+    if prefix:
+        try:
+            return datetime.strptime(prefix.group(1), "%m/%d/%Y").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
+    return None
+
+
+def _filter_stale(candidates: list[dict], lookback_days: int) -> list[dict]:
+    """Reject any candidate whose provider-supplied date resolves to older
+    than the lookback window BEFORE it ever reaches the classification LLM —
+    the LLM is never asked to infer staleness from raw text/URL, which found
+    live (2026-09-03, ICP #62) was inconsistent: an 11-year-old PokerNews
+    article about Bloomberry was scored buying_intent="high" while similarly
+    stale 2022 articles were correctly scored "low", because the model was
+    guessing from context rather than checking a real date it never had.
+
+    A candidate with no parseable date (date is None) is always kept — see
+    _parse_candidate_date's docstring for why that must not be treated as
+    stale.
+    """
+    if not candidates:
+        return candidates
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    kept = []
+    dropped = 0
+    for c in candidates:
+        date = c.get("date")
+        if date is not None and date < cutoff:
+            dropped += 1
+            continue
+        kept.append(c)
+    if dropped:
+        print(f"  [Agent 04] {dropped} candidate(s) dropped — older than {lookback_days}-day lookback")
+    return kept
 
 
 def _dedupe(candidates: list[dict]) -> list[dict]:
@@ -237,11 +372,25 @@ def _classify_candidates(
     Returns (list_of_signals, na_count).
     """
     indexed = [
-        {"id": i, "signal_text": c["signal_text"], "source": c["source"]}
+        {
+            "id": i,
+            "signal_text": c["signal_text"],
+            "source": c["source"],
+            # Real provider-supplied date (ISO, UTC) when known — gives the
+            # "low: weak/old/peripheral" judgment in the prompt's rubric
+            # actual data to check against, instead of inferring recency
+            # from whatever date-shaped text happens to appear in the
+            # title/URL. null when the provider gave no date at all.
+            "date": c["date"].date().isoformat() if c.get("date") else None,
+        }
         for i, c in enumerate(candidates)
     ]
     payload = json.dumps({
         "company_name": lead.get("company_name"),
+        # Identity anchor for the entity check (see SIGNAL_CLASSIFICATION_SYSTEM
+        # STEP 1) — lets the LLM check a candidate against the real resolved
+        # company instead of judging on name alone.
+        "company_domain": lead.get("company_domain"),
         "candidates": indexed,
     })
     try:
@@ -291,6 +440,7 @@ def _classify_candidates(
             signal_summary=candidate["signal_text"][:300],
             signal_source_url=candidate["source"],
             buying_intent=intent,
+            signal_date=candidate.get("date"),
         ))
 
     company = lead.get("company_name") or "?"

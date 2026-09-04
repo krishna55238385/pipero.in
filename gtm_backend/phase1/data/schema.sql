@@ -87,6 +87,19 @@ ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS organization_id UUID;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS sources JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS raw_data JSONB DEFAULT '{}'::jsonb;
+-- Task #5 — honest email verification confidence + bounce feedback loop.
+-- email_verification_tier: 'domain_verified' (disify MX/domain check only —
+-- the existing `verified` behavior, unchanged) vs 'person_confirmed' (the
+-- contact's name was independently found on the company's own team/about
+-- page). NULL on every pre-existing row — the CRM treats verified=TRUE +
+-- NULL tier as 'domain_verified' (backward compatible: that's exactly what
+-- `verified` already meant before this column existed), so no backfill is
+-- required for old data to display correctly.
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS email_verification_tier TEXT;
+-- needs_reverification: set by phase3/agents/agent_16_inbox.py's
+-- record_hard_bounce() when Agent 14's actual send hits a real hard bounce —
+-- the email looked good enough to send but proved wrong in practice.
+ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS needs_reverification BOOLEAN DEFAULT FALSE;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS icp_score INTEGER;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS score_tier TEXT;
 ALTER TABLE leads_raw ADD COLUMN IF NOT EXISTS score_breakdown JSONB;
@@ -138,6 +151,13 @@ ALTER TABLE buying_signals ADD COLUMN IF NOT EXISTS score INTEGER NOT NULL DEFAU
 -- unconditionally whenever GTM_ORG_ID is set — see leads_raw's comment above
 -- for the full explanation. Closing the same documentation/safety gap here.
 ALTER TABLE buying_signals ADD COLUMN IF NOT EXISTS organization_id UUID;
+-- signal_date: the event's OWN real-world date, when the search provider
+-- supplied one — distinct from detected_at (insert time). Found live
+-- 2026-09-03 (ICP #62): an 11-year-old article was surfacing as a "high"
+-- buying-intent signal with detected_at showing today, because nothing
+-- stored (or checked) the article's actual date. NULL when the provider
+-- gave no date for that candidate (e.g. a static careers page).
+ALTER TABLE buying_signals ADD COLUMN IF NOT EXISTS signal_date TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_buying_signals_lead_id ON buying_signals(lead_id);
 CREATE INDEX IF NOT EXISTS idx_buying_signals_detected_at ON buying_signals(detected_at);

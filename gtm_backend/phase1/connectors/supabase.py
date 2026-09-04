@@ -320,6 +320,36 @@ def get_existing_company_domains(icp_id: int) -> set[str]:
     return out
 
 
+def get_existing_company_domains_for_org(organization_id: str | None) -> set[str]:
+    """Normalized domains already stored ANYWHERE in this org — across every
+    ICP, not just one (Task #8: cross-ICP duplicate detection).
+
+    Used alongside get_existing_company_domains above (which stays icp_id-
+    scoped, unchanged, for the existing same-ICP dedup check) to additionally
+    catch the same company being inserted as a SEPARATE lead row under a
+    different ICP for the same org — found live running two similar "India
+    SaaS" ICPs (#51, #52) back to back, which independently rediscovered and
+    re-inserted several of the same companies. Returns an empty set (never
+    raises) when organization_id is missing — a bare local run with no org
+    context simply gets no cross-ICP check, same graceful-degradation
+    pattern as every other org-scoped feature in this codebase.
+    """
+    if not organization_id:
+        return set()
+    rows = _get(
+        "/leads_raw",
+        params={"organization_id": f"eq.{organization_id}", "select": "company_domain"},
+    )
+    out: set[str] = set()
+    for row in rows:
+        domain = (row.get("company_domain") or "").strip().lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+        if domain:
+            out.add(domain)
+    return out
+
+
 def get_leads_for_scoring(
     mode: str = "unscored",
     lead_id: int | None = None,
@@ -397,6 +427,7 @@ def insert_signals(signals: list[BuyingSignal]) -> list[int]:
     for sig in signals:
         row = sig.model_dump(exclude_none=False)
         row["detected_at"] = sig.detected_at.isoformat()
+        row["signal_date"] = sig.signal_date.isoformat() if sig.signal_date else None
         row.pop("id", None)
         payload.append(row)
     try:

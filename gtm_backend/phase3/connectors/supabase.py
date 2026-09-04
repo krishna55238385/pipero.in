@@ -2185,9 +2185,15 @@ def get_leads_for_data_refresh(limit: int | None = None) -> list[dict]:
     oldest last_verified_at first) rather than SQL, since the shared
     _build_order helper only supports simple ASC/DESC and Postgres's default
     NULLS LAST for ASC would put never-verified leads last — the opposite of
-    what "refresh the stalest records first" needs."""
+    what "refresh the stalest records first" needs.
+
+    Scoped to the current org (_scope_to_org, GTM_ORG_ID) same as every other
+    tenant-aware reader in this file — was missing here (Task #6: found while
+    wiring Agent 37 into the per-org scheduler tick; without this, a
+    subprocess run with GTM_ORG_ID set would still silently re-verify every
+    org's leads, not just the one it was launched for)."""
     try:
-        rows = _get("/leads_raw", params={"contact_email": "not.is.null"})
+        rows = _get("/leads_raw", params=_scope_to_org({"contact_email": "not.is.null"}))
     except SupabaseError:
         return []
 
@@ -2219,22 +2225,81 @@ def bulk_update_leads_raw(updates: list[dict]) -> None:
     of one per lead. Added for Agent 37 Data Refresh, which previously called
     update_lead_raw() once per lead inside its main loop; for a large lead
     volume that's hundreds/thousands of individual UPDATEs where one bulk
-    upsert does the same work.
+    statement does the same work.
 
     Each dict in ``updates`` must include "id" plus whichever fields are
-    being set, and every dict must have the SAME set of keys (this is a
-    single multi-row INSERT ... ON CONFLICT (id) DO UPDATE, so the column
+    being set, and every dict must have the SAME set of keys (the column
     list is fixed once from the first row) — true for Agent 37's use, which
     always sets the same 4 fields for every lead it examines.
+
+    A genuine ``UPDATE ... FROM (VALUES ...)`` — NOT ``INSERT ... ON
+    CONFLICT (id) DO UPDATE``, which this used to be. Found live 2026-09-02,
+    Task #6's first-ever production run of Agent 37 (nothing had called it
+    automatically before): the RDS instance underwent an
+    "inaccessible-encryption-credentials" incident + recovery shortly before
+    this (see project history) and, since then, leads_raw's ON CONFLICT
+    arbiter silently fails to recognize EXISTING rows as conflicting —
+    reproduced directly via raw psql, independent of this codebase entirely,
+    survives REINDEX, and isn't explained by RLS/triggers/partitioning (all
+    checked and ruled out). Every affected call fell through to an actual
+    INSERT with only the updated columns set, violating leads_raw's
+    company_name NOT NULL constraint and failing the whole batch. Since
+    Agent 37 (and every other caller of this function) only ever updates
+    rows it already read — never a genuine upsert-a-maybe-new-row case —
+    switching to a plain bulk UPDATE is not a workaround, it's the operation
+    this function actually needed all along, and it structurally cannot hit
+    whatever is wrong with the ON CONFLICT path.
     """
     if not updates:
         return
+    columns = [c for c in updates[0].keys() if c != "id"]
+    if not columns:
+        return
+    # Columns this function is documented to receive whose Python value
+    # (an ISO string from _now_iso(), or an already-string value read back
+    # from a prior SELECT) doesn't match their actual leads_raw column type
+    # closely enough for Postgres to infer correctly from a bare VALUES
+    # literal — found live 2026-09-02 alongside the ON CONFLICT bug this
+    # function was rewritten to avoid: last_verified_at came through as
+    # `text` (inferred from the first row's plain string) while the real
+    # column is `timestamptz`, raising DatatypeMismatch. Same "cast only the
+    # first row" reasoning as the id::bigint cast below — Postgres carries
+    # the type forward to every other row in the VALUES list from there.
+    _TYPE_CASTS = {"last_verified_at": "timestamptz"}
+    values: list = []
+    value_groups = []
+    for i, row in enumerate(updates):
+        placeholders = [_value_placeholder("id", row.get("id"), values)]
+        for col in columns:
+            placeholders.append(_value_placeholder(col, row.get(col), values))
+        if i == 0:
+            # Cast only the first row's literals — Postgres infers every
+            # later row's VALUES types from the column types this row
+            # establishes, so a single explicit cast set is enough even
+            # though rows can otherwise carry NULLs of ambiguous type.
+            placeholders[0] += "::bigint"
+            for j, col in enumerate(columns, start=1):
+                if col in _TYPE_CASTS:
+                    placeholders[j] += f"::{_TYPE_CASTS[col]}"
+        value_groups.append("(" + ", ".join(placeholders) + ")")
+    set_clause = ", ".join(f"{c} = v.{c}" for c in columns)
+    col_list = ", ".join(["id"] + columns)
+    sql = (
+        f"UPDATE leads_raw SET {set_clause} "
+        f"FROM (VALUES {', '.join(value_groups)}) AS v({col_list}) "
+        f"WHERE leads_raw.id = v.id"
+    )
     try:
-        _upsert("/leads_raw", updates, on_conflict="id")
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+                conn.commit()
     except SupabaseError as exc:
         if _missing_table(exc, "leads_raw"):
             return
         raise
+    except pg_errors.UndefinedTable as exc:
+        raise _missing_table_error("PATCH", "/leads_raw", exc) from exc
 
 
 def create_data_quality_report(**fields) -> dict | None:

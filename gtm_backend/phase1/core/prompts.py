@@ -76,6 +76,35 @@ worth including — it is NEVER evidence for a company's actual city/state/count
 let it bias company_country toward the ICP's target geography; a company's location comes
 only from text that specifically describes that company, never from the ICP hint.
 
+INDUSTRY FIT — set industry_match based on icp_hint.industry vs. this company's actual
+business (evidenced by the title/snippet), NOT on whether the search query happened to
+match:
+- "yes": the company's evidenced business plausibly falls within (or clearly overlaps)
+  one of the icp_hint industries.
+- "no": the snippet/title gives a CONFIDENT, SPECIFIC indication the company operates in
+  a different, unrelated industry (e.g. icp_hint industry is "Fintech" and the snippet
+  describes a cybersecurity consultancy, a law firm, or an ed-tech platform with no
+  financial-services angle at all).
+- "unclear": the snippet doesn't give enough evidence to judge either way, OR icp_hint has
+  no industry set. Default to "unclear" whenever in doubt — this must never be "no" just
+  because the industry isn't explicitly named; "no" is only for a clear, evidenced mismatch.
+Search results often surface loosely-related or off-topic companies even when the query
+targeted a specific industry — this field is what lets a downstream filter catch those,
+so judge it independently of why the result appeared in search.
+
+GEOGRAPHY CONFIDENCE — set geography_confidence based on how directly the title/snippet
+evidences THIS company's own country, separate from company_country itself:
+- "confirmed": the text specifically states or unambiguously implies this company's own
+  HQ/operating country (a stated city/address, a country name tied to this company, a
+  ccTLD domain paired with address text, etc.) — evidenced by text about THIS company,
+  never inferred from the icp_hint or from a different company in the same snippet.
+- "unclear": the country can't be pinned down with real evidence — nothing stated, only a
+  vague/ambiguous signal, or the only clue is a generic ".com" domain with no location text.
+Default to "unclear" whenever in doubt. This is deliberately stricter than company_country
+itself (which may hold a best-guess value) — geography_confidence says whether that guess
+is actually backed by evidence, which is what a downstream filter uses to decide whether an
+ICP with an explicit target country can trust this record at all.
+
 Return JSON:
 {
   "companies": [
@@ -87,11 +116,56 @@ Return JSON:
       "company_country": "string or null",
       "company_industry": "string or null",
       "company_size": "string or null (e.g. '50-200 employees')",
+      "industry_match": "yes" | "no" | "unclear",
+      "geography_confidence": "confirmed" | "unclear",
       "source_url": "the search result link"
     }
   ]
 }
 Do not invent data. Use null for any field not clearly stated. Do not wrap in markdown."""
+
+FIRMOGRAPHIC_CONFIDENCE_SYSTEM = """You judge how confident industry and company-size values
+are for a batch of companies, given real homepage evidence (meta description, schema.org
+markup) alongside whatever an earlier search-snippet pass already guessed.
+
+Input JSON per company: {"company_name", "guessed_industry" (from a search snippet, may be
+wrong), "guessed_company_size" (from a search snippet, may be wrong), "meta_description"
+(from the company's own homepage, or null), "schema_org_text" (raw schema.org
+Organization/LocalBusiness JSON-LD from the homepage, or null)}.
+
+For EACH field (industry, company_size), decide confidence independently:
+- "confirmed": the homepage's own meta_description or schema_org_text DIRECTLY states or
+  unambiguously implies this value (e.g. meta_description reads "leading HR payroll
+  software for Indian startups" -> industry confirmed; schema_org_text contains
+  "numberOfEmployees":"150" -> size confirmed).
+- "inferred": no direct homepage statement, but the value is a reasonable, evidenced
+  inference from what the homepage actually describes (e.g. the meta description clearly
+  describes selling accounting software even without ever using the word "industry").
+- "unknown": neither the homepage content nor the original guess is backed by real
+  evidence — meta_description/schema_org_text are null or generic marketing copy with no
+  substantive signal, and the guessed value isn't meaningfully supported by anything here.
+Default to "unknown" whenever genuinely unsure — a wrong-looking confident guess is worse
+than an honest "unknown" the CRM can display as such.
+
+When confidence is "confirmed" or "inferred", output the best supported value for that
+field (this may correct the original guess based on the homepage evidence). When
+confidence is "unknown", output null for that field's value — never keep a value you
+can't support with real evidence just because a guess already existed.
+
+Return JSON:
+{
+  "results": [
+    {
+      "company_name": "string (echo back exactly, same order as input)",
+      "industry": "string or null",
+      "industry_confidence": "confirmed" | "inferred" | "unknown",
+      "company_size": "string or null (e.g. '50-200 employees')",
+      "company_size_confidence": "confirmed" | "inferred" | "unknown"
+    }
+  ]
+}
+Classify every company in the input, same order, none skipped. Do not invent data. Do not
+wrap in markdown."""
 
 COMPANY_ENRICHMENT_SYSTEM = """Extract structured company details from website text, firmographics, and search snippets.
 
@@ -115,11 +189,25 @@ Return ONLY this JSON, no markdown:
 
 CONTACT_EXTRACTION_SYSTEM = """You extract the best decision-maker contact from LinkedIn search snippets about a company.
 Prefer Owner > CEO > Founder > President > VP > Director > Manager. Match the ICP buyer_titles when possible.
+
+MATCH CONFIDENCE — set match_confidence based on how sure you are that BOTH the person's name
+AND their company affiliation are correctly evidenced by the snippets, not just plausible:
+- "high": the snippet(s) for the chosen contact_linkedin_url clearly show both this person's
+  name AND this specific company together (e.g. "Jane Doe - Founder at Acme HR" in the
+  title/snippet of that exact result).
+- "low": the name/title look right but the company link isn't clearly confirmed by the
+  snippet text (e.g. a same-named person with an ambiguous or unstated employer, multiple
+  candidates with conflicting company signals, or the URL was guessed from a weak match).
+Default to "low" whenever the company affiliation isn't directly evidenced in that result's
+own text — this is what lets a downstream step decide whether to trust the LinkedIn URL at
+all, so never mark "high" just because the person's name/title alone look plausible.
+
 Return JSON:
 {
   "contact_name": "full name or null",
   "contact_title": "exact title or null",
-  "contact_linkedin_url": "url or null"
+  "contact_linkedin_url": "url or null",
+  "match_confidence": "high" | "low"
 }
 Do not invent data. If unsure, return null for that field. Do not wrap in markdown."""
 
@@ -159,11 +247,30 @@ SIGNAL_CLASSIFICATION_SYSTEM = """You analyze a batch of signal candidates for a
 Input (JSON):
   {
     "company_name": "...",
+    "company_domain": "acme.com" or null,
     "candidates": [
-      {"id": 0, "signal_text": "raw headline/snippet/job post", "source": "url"},
+      {"id": 0, "signal_text": "raw headline/snippet/job post", "source": "url", "date": "2026-08-15" or null},
       ...
     ]
   }
+
+"company_domain" is the target company's own resolved website — the
+strongest identity anchor you have. When a candidate's source URL or
+signal_text explicitly references that domain, treat it as strong
+confirmation you have the right entity. Its absence from a given candidate
+is NOT itself disqualifying (third-party press about a real company rarely
+links to that company's own site) — but check against it whenever the name
+alone is ambiguous.
+
+"date" is the event's real-world date from the search provider, already
+verified to fall inside the lookback window before you ever see it — you do
+NOT need to reject anything for being outside the window, that filtering
+already happened. Use it only to judge "fresh" vs "peripheral" recency
+WITHIN that window (e.g. 3 days old reads far fresher than 85 days old, even
+though both passed the filter). null means the provider gave no date for
+this candidate (e.g. a static careers page) — treat that as neutral, not as
+evidence of staleness. Never infer a date yourself from text/URL patterns —
+only this field is a real timestamp; anything else is unverified.
 
 Output (JSON) — return EXACTLY this shape (one entry per candidate, same order):
   {
@@ -181,16 +288,36 @@ signal_type must be one of:
   - competitor_complaint (public dissatisfaction with a competitor — opens the door)
   - none (not a buying-relevant event)
 
-STEP 1 — entity check (do this BEFORE classifying type/intent):
-Company names collide with unrelated things — TV shows, movies, books, public
-figures, generic English phrases, other companies in unrelated industries.
-For each candidate, first confirm the signal_text is actually ABOUT the named
-target company (a real business event involving that specific company), not
-about a same-named but unrelated entity. If you cannot confirm the text is
-about the target company as a business — e.g. it's about a TV show, film,
-person, or place that merely shares the name — set signal_type "none" and
-buying_intent "na" immediately, regardless of how "leadership_change" or
-"funding"-shaped the text otherwise reads.
+STEP 1 — entity check (do this BEFORE classifying type/intent). TWO separate
+checks, and a candidate must pass BOTH:
+
+(a) SAME ENTITY, not a namesake: company names collide with unrelated
+    things — other companies (often in a completely different industry or
+    country), TV shows, movies, books, public figures, generic English
+    phrases. Confirm the signal_text is actually about THIS target company
+    (its industry, its business, matching company_domain when you can tell)
+    — not a same-named but unrelated entity. Found live 2026-09-03: a
+    "Bloomberry" search returned a Philippine casino operator's news
+    (funding, gaming platform launches, regulator filings) when the actual
+    target was an unrelated New York SaaS company at a domain also named
+    Bloomberry — none of that casino content was about the real target.
+
+(b) TARGET IS THE ACTOR, not a bystander: confirm the target company is the
+    one actually DOING the event described (the one raising funding, hiring,
+    opening the office) — not merely named or referenced within a story
+    about a DIFFERENT company or organization's own action. Found live
+    2026-09-03: a recruiting firm's post about filling a role "for
+    Bloomberry" describes the RECRUITING FIRM's business activity, with the
+    target only mentioned as their client — that is NOT a hiring signal for
+    the target itself, even though the target's name appears in the text.
+    Ask: who is the grammatical subject actually performing this action? If
+    it's a different company, vendor, recruiter, or third party — not the
+    target — this fails, regardless of how prominently the target's name
+    appears.
+
+If EITHER check fails, set signal_type "none" and buying_intent "na"
+immediately, regardless of how "leadership_change" or "funding"-shaped the
+text otherwise reads.
 
 buying_intent rubric (only reached once the entity check above passes):
   - high  : strong, fresh, decision-trigger event (e.g. just-closed funding, new CRO joining,
